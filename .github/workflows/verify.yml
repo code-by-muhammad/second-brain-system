@@ -22,3 +22,5 @@ jobs:
       - run: uv run --locked python -m pytest -q
       - run: uv run --locked python -m compileall -q app install.py update.py
       - run: uv run --locked python tests/smoke_import.py
+      - run: uv export --locked --no-dev --no-hashes --output-file audit-requirements.txt
+      - run: uvx --from pip-audit==2.9.0 pip-audit --disable-pip --no-deps -r audit-requirements.txt

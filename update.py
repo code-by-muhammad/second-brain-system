@@ -6,6 +6,8 @@ REMOTE='https://github.com/code-by-muhammad/second-brain-system.git'
 
 def verify(checkout):
     manifest=json.loads((checkout/'release-manifest.json').read_text(encoding='utf-8'))
+    required={'install.py','update.py','pyproject.toml','uv.lock'} | {p.relative_to(checkout).as_posix() for p in (checkout/'app').glob('*.py')}
+    if not required <= set(manifest['sha256']): raise ValueError('Release manifest omits executable or dependency files.')
     for relative,expected in manifest['sha256'].items():
         target=(checkout/relative).resolve()
         if not target.is_relative_to(checkout.resolve()): raise ValueError('Unsafe manifest path.')
@@ -21,6 +23,7 @@ def main():
     release=root/'releases'/args.version
     if not release.exists(): subprocess.run(['git','clone','--depth','1','--branch',args.version,'--',REMOTE,str(release)],check=True)
     info=verify(release)
+    if info['version']!=args.version.removeprefix('v'): raise ValueError('Release version does not match requested tag.')
     subprocess.run(['uv','sync','--locked','--no-dev','--project',str(release),'--python','3.12'],check=True)
     python=release/('.venv/Scripts/python.exe' if os.name=='nt' else '.venv/bin/python')
     # Stop only this installation's registered service before switching its app files.
