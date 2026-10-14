@@ -12,8 +12,11 @@ def definition(platform=None):
     if platform=='win32':
         import xml.etree.ElementTree as ET
         root=ET.Element('Task',xmlns='http://schemas.microsoft.com/windows/2004/02/mit/task',version='1.2')
+        user=os.environ.get('USERDOMAIN','.')+'\\'+os.environ.get('USERNAME','')
         trigger=ET.SubElement(ET.SubElement(root,'Triggers'),'LogonTrigger'); ET.SubElement(trigger,'Enabled').text='true'
+        ET.SubElement(trigger,'UserId').text=user
         principal=ET.SubElement(ET.SubElement(root,'Principals'),'Principal',id='Author')
+        ET.SubElement(principal,'UserId').text=user
         ET.SubElement(principal,'LogonType').text='InteractiveToken'; ET.SubElement(principal,'RunLevel').text='LeastPrivilege'
         settings=ET.SubElement(root,'Settings')
         for key,value in [('MultipleInstancesPolicy','IgnoreNew'),('ExecutionTimeLimit','PT0S'),('DisallowStartIfOnBatteries','false'),('StopIfGoingOnBatteries','false'),('StartWhenAvailable','true')]: ET.SubElement(settings,key).text=value
@@ -39,6 +42,7 @@ def install():
     elif sys.platform=='darwin':
         target=Path.home()/'Library/LaunchAgents'/f'{LABEL}.plist'; target.parent.mkdir(parents=True,exist_ok=True)
         target.write_text(definition(),encoding='utf-8')
+        subprocess.run(['launchctl','bootout',f'gui/{os.getuid()}/{LABEL}'],capture_output=True)
         subprocess.run(['launchctl','bootstrap',f'gui/{os.getuid()}',str(target)],check=True)
     else:
         target=Path.home()/'.config/systemd/user/second-brain.service'; target.parent.mkdir(parents=True,exist_ok=True)

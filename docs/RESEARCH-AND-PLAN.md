@@ -20,7 +20,7 @@ The compiler quotes source evidence exactly and labels all automatically generat
 
 Model processing sends selected note text to the chosen model provider, as existing cloud-agent reads already do. Indexing remains local. No new public endpoint, hosted database or API key is introduced.
 
-Sources over 24 KB and sources containing credential patterns are excluded from automatic model input; they need redaction or sectioning. The initial release must report this limitation rather than silently promise full coverage. Source changes cause reprocessing; three failures require attention instead of an endless quota-consuming loop.
+Sources up to 2 MB are split into overlapping 24 KB parts; each part has durable processing state and publication verifies the hash of the complete original. Larger sources and sources containing credential patterns are excluded from automatic model input and need redaction or manual import. Source changes cause reprocessing; three failures require attention instead of an endless quota-consuming loop.
 
 Keep Basic Memory 0.23.2 and its required FastMCP 4.0.0b1/split package pinned. FastMCP is an upstream prerelease: reproducible installation and tests do not imply a security guarantee. Review the lock and vulnerability report before a future dependency upgrade.
 

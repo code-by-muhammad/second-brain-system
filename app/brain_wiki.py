@@ -36,17 +36,20 @@ def inventory():
     for root in SOURCE_ROOTS:
         for p in (s.VAULT/root).rglob('*.md'):
             rel=p.relative_to(s.VAULT).as_posix()
-            if rel.startswith('02-Areas/AI-Memory/') or p.stat().st_size>24000: continue
+            if rel.startswith('02-Areas/AI-Memory/') or p.stat().st_size>2_000_000: continue
             try:
                 s.safe_path(rel)
-                raw=p.read_bytes(); text=raw.decode('utf-8-sig'); s.clean_text(text,24000)
+                raw=p.read_bytes(); text=raw.decode('utf-8-sig'); s.clean_text(text,2_000_000)
                 info=meta(text)
                 if 'ai-capture' in info.get('tags',[]) and info.get('project')=='Second Brain': continue
-                result.append({'path':rel,'sha256':s.digest(raw),'date':str(info.get('date','unknown'))[:10],
-                               'title':next((line[2:] for line in text.splitlines() if line.startswith('# ')),p.stem),'text':text})
+                chunks=[text[i:i+24000] for i in range(0,len(text),23000)] or ['']
+                for part,chunk in enumerate(chunks,1):
+                    result.append({'path':rel,'job_key':rel+'::part'+str(part),'part':part,'parts':len(chunks),
+                                   'sha256':s.digest(raw),'date':str(info.get('date','unknown'))[:10],
+                                   'title':next((line[2:] for line in text.splitlines() if line.startswith('# ')),p.stem),'text':chunk})
             except (ValueError,OSError,UnicodeError): continue
     # Project briefs first; then new captures, then other evidence. Never use mtime as factual date.
-    return sorted(result,key=lambda x:(0 if x['path'].startswith('01-Projects/') else 1 if x['path'].startswith('00-Inbox/') else 2,x['path']))
+    return sorted(result,key=lambda x:(0 if x['path'].startswith('01-Projects/') else 1 if x['path'].startswith('00-Inbox/') else 2,x['path'],x['part']))
 
 def status():
     with db() as conn:
@@ -54,8 +57,10 @@ def status():
         states={r['status']:r['n'] for r in conn.execute('SELECT status,count(*) n FROM batches GROUP BY status')}
         errors=conn.execute('SELECT count(*) FROM sources WHERE error IS NOT NULL').fetchone()[0]
     sources=inventory()
-    return {'eligible_sources':len(sources),'pending_sources':sum(processed.get(x['path'])!=x['sha256'] for x in sources),
-            'batches':states,'failed_sources':errors,'role':cfg.ROLE,'oversize_policy':'notes over 24KB require manual sectioning; originals preserved'}
+    return {'eligible_sources':len({x['path'] for x in sources}),'eligible_source_parts':len(sources),
+            'pending_source_parts':sum(processed.get(x['job_key'])!=x['sha256'] for x in sources),
+            'pending_sources':len({x['path'] for x in sources if processed.get(x['job_key'])!=x['sha256']}),
+            'batches':states,'failed_source_parts':errors,'role':cfg.ROLE,'oversize_policy':'notes up to 2 MB split into overlapping bounded parts; credential-like sources excluded'}
 
 def pages():
     found=[]
@@ -69,11 +74,11 @@ def pages():
 def prepare(limit=4):
     cfg.require_maintainer()
     with db() as conn: old={r['path']:dict(r) for r in conn.execute('SELECT * FROM sources')}
-    changed=[x for x in inventory() if old.get(x['path'],{}).get('processed_hash')!=x['sha256'] and old.get(x['path'],{}).get('attempts',0)<3]
+    changed=[x for x in inventory() if old.get(x['job_key'],{}).get('processed_hash')!=x['sha256'] and old.get(x['job_key'],{}).get('attempts',0)<3]
     chosen=[]; size=0
     for row in changed:
         if len(chosen)>=max(1,min(limit,8)): break
-        if size+len(row['text'])>65000: continue
+        if size+len(row['text'])>65000 or any(x['path']==row['path'] for x in chosen): continue
         chosen.append(row); size+=len(row['text'])
     if not chosen: return None
     current=pages()
@@ -181,12 +186,17 @@ def apply(packet,result):
             slug=s.digest(source['path'].encode())[:16]
             title=source['title']; now=s.stamp()
             body=f'# {title}\n\nOriginal: [[{source["path"][:-3]}]]\n\nSource date: {source["date"]}\n\n## Wiki pages\n'+'\n'.join('- [['+r['path'][:-3]+']]' for r in receipts)
+            source_target=s.safe_path(BASE+'Sources/'+slug+'.md')
+            previous_meta=meta(source_target.read_text(encoding='utf-8')) if source_target.exists() else {}
+            wiki_pages=sorted(set(previous_meta.get('wiki_pages',[])) | {r['path'] for r in receipts})
+            body=f'# {title}\n\nOriginal: [[{source["path"][:-3]}]]\n\nSource date: {source["date"]}\n\n## Wiki pages\n'+'\n'.join('- [['+p[:-3]+']]' for p in wiki_pages)
             info={'date':now[:10],'type':'note','tags':['ai-memory','derived','wiki-source'],'sources':[source['path']],
+                  'wiki_pages':wiki_pages,'latest_source_part':source.get('part',1),'source_parts':source.get('parts',1),
                   'source_hashes':{source['path']:source['sha256']},'updated_at':now,'maintained_by':cfg.DEVICE_ID}
-            s._write(s.safe_path(BASE+'Sources/'+slug+'.md'),s.note_text(info,body),'wiki_source')
+            s._write(source_target,s.note_text(info,body),'wiki_source')
         _index_and_log(ident,receipts,sources)
         with db() as conn:
-            for rel,row in sources.items(): conn.execute('INSERT INTO sources(path,processed_hash,error,attempts) VALUES(?,?,NULL,0) ON CONFLICT(path) DO UPDATE SET processed_hash=excluded.processed_hash,error=NULL,attempts=0',(rel,row['sha256']))
+            for rel,row in sources.items(): conn.execute('INSERT INTO sources(path,processed_hash,error,attempts) VALUES(?,?,NULL,0) ON CONFLICT(path) DO UPDATE SET processed_hash=excluded.processed_hash,error=NULL,attempts=0',(row.get('job_key',rel),row['sha256']))
             conn.execute('INSERT OR REPLACE INTO batches VALUES(?,?,?,?)',(ident,'complete',json.dumps(receipts),s.stamp()))
         journal.write_text(json.dumps({'state':'complete','receipts':receipts}),encoding='utf-8')
     return receipts
@@ -248,6 +258,6 @@ def run(limit=4,timeout=480):
         except Exception as exc:
             with db() as conn:
                 for row in packet['sources']:
-                    conn.execute('INSERT INTO sources(path,error,attempts) VALUES(?,?,1) ON CONFLICT(path) DO UPDATE SET error=excluded.error,attempts=attempts+1',(row['path'],type(exc).__name__))
+                    conn.execute('INSERT INTO sources(path,error,attempts) VALUES(?,?,1) ON CONFLICT(path) DO UPDATE SET error=excluded.error,attempts=attempts+1',(row.get('job_key',row['path']),type(exc).__name__))
                 conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('error',s.stamp(),packet['batch_id']))
             raise
