@@ -1,5 +1,5 @@
 """Install an explicit release from the owner's private repository; no tracking of main."""
-import argparse, hashlib, json, os, re, subprocess, sys
+import argparse, hashlib, json, os, re, subprocess, sys, time
 from pathlib import Path
 
 REMOTE='https://github.com/code-by-muhammad/second-brain-system.git'
@@ -13,6 +13,18 @@ def verify(checkout):
         if not target.is_relative_to(checkout.resolve()): raise ValueError('Unsafe manifest path.')
         if hashlib.sha256(target.read_bytes()).hexdigest()!=expected: raise ValueError('Release integrity mismatch: '+relative)
     return manifest
+
+def wait_health(python,root,version,timeout=120):
+    deadline=time.monotonic()+timeout
+    while time.monotonic()<deadline:
+        try:
+            result=subprocess.run([str(python),str(root/'app/brain_cli.py'),'health'],capture_output=True,text=True,encoding='utf-8',timeout=30)
+            if result.returncode==0:
+                data=json.loads(result.stdout)
+                if data.get('status')=='running' and data.get('version')==version: return data
+        except (ValueError,subprocess.TimeoutExpired): pass
+        time.sleep(2)
+    raise RuntimeError('MCP did not report the expected release before the startup deadline.')
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
@@ -33,14 +45,16 @@ def main():
     try:
         subprocess.run([str(python),str(release/'install.py'),'--root',str(root),'--vault',device['vault'],'--reuse-python',str(python),'--configure-clients','--install-service'],check=True)
         subprocess.run([str(python),str(root/'app/brain_cli.py'),'service','start'],check=True)
-        import time
-        time.sleep(10)
-        subprocess.run([str(python),str(root/'app/brain_cli.py'),'health'],check=True)
+        health=wait_health(python,root,info['version'])
     except Exception:
+        # Stop the failed/new service before replacing its files. Otherwise an old supervisor
+        # can continue running with a new device.json and defeat the attempted rollback.
+        subprocess.run([str(python),str(root/'app/brain_cli.py'),'service','stop'],check=False)
         old=Path(previous['release_root'])/'install.py'
         subprocess.run([previous['python'],str(old),'--root',str(root),'--vault',device['vault'],'--reuse-python',previous['python'],'--configure-clients','--install-service'],check=True)
         subprocess.run([previous['python'],str(root/'app/brain_cli.py'),'service','start'],check=True)
+        wait_health(previous['python'],root,previous['version'])
         raise
-    print(json.dumps({'status':'updated','version':info['version'],'previous':previous}))
+    print(json.dumps({'status':'updated','version':info['version'],'previous':previous,'health':health}))
 
 if __name__=='__main__': main()

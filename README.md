@@ -31,7 +31,7 @@ gh auth login
 gh repo clone code-by-muhammad/second-brain ~/Documents/Second-Brain
 gh repo clone code-by-muhammad/second-brain-system ~/Code/second-brain-system
 cd ~/Code/second-brain-system
-git checkout v0.1.0
+git checkout v0.1.1
 uv run --no-project --python 3.12 install.py --vault "$HOME/Documents/Second-Brain" --configure-clients --download-model --install-service
 ```
 
@@ -82,10 +82,10 @@ Keep one live sync transport. Syncthing is not enabled by this release. GitHub c
 Notes sync does not upgrade running software. Install an explicit release using the current runtime Python:
 
 ```text
-python <software-checkout>/update.py --root <runtime> --version v0.1.0
+python <software-checkout>/update.py --root <runtime> --version v0.1.1
 ```
 
-The updater clones only the owner's private repository, verifies the release file hashes, creates a native environment before stopping the service, preserves tokens/paths/role, registers startup/client settings and checks MCP health. It records the prior release and attempts to restore it if installation/health fails. Hashes detect accidental corruption; they do not substitute for repository access controls or independent code review.
+The updater clones only the owner's private repository, verifies the release file hashes, creates a native environment before stopping the service, preserves tokens/paths/role, registers startup/client settings and polls authenticated MCP health for the expected version for up to two minutes. It records the prior release, stops a failed new service before restoring the former one, and verifies restored health. Hashes detect accidental corruption; they do not substitute for repository access controls or independent code review.
 
 To return to the previous release manually, stop the registered service; use the previous `release_root` and Python from `state/previous-release.json` to run its `install.py` with the same `--root`, `--vault`, `--reuse-python`, `--configure-clients`, `--install-service`; then start the service. Source notes and SQLite are not deleted. Original pre-migration app/task backups are retained on the initial Windows host.
 

@@ -1,11 +1,11 @@
 {
-  "version": "0.1.0",
+  "version": "0.1.1",
   "repository": "code-by-muhammad/second-brain-system",
   "sha256": {
     ".gitattributes": "f6ce10966afc0559ec27c46df343309b56edb0dbdb86379609d3d5f3577ff0e6",
     ".github/workflows/verify.yml": "d6c6a619272cdf8261b920393eb40ac61f5912421fbec1f8064df74902ef8a30",
     ".gitignore": "c52dd74779d2e208b5eb4c204253563f1b26e0e1398d339173f9272f7d7c2a94",
-    "README.md": "e9471176e2e94e4cd6c32a69dc0c33ef4be73770bba6bc6702fcb9a560e5b04f",
+    "README.md": "388b6b9ec900bd45141abb4a69013f7e679064dbaecd9b9a168cbbd30a9cef91",
     "app/brain_cli.py": "4ea23c5cdf1f8087bc76668f6f48d5a0d42650f7937a93cad9a5ef4b395b054e",
     "app/brain_client.py": "f8df2f132f90e4991c79e77266a4c7af9858254843630f1e6b3416f5ed800801",
     "app/brain_git.py": "b30e1c21c247d1f3a3c30caf8faf6f15290de6430a4341b081570b69e62e7bbe",
@@ -14,16 +14,17 @@
     "app/brain_maintenance.py": "55c348d12d94d7ef9d0b59dd254af265f59ecbedc086ab7edf6ccbe948713a73",
     "app/brain_server.py": "1a3df945c9f783354c86397088115896f200c714941671a670ab9d05951c6408",
     "app/brain_service.py": "f115cea24477de3aa0d639dcd474b9dcef641c7aba50a7f762a6cb8bcdf5f7fd",
-    "app/brain_settings.py": "523df7104dfff36838fdea6d17c75df3d1983d5676e09fb91bcdcdc66140529c",
+    "app/brain_settings.py": "c127830b25d63787d93ed04381790b2692d0af074d94979cf20b1355f7986afe",
     "app/brain_store.py": "3d5d2eefd4afcbb7b0e389dce4cf5b7d9b5e6c6ab7f91d4646031682af88a03b",
     "app/brain_supervisor.py": "2c51999dff8dd0b55e25ae9cfa8928049b34fabb8cc3cff936b377aa7bca1b6e",
     "app/brain_wiki.py": "3e3f0d402169257bce050308bb9dd4afe03dc8f443450c15a521f7a646edad95",
     "build_release.py": "677177d9e8a1a7275f6f1b3fc06e529e33de7f917aa9c95db04edeac20339ddc",
     "docs/AI-PROTOCOL.md": "c4f52945388b1b9e0557f44fb5ecf91127f33d09c447fcf7bc6dfc505b55dacb",
     "docs/RELEASE-v0.1.0.md": "324a0f3c3baabef202f578f6f9edd88b80286bf4cf04028c17b00c86ee0e6a60",
+    "docs/RELEASE-v0.1.1.md": "234c2abb6851694b8ebdac54eba77a7e1e05e19b59000671debf04b6673971b6",
     "docs/RESEARCH-AND-PLAN.md": "04f0a2ac1a18051687e65bad2f599b144e3ecfac800e4b34d9ee599b5dc7370d",
-    "install.py": "eaadeaf7a094569b7a9eebf1da0c64edd767722a848038f30f2971e82ecfc6c1",
-    "pyproject.toml": "c5c6251b59d83af7dcc80960c59955734480d4f0c32651048c9679bb7c84ed0c",
+    "install.py": "a1ef080993dfeea10c44c5ea562be6e179631d99973821fa9d01474f7ff9b16f",
+    "pyproject.toml": "6d247902de2af7657a95a0cc260a8b9c592d16c37bd3a0929b6cfd1e4365c077",
     "tests/conftest.py": "f6b6fc5a89e9f6298750c7ac3b4bdceca9ff8b8b098c327d82f3957b1d3c5fba",
     "tests/smoke_import.py": "d8a50c4ca9bb7bd04fbdabe8789752b4a77a1da7373f0d34a2f2c72608a6316c",
     "tests/test_cleanup.py": "915df7af134ec2499cdd59b029521873b1157d0af7d8f5cfba6b26d93b3cc33f",
@@ -36,9 +37,10 @@
     "tests/test_portability.py": "affcdd2d992cd4e0c76248e51a8a290ae6dbbb6b0452920800314c64c95dd349",
     "tests/test_startup_readiness.py": "c0d907ae410277fc29b76bb038fcfe3ca75e6c04e6d2b9d46897338e48debbf2",
     "tests/test_sync.py": "af4a75f9ecbfe17daf025e586c978c13862ff1fd89b30a66410b3178a0ba08e8",
+    "tests/test_upgrade_readiness.py": "218cff4f2498ef4b97fa76d489ddf700002ecfdc8725d73b24a83895cbbd4fa4",
     "tests/test_versions.py": "bd99fdddd41d8f110e853983222c23951953462e33caa1aeb06edafa81b0b82c",
     "tests/test_wiki.py": "1b618cc2cd7ab846381283aa63eb81007eba45483aeb00f577e4e459ee19d68b",
-    "update.py": "bcfa675f058427296703a20a5978ce1f6e47f90b132331e41506e96e15423741",
-    "uv.lock": "8d48c6e4fc01b76bdd3d5aeb1a9d5956b54dc7b72984c003a09537e3e6a517bc"
+    "update.py": "5bb8ce42df6ab4c6b05cac798c7f32614420518f4cf5a373329640653e21639c",
+    "uv.lock": "22f11732560ae2faf128e5a8d484aeb25c4a34737f05793f17c3c45cf04e182c"
   }
 }
