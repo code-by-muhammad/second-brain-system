@@ -1,5 +1,6 @@
 """Serialize locally; merge independent offline edits only after a conflict-free preflight."""
 import subprocess
+import os
 from pathlib import Path
 import brain_store as s
 
@@ -17,6 +18,10 @@ def sync(vault=None):
     for rel in candidates:
         if not rel or rel.split('/')[0] not in FOLDERS or not rel.lower().endswith('.md'): continue
         target=vault/rel
+        for parent in (target,*target.parents):
+            if parent==vault.parent: break
+            if parent.is_symlink() or os.path.isjunction(parent): raise ValueError('Linked note paths are not synchronized automatically.')
+        if not target.resolve().is_relative_to(vault.resolve()): raise ValueError('Note path leaves vault.')
         if not target.is_file(): continue
         s.clean_text(target.read_text(encoding='utf-8'),2_000_000); eligible.append(rel)
     if eligible:

@@ -58,6 +58,8 @@ def maintenance(sync=True):
                 dest=p.with_suffix(p.suffix+'.'+datetime.now().strftime('%Y%m%d%H%M%S')+'.gz')
                 with gzip.open(dest,'wb') as f: f.write(p.read_bytes())
                 p.write_bytes(b'')
+        from brain_wiki import cleanup
+        status['completed_private_artifacts_removed']=cleanup()
         if sync:
             try:
                 from brain_git import sync as sync_git
