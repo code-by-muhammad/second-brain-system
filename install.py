@@ -4,6 +4,7 @@ import argparse, hashlib, json, os, secrets, shutil, subprocess, sys
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
+VERSION='0.1.0'
 
 def atomic(path,text):
     path.parent.mkdir(parents=True,exist_ok=True)
@@ -46,7 +47,7 @@ def deploy(root,python,vault,role='capture',configure_clients=False):
     # Existing role and identity must not change implicitly during an upgrade.
     settings={**old,'vault':str(vault),'python':str(python),'release_root':str(REPO),
               'role':old.get('role',role),'device_id':old.get('device_id',secrets.token_hex(8)),
-              'port':old.get('port',8765),'timezone':old.get('timezone','Asia/Karachi'),'version':'0.1.0'}
+              'port':old.get('port',8765),'timezone':old.get('timezone','Asia/Karachi'),'version':VERSION}
     backup(device,root)
     atomic(device,json.dumps(settings,indent=2)+'\n')
     installed=root/'app'
