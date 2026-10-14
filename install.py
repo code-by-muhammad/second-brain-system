@@ -96,6 +96,10 @@ def main():
         subprocess.run([str(python),'-c',code],env=env,check=True)
     if args.install_service:
         subprocess.run([str(python),str(root/'app/brain_cli.py'),'service','install'],check=True)
+    if os.name=='nt':
+        account=os.environ.get('USERDOMAIN','.')+'\\'+os.environ.get('USERNAME','')
+        for private in (root/'state',root/'backups'):
+            subprocess.run(['icacls.exe',str(private),'/inheritance:r','/grant:r',account+':(OI)(CI)F','SYSTEM:(OI)(CI)F'],check=True,stdout=subprocess.DEVNULL)
     print(json.dumps(result,indent=2))
 
 if __name__=='__main__': main()

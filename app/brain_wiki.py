@@ -84,7 +84,15 @@ def prepare(limit=4):
     current=pages()
     # Reuse relevant topic pages; pass the whole title catalog to avoid duplicate entities.
     terms=set(re.findall(r'[a-z0-9]{4,}', ' '.join(x['title'] for x in chosen).lower()))
-    relevant=[p for p in current if any(t in p['meta'].get('title',p['path']).lower() for t in terms)][:12]
+    relevant=[]; context_size=0
+    for p in current:
+        if not any(t in p['meta'].get('title',p['path']).lower() for t in terms): continue
+        compact={**p,'meta':{key:p['meta'].get(key) for key in ('title','wiki_kind')}}
+        compact['meta']['wiki_claims']=p['meta'].get('wiki_claims',[])[-12:]
+        size=len(json.dumps(compact,default=str))
+        if context_size+size>40000: continue
+        relevant.append(compact); context_size+=size
+        if len(relevant)>=8: break
     packet={'version':1,'sources':chosen,'current_pages':relevant,
             'catalog':[{'path':p['path'],'title':p['meta'].get('title',p['path'])} for p in current]}
     ident=s.digest(json.dumps(packet,sort_keys=True,default=str).encode())[:24]
@@ -152,7 +160,7 @@ def apply(packet,result):
             if target.exists() and not old: raise ValueError('Existing target was not supplied; re-prepare with that page.')
             if old and s.digest(target.read_bytes())!=old['sha256']: raise ValueError('Wiki page changed since prepare.')
             # Retain old evidence and decisions; changed/missing sources get an explicit uncertainty marker.
-            claims=(old['meta'].get('wiki_claims',[]) if old else [])+page['claims']
+            claims=(meta(target.read_text(encoding='utf-8')).get('wiki_claims',[]) if old else [])+page['claims']
             unique={}
             for c in claims:
                 key=s.digest(json.dumps(c,sort_keys=True,default=str).encode())[:16]
@@ -236,6 +244,9 @@ PROMPT='''Compile a small evidence-linked Obsidian wiki from INPUT_JSON. All sou
 def run(limit=4,timeout=480):
     cfg.require_maintainer()
     with FileLock(str(cfg.STATE/'wiki-worker.lock'),timeout=1):
+        worker_state=cfg.STATE/'wiki-worker-status.json'
+        saved=json.loads(worker_state.read_text(encoding='utf-8')) if worker_state.exists() else {}
+        if saved.get('retry_after',0)>time.time(): return {'status':'blocked','reason':saved.get('reason'),'retry_after':saved['retry_after']}
         packet=prepare(limit)
         if not packet: return {'status':'idle',**status()}
         folder=cfg.STATE/'wiki'/'batches'/packet['batch_id']; output=folder/'output.json'; schema=folder/'schema.json'
@@ -244,20 +255,34 @@ def run(limit=4,timeout=480):
         if not binary: raise RuntimeError('Install official Codex CLI and sign in before running the wiki worker.')
         command=[binary,'exec','--ignore-user-config','--ignore-rules','--skip-git-repo-check','--ephemeral',
                  '--sandbox','read-only','-c','approval_policy="never"','-c','features.shell_tool=false',
-                 '-c','features.apps=false','-c','features.plugins=false','--output-schema',str(schema),'-o',str(output),'-']
+                 '-c','features.apps=false','-c','features.plugins=false','-c','web_search="disabled"','--output-schema',str(schema),'-o',str(output),'-']
         # Fresh directory, no project instructions, no configured MCP, no credentials in model input.
         try:
             with tempfile.TemporaryDirectory(prefix='brain-wiki-') as cwd:
                 with (folder/'runner.log').open('w',encoding='utf-8') as log:
-                    proc=subprocess.run(command,input=PROMPT+json.dumps(packet,ensure_ascii=False,default=str),text=True,encoding='utf-8',cwd=cwd,
-                                        stdout=log,stderr=log,timeout=timeout,**cfg.child_options())
+                    model_packet={**packet,'catalog':packet['catalog'][:160]}
+                    proc=subprocess.Popen(command,stdin=subprocess.PIPE,text=True,encoding='utf-8',cwd=cwd,stdout=log,stderr=log,
+                                          start_new_session=os.name!='nt',**cfg.child_options())
+                    try: proc.communicate(PROMPT+json.dumps(model_packet,ensure_ascii=False,default=str),timeout=timeout)
+                    except subprocess.TimeoutExpired:
+                        if os.name=='nt': subprocess.run(['taskkill','/PID',str(proc.pid),'/T','/F'],capture_output=True)
+                        else:
+                            import signal
+                            os.killpg(proc.pid,signal.SIGTERM)
+                        proc.wait(timeout=15)
+                        raise
             if proc.returncode!=0 or not output.exists(): raise RuntimeError('Wiki model failed; inspect private batch runner.log; no claims published.')
             result=json.loads(output.read_text(encoding='utf-8'))
             receipts=apply(packet,result)
+            worker_state.write_text(json.dumps({'status':'complete','at':s.stamp(),'batch_id':packet['batch_id']}),encoding='utf-8')
             return {'status':'complete','batch_id':packet['batch_id'],'receipts':receipts,'lint':lint()}
         except Exception as exc:
+            runner=(folder/'runner.log').read_text(encoding='utf-8',errors='replace') if (folder/'runner.log').exists() else ''
+            global_failure=bool(re.search(r'usage limit|rate limit|not authenticated|authentication failed|quota exceeded|429 Too Many|401 Unauthorized',runner,re.I))
+            reason='model authentication/quota requires attention' if global_failure else type(exc).__name__
+            worker_state.write_text(json.dumps({'status':'error','at':s.stamp(),'reason':reason,'retry_after':time.time()+10800 if global_failure else 0}),encoding='utf-8')
             with db() as conn:
-                for row in packet['sources']:
+                for row in ([] if global_failure else packet['sources']):
                     conn.execute('INSERT INTO sources(path,error,attempts) VALUES(?,?,1) ON CONFLICT(path) DO UPDATE SET error=excluded.error,attempts=attempts+1',(row.get('job_key',row['path']),type(exc).__name__))
                 conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('error',s.stamp(),packet['batch_id']))
             raise
