@@ -272,6 +272,11 @@ def _model_auth_quota_failure(returncode,runner,model_input):
     diagnostics=normalized(runner).replace(normalized(model_input),'')
     return bool(re.search(r'usage limit|rate limit|not authenticated|authentication failed|quota exceeded|429 Too Many|401 Unauthorized',diagnostics,re.I))
 
+def output_schema(packet):
+    schema=json.loads(json.dumps(SCHEMA))
+    schema['properties']['pages']['items']['properties']['claims']['items']['properties']['source']['enum']=sorted({x['path'] for x in packet['sources']})
+    return schema
+
 def run(limit=4,timeout=480):
     cfg.require_maintainer()
     with FileLock(str(cfg.STATE/'wiki-worker.lock'),timeout=1):
@@ -281,7 +286,7 @@ def run(limit=4,timeout=480):
         packet=prepare(limit)
         if not packet: return {'status':'idle',**status()}
         folder=cfg.STATE/'wiki'/'batches'/packet['batch_id']; output=folder/'output.json'; schema=folder/'schema.json'
-        schema.write_text(json.dumps(SCHEMA),encoding='utf-8')
+        schema.write_text(json.dumps(output_schema(packet)),encoding='utf-8')
         binary=shutil.which('codex.cmd' if os.name=='nt' else 'codex')
         if not binary: raise RuntimeError('Install official Codex CLI and sign in before running the wiki worker.')
         command=[binary,'exec','--ignore-user-config','--ignore-rules','--skip-git-repo-check','--ephemeral',
