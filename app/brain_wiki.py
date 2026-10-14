@@ -11,6 +11,7 @@ import brain_settings as cfg
 BASE='02-Areas/AI-Memory/Wiki/'
 SOURCE_ROOTS=('00-Inbox','01-Projects','02-Areas','03-Resources','04-Archive','06-People','07-Meetings')
 KINDS=('Projects','People','Concepts','Decisions','Experience')
+def normalized(text): return text.replace('\r\n','\n').replace('\r','\n')
 SCHEMA={'type':'object','additionalProperties':False,'required':['pages'], 'properties':{'pages':{
  'type':'array','items':{'type':'object','additionalProperties':False,'required':['category','slug','title','claims','related'],
  'properties':{'category':{'type':'string','enum':list(KINDS)},'slug':{'type':'string'},'title':{'type':'string'},
@@ -20,6 +21,7 @@ SCHEMA={'type':'object','additionalProperties':False,'required':['pages'], 'prop
  'status':{'type':'string','enum':['historical','uncertain','superseded']}}}}}}}}}
 
 def meta(text):
+    text=normalized(text)
     if not text.startswith('---\n'): return {}
     try: return yaml.safe_load(text.split('---',2)[1]) or {}
     except (yaml.YAMLError,IndexError): return {}
@@ -39,7 +41,7 @@ def inventory():
             if rel.startswith('02-Areas/AI-Memory/') or p.stat().st_size>2_000_000: continue
             try:
                 s.safe_path(rel)
-                raw=p.read_bytes(); text=raw.decode('utf-8-sig'); s.clean_text(text,2_000_000)
+                raw=p.read_bytes(); text=normalized(raw.decode('utf-8-sig')); s.clean_text(text,2_000_000)
                 info=meta(text)
                 if 'ai-capture' in info.get('tags',[]) and info.get('project')=='Second Brain': continue
                 chunks=[text[i:i+24000] for i in range(0,len(text),23000)] or ['']
@@ -122,7 +124,7 @@ def _validate(packet, result):
             s.clean_text(claim['text'],1600); s.clean_text(claim['quote'],1200)
             if not claim['text'].strip() or len(claim['quote'].strip())<12: raise ValueError('A substantive claim and evidence quote are required.')
             src=sources.get(claim['source'])
-            if not src or claim['quote'] not in src['text']: raise ValueError('Evidence quote must occur exactly in a supplied source.')
+            if not src or normalized(claim['quote']) not in normalized(src['text']): raise ValueError('Evidence quote must occur exactly in a supplied source.')
         for link in page['related']:
             s.safe_path(link)
             if not link.startswith(BASE): raise ValueError('Related links must target the derived wiki.')
@@ -163,6 +165,7 @@ def apply(packet,result):
             claims=(meta(target.read_text(encoding='utf-8')).get('wiki_claims',[]) if old else [])+page['claims']
             unique={}
             for c in claims:
+                c={**c,'quote':normalized(c['quote'])}
                 key=s.digest(json.dumps(c,sort_keys=True,default=str).encode())[:16]
                 unique[key]=dict(c)
             if len(unique)>120: raise ValueError('Page exceeds 120 claims; split it into narrower topics.')
@@ -234,7 +237,7 @@ def lint():
             if related not in known: issues.append({'page':p['path'],'issue':'broken related link','target':related})
         for c in p['meta'].get('wiki_claims',[]):
             target=s.safe_path(c['source'])
-            if not target.exists() or c['quote'] not in target.read_text(encoding='utf-8-sig'): issues.append({'page':p['path'],'issue':'evidence quote missing','source':c['source']})
+            if not target.exists() or normalized(c['quote']) not in target.read_text(encoding='utf-8-sig'): issues.append({'page':p['path'],'issue':'evidence quote missing','source':c['source']})
     report={'at':s.stamp(),'pages':len(allpages),'issues':issues,'semantic_review':'model preserves competing evidence; deterministic lint does not prove factual entailment'}
     (cfg.STATE/'wiki-lint.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
     return report
