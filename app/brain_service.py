@@ -69,7 +69,7 @@ def stop():
         for pid in pids:
             if os.name=='nt':
                 root=str(cfg.ROOT/'app').replace("'","''")
-                script=f"$brainProcess = Get-CimInstance Win32_Process -Filter 'ProcessId={pid}'; if ($brainProcess -and $brainProcess.CommandLine -and $brainProcess.CommandLine.Contains('{root}')) {{ Stop-Process -Id {pid} -Force }}"
+                script=f"$brainProcess = Get-CimInstance Win32_Process -Filter 'ProcessId={pid}'; if ($brainProcess -and $brainProcess.CommandLine -and $brainProcess.CommandLine.Contains('{root}')) {{ & taskkill.exe /PID {pid} /T /F | Out-Null }}"
                 subprocess.run(['powershell.exe','-NoProfile','-Command',script],check=True,**cfg.child_options())
             else:
                 p=subprocess.run(['ps','-p',str(pid),'-o','args='],capture_output=True,text=True)
