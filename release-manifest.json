@@ -37,7 +37,7 @@
     "tests/test_portability.py": "affcdd2d992cd4e0c76248e51a8a290ae6dbbb6b0452920800314c64c95dd349",
     "tests/test_startup_readiness.py": "c0d907ae410277fc29b76bb038fcfe3ca75e6c04e6d2b9d46897338e48debbf2",
     "tests/test_sync.py": "af4a75f9ecbfe17daf025e586c978c13862ff1fd89b30a66410b3178a0ba08e8",
-    "tests/test_upgrade_readiness.py": "218cff4f2498ef4b97fa76d489ddf700002ecfdc8725d73b24a83895cbbd4fa4",
+    "tests/test_upgrade_readiness.py": "94f15547493831e8bf6c15122714479b3ade185c001892a97fcdfac3215420b5",
     "tests/test_versions.py": "bd99fdddd41d8f110e853983222c23951953462e33caa1aeb06edafa81b0b82c",
     "tests/test_wiki.py": "1b618cc2cd7ab846381283aa63eb81007eba45483aeb00f577e4e459ee19d68b",
     "update.py": "5bb8ce42df6ab4c6b05cac798c7f32614420518f4cf5a373329640653e21639c",
