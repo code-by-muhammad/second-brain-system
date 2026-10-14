@@ -24,6 +24,8 @@ The service exposes six constrained tools: `brain_context`, `brain_search`, `bra
 
 ## New Mac or Linux device
 
+For agent instructions, Windows commands, acceptance checks and later upgrades, use [the device setup guide](docs/DEVICE-SETUP.md).
+
 Prerequisites: Git, [GitHub CLI](https://cli.github.com/), and [uv from Astral](https://docs.astral.sh/uv/getting-started/installation/). Authenticate on that device; do not copy tokens from another computer.
 
 ```sh
