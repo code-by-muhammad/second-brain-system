@@ -3,7 +3,7 @@
   "repository": "code-by-muhammad/second-brain-system",
   "sha256": {
     ".gitattributes": "f6ce10966afc0559ec27c46df343309b56edb0dbdb86379609d3d5f3577ff0e6",
-    ".github/workflows/verify.yml": "5c61e52c12f1d2cd21b9b401fe5920f6f9e49a1c8fb7952879ebad9255550ac5",
+    ".github/workflows/verify.yml": "d6c6a619272cdf8261b920393eb40ac61f5912421fbec1f8064df74902ef8a30",
     ".gitignore": "c52dd74779d2e208b5eb4c204253563f1b26e0e1398d339173f9272f7d7c2a94",
     "README.md": "879c6733c097f35c2c1f3c8ca05d74d45e8a5e852b433d10e593076386e023a9",
     "app/brain_cli.py": "4ea23c5cdf1f8087bc76668f6f48d5a0d42650f7937a93cad9a5ef4b395b054e",
