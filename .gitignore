@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+device.json
+state/
+models/
+logs/
+backups/
+pilot/
+reports/
+.env
+*.sqlite*
+*.db*
+*.key
+*.pem
+legacy-windows-requirements.lock

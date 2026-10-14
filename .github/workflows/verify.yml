@@ -1,0 +1,24 @@
+name: Verify portable brain
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.9.16'
+          enable-cache: false
+      - run: uv sync --locked --python 3.12
+      - run: uv run --locked python -m pytest -q
+      - run: uv run --locked python -m compileall -q app install.py update.py
+      - run: uv run --locked python tests/smoke_import.py
