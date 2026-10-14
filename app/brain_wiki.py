@@ -259,7 +259,7 @@ def cleanup(days=30):
         if datetime.fromisoformat(row['updated']).timestamp()>=cutoff: continue
         folder=(base/row['id']).resolve()
         if not folder.is_relative_to(base): raise ValueError('Unsafe batch cleanup path.')
-        for name in ('input.json','output.json','runner.log','schema.json','journal.json'):
+        for name in ('input.json','output.json','runner.log','schema.json'):
             path=folder/name
             if path.is_file() and not path.is_symlink(): path.unlink(); removed+=1
     return removed
