@@ -4,7 +4,7 @@ import hashlib, json, os, re, shutil, sqlite3, subprocess, tempfile, time
 from pathlib import Path
 from datetime import datetime
 from filelock import FileLock
-import yaml
+from brain_markdown import frontmatter
 import brain_store as s
 import brain_settings as cfg
 
@@ -21,10 +21,7 @@ SCHEMA={'type':'object','additionalProperties':False,'required':['pages'], 'prop
  'status':{'type':'string','enum':['historical','uncertain','superseded']}}}}}}}}}
 
 def meta(text):
-    text=normalized(text)
-    if not text.startswith('---\n'): return {}
-    try: return yaml.safe_load(text.split('---',2)[1]) or {}
-    except (yaml.YAMLError,IndexError): return {}
+    return frontmatter(text)
 
 def db():
     cfg.STATE.mkdir(parents=True,exist_ok=True)
@@ -64,12 +61,18 @@ def status():
             'pending_sources':len({x['path'] for x in sources if processed.get(x['job_key'])!=x['sha256']}),
             'batches':states,'failed_source_parts':errors,'role':cfg.ROLE,'oversize_policy':'notes up to 2 MB split into overlapping bounded parts; credential-like sources excluded'}
 
-def pages():
+def pages(issues=None):
     found=[]
     for p in (s.VAULT/BASE).rglob('*.md'):
         rel=p.relative_to(s.VAULT).as_posix()
         s.safe_path(rel)
-        raw=p.read_bytes(); m=meta(raw.decode('utf-8-sig'))
+        raw=p.read_bytes()
+        try: m=frontmatter(raw.decode('utf-8-sig'),strict=True)
+        except ValueError:
+            m={}
+        is_topic=rel[len(BASE):].split('/')[0] in KINDS
+        if is_topic and m.get('wiki_kind') not in KINDS and issues is not None:
+            issues.append({'page':rel,'issue':'wiki metadata missing or invalid'})
         if m.get('wiki_kind') in KINDS: found.append({'path':rel,'sha256':s.digest(raw),'meta':m})
     return found
 
@@ -228,7 +231,7 @@ def _index_and_log(ident,receipts,sources):
         s._write(log,text,'wiki_log')
 
 def lint():
-    issues=[]; allpages=pages(); known={p['path'] for p in allpages}
+    issues=[]; allpages=pages(issues); known={p['path'] for p in allpages}
     for p in allpages:
         for src,h in p['meta'].get('source_hashes',{}).items():
             target=s.safe_path(src)

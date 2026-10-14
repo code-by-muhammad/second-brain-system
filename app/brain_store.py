@@ -6,6 +6,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 from filelock import FileLock
 import yaml
+from brain_markdown import frontmatter
 import brain_settings as cfg
 
 ROOT, VAULT, STATE = cfg.ROOT, cfg.VAULT, cfg.STATE
@@ -96,7 +97,7 @@ def capture(event_id:str,title:str,outcome:str,source_app:str,source_reference:s
     p=safe_path(f'00-Inbox/AI-Captures/{key}.md')
     with FileLock(str(STATE/'writer.lock'),timeout=20):
         if p.exists():
-            previous=yaml.safe_load(p.read_text(encoding='utf-8').split('---',2)[1]) or {}
+            previous=frontmatter(p.read_text(encoding='utf-8'),strict=True)
             if previous.get('payload_sha256')==fingerprint:
                 return {'path':p.relative_to(VAULT).as_posix(),'status':'duplicate','sha256':digest(p.read_bytes())}
             raise ValueError('event_id already saved with different content. Use a new milestone ID; evidence is immutable.')
