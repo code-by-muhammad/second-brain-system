@@ -55,6 +55,20 @@ def start():
 
 def stop():
     if sys.platform=='win32': command=['schtasks.exe','/End','/TN',TASK]
-    elif sys.platform=='darwin': command=['launchctl','kill','SIGTERM',f'gui/{os.getuid()}/{LABEL}']
+    elif sys.platform=='darwin': command=['launchctl','bootout',f'gui/{os.getuid()}/{LABEL}']
     else: command=['systemctl','--user','stop','second-brain.service']
     subprocess.run(command,check=True,**cfg.child_options())
+    registry=cfg.STATE/'service-pids.json'
+    if registry.exists():
+        import signal
+        pids=[pid for pid in json.loads(registry.read_text()).values() if isinstance(pid,int) and pid!=os.getpid()]
+        for pid in pids:
+            if os.name=='nt':
+                root=str(cfg.ROOT/'app').replace("'","''")
+                script=f"$brainProcess = Get-CimInstance Win32_Process -Filter 'ProcessId={pid}'; if ($brainProcess -and $brainProcess.CommandLine -and $brainProcess.CommandLine.Contains('{root}')) {{ Stop-Process -Id {pid} -Force }}"
+                subprocess.run(['powershell.exe','-NoProfile','-Command',script],check=True,**cfg.child_options())
+            else:
+                p=subprocess.run(['ps','-p',str(pid),'-o','args='],capture_output=True,text=True)
+                if str(cfg.ROOT/'app') in p.stdout:
+                    try: os.kill(pid,signal.SIGTERM)
+                    except ProcessLookupError: pass

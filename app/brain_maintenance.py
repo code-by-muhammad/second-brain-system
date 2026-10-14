@@ -35,7 +35,7 @@ def maintenance(sync=True):
             if marker in body: continue
             title=next((line[2:] for line in raw.splitlines() if line.startswith('# ')),'AI milestone')
             link=p.relative_to(s.VAULT).as_posix()[:-3]
-            entry=f'\n### {when:%H:%M} — {title}\n{marker}\n- **What / Why / How / Result / Next:** [[{link}|Saved milestone and evidence]]\n- **Source:** {meta["source_app"]}\n- **Links:** [[Maps/AI-Context]]\n'
+            entry=f'\n### {when:%H:%M} â€” {title}\n{marker}\n- **What / Why / How / Result / Next:** [[{link}|Saved milestone and evidence]]\n- **Source:** {meta["source_app"]}\n- **Links:** [[Maps/AI-Context]]\n'
             if '## Work Log' not in body: body+='\n## Work Log\n'
             start=body.index('## Work Log')+len('## Work Log'); end=body.find('\n## ',start)
             if end<0: body=body.rstrip()+'\n'+entry
@@ -60,40 +60,8 @@ def maintenance(sync=True):
                 p.write_bytes(b'')
         if sync:
             try:
-                if git('diff','--cached','--name-only').strip():
-                    status['git']='paused: existing staged changes preserved'
-                else:
-                    # Service-owned governance files plus the owner's visible Markdown notes.
-                    owned={}
-                    audit=s.STATE/'audit.jsonl'
-                    if audit.exists():
-                        for line in audit.read_text(encoding='utf-8').splitlines():
-                            e=json.loads(line); owned[e['path']]=e['after']
-                    eligible=[]
-                    for rel,h in owned.items():
-                        p=s.safe_path(rel)
-                        if p.exists() and s.digest(p.read_bytes())==h:
-                            s.clean_text(p.read_text(encoding='utf-8'),2_000_000); eligible.append(rel)
-                    note_folders={'00-Inbox','01-Projects','02-Areas','03-Resources','04-Archive','05-Daily','06-People','07-Meetings','Maps','Templates'}
-                    candidates=git('ls-files','--modified','--others','--exclude-standard','-z').split('\x00')
-                    for rel in candidates:
-                        if not rel or rel.split('/')[0] not in note_folders or not rel.lower().endswith('.md'): continue
-                        p=s.safe_path(rel)
-                        if not p.is_file(): continue # Source deletions require explicit review.
-                        s.clean_text(p.read_text(encoding='utf-8'),2_000_000); eligible.append(rel)
-                    eligible=list(dict.fromkeys(eligible))
-                    if eligible:
-                        git('add','--',*eligible)
-                        # Check the staged snapshot as well, in case an editor changed it during staging.
-                        try:
-                            for rel in eligible: s.clean_text(git('show',':'+rel),2_000_000)
-                        except Exception:
-                            git('reset','--',*eligible); raise
-                        if git('diff','--cached','--name-only').strip(): git('commit','-m','brain: capture milestones and refresh derived context')
-                    if git('status','--porcelain').strip(): status['git']='paused: other local changes require review'
-                    else:
-                        git('fetch','origin'); git('merge','--ff-only','@{upstream}'); git('push','origin','HEAD')
-                        status['git']='synced'
+                from brain_git import sync as sync_git
+                status['git']=sync_git()
             except Exception as e: status['git']='needs attention: '+str(e)
         (s.STATE/'maintenance-status.json').write_text(json.dumps(status,indent=2),encoding='utf-8')
     return status

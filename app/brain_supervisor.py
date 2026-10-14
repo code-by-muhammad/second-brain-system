@@ -13,6 +13,11 @@ def main():
                 with (cfg.ROOT/'logs/service-server.log').open('ab') as log:
                     child=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_server.py')],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
             progress=cfg.STATE/'index-bootstrap-status.json'
+            registry=cfg.STATE/'service-pids.json'
+            temp=registry.with_suffix('.tmp')
+            import os
+            temp.write_text(json.dumps({'supervisor':os.getpid(),'server':child.pid if child else None,'bootstrap':bootstrap.pid if bootstrap else None}),encoding='utf-8')
+            os.replace(temp,registry)
             try: state=json.loads(progress.read_text()) if progress.exists() else {}
             except (OSError,ValueError): state={}
             if listening and state.get('status') not in ('verified','needs review','needs attention') and (bootstrap is None or bootstrap.poll() is not None):
