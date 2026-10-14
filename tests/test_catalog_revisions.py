@@ -36,6 +36,18 @@ def test_catalog_revision_prevents_concurrent_overwrite(brain):
     assert target.read_bytes()==before
 
 
+def test_claim_budget_includes_history_outside_the_bounded_context(brain):
+    source,packet,result=fixture(brain)
+    base=result['pages'][0]['claims'][0]
+    result['pages'][0]['claims']=[{**base,'text':f'Synthetic supported requirement {i}.'} for i in range(30)]
+    w.apply(packet,result)
+    source.write_text(source.read_text(encoding='utf-8')+'\nA later continuation.',encoding='utf-8')
+    packet=w.prepare()
+    assert packet['catalog'][0]['claim_count']==30
+    assert packet['current_pages'][0]['claim_count']==30
+    assert len(packet['current_pages'][0]['meta']['wiki_claims'])==12
+
+
 @pytest.mark.parametrize('returncode,diagnostic,expected',[
     (0,'ERROR: 429 Too Many',False),
     (1,'',False),
