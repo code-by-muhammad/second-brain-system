@@ -4,7 +4,7 @@ import argparse, hashlib, json, os, secrets, shutil, subprocess, sys
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
-VERSION='0.1.4'
+VERSION='0.1.5'
 
 def atomic(path,text):
     path.parent.mkdir(parents=True,exist_ok=True)

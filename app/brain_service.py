@@ -53,7 +53,13 @@ def install():
 
 def start():
     if sys.platform=='win32': command=['schtasks.exe','/Run','/TN',TASK]
-    elif sys.platform=='darwin': command=['launchctl','kickstart',f'gui/{os.getuid()}/{LABEL}']
+    elif sys.platform=='darwin':
+        domain=f'gui/{os.getuid()}'; target=f'{domain}/{LABEL}'
+        registered=subprocess.run(['launchctl','print',target],capture_output=True,**cfg.child_options())
+        if registered.returncode:
+            plist=Path.home()/'Library/LaunchAgents'/f'{LABEL}.plist'
+            subprocess.run(['launchctl','bootstrap',domain,str(plist)],check=True,**cfg.child_options())
+        command=['launchctl','kickstart',target]
     else: command=['systemctl','--user','start','second-brain.service']
     subprocess.run(command,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,**cfg.child_options())
 
