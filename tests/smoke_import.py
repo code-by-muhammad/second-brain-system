@@ -11,3 +11,7 @@ with tempfile.TemporaryDirectory() as folder:
             (state/'access.json').write_text(json.dumps({'token_sha256':hashlib.sha256(b'synthetic-ci-token').hexdigest()}))
         importlib.import_module(name)
     print('Native library and MCP imports passed on',sys.platform)
+    import logging
+    logging.shutdown()
+    from loguru import logger
+    logger.remove()
