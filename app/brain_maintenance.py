@@ -6,6 +6,7 @@ from filelock import FileLock
 import yaml
 import brain_store as s
 import brain_settings as cfg
+from brain_wiki import meta as parse_meta
 
 def git(*args):
     p=subprocess.run(['git','-C',str(s.VAULT),*args],capture_output=True,text=True,encoding='utf-8',timeout=90)
@@ -19,8 +20,13 @@ def maintenance(sync=True):
         captures=sorted((s.VAULT/'00-Inbox/AI-Captures').glob('*.md')) if cfg.ROLE=='maintainer' else []
         if captures: cfg.require_maintainer()
         for p in captures:
-            raw=p.read_text(encoding='utf-8'); meta=yaml.safe_load(raw.split('---',2)[1])
-            when=datetime.fromisoformat(meta['captured_at']); day=when.strftime('%Y-%m-%d-%A')
+            raw=p.read_text(encoding='utf-8'); meta=parse_meta(raw)
+            if not isinstance(meta,dict) or not all(meta.get(key) for key in ('captured_at','event_id','source_app')):
+                status['review'].append({'path':p.relative_to(s.VAULT).as_posix(),'reasons':['capture metadata missing; original preserved']}); continue
+            try: when=datetime.fromisoformat(str(meta['captured_at']))
+            except ValueError:
+                status['review'].append({'path':p.relative_to(s.VAULT).as_posix(),'reasons':['invalid capture date; original preserved']}); continue
+            day=when.strftime('%Y-%m-%d-%A')
             target=s.safe_path('05-Daily/'+day+'.md'); marker='<!-- brain-capture:'+meta['event_id']+' -->'
             if target.exists(): body=target.read_text(encoding='utf-8')
             else:
@@ -35,14 +41,15 @@ def maintenance(sync=True):
             if marker in body: continue
             title=next((line[2:] for line in raw.splitlines() if line.startswith('# ')),'AI milestone')
             link=p.relative_to(s.VAULT).as_posix()[:-3]
-            entry=f'\n### {when:%H:%M} â€” {title}\n{marker}\n- **What / Why / How / Result / Next:** [[{link}|Saved milestone and evidence]]\n- **Source:** {meta["source_app"]}\n- **Links:** [[Maps/AI-Context]]\n'
+            entry=f'\n### {when:%H:%M} — {title}\n{marker}\n- **What / Why / How / Result / Next:** [[{link}|Saved milestone and evidence]]\n- **Source:** {meta["source_app"]}\n- **Links:** [[Maps/AI-Context]]\n'
             if '## Work Log' not in body: body+='\n## Work Log\n'
             start=body.index('## Work Log')+len('## Work Log'); end=body.find('\n## ',start)
             if end<0: body=body.rstrip()+'\n'+entry
             else: body=body[:end].rstrip()+'\n'+entry+'\n'+body[end:]
             s._write(target,body,'daily_capture_link'); status['captures_linked']+=1
         for p in (s.VAULT/'02-Areas/AI-Memory').rglob('*.md'):
-            raw=p.read_text(encoding='utf-8'); meta=yaml.safe_load(raw.split('---',2)[1]) or {}
+            raw=p.read_text(encoding='utf-8'); meta=parse_meta(raw)
+            if not isinstance(meta,dict) or not meta: continue
             stale=[]
             for src in meta.get('sources',[]):
                 source=s.safe_path(src)
