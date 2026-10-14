@@ -36,6 +36,27 @@ def clients(root,python,home=None):
     content=content.rstrip()+'\n\n[mcp_servers.second-brain]\ncommand = '+json.dumps(str(python))+'\nargs = ['+json.dumps(str(root/'app/brain_client.py'))+']\nstartup_timeout_sec = 60\ntool_timeout_sec = 120\n'
     tomllib.loads(content)
     backup(path,root); atomic(path,content); changed.append(str(path))
+    # Install the shared protocol as a managed block, preserving the owner's other instructions.
+    instructions=home/'.codex/AGENTS.md'
+    previous=instructions.read_text(encoding='utf-8') if instructions.exists() else ''
+    begin='<!-- BEGIN SECOND-BRAIN -->'; end='<!-- END SECOND-BRAIN -->'
+    previous=re.sub(re.escape(begin)+r'.*?'+re.escape(end),'',previous,flags=re.S).rstrip()
+    protocol=(REPO/'docs/AI-PROTOCOL.md').read_text(encoding='utf-8')
+    backup(instructions,root); atomic(instructions,previous+'\n\n'+begin+'\n'+protocol.rstrip()+'\n'+end+'\n')
+    changed.append(str(instructions))
+    settings_path=home/'.claude/settings.json'
+    settings=json.loads(settings_path.read_text(encoding='utf-8')) if settings_path.exists() else {}
+    import shlex
+    command=('"'+str(python).replace('\\','/')+'" "'+str(root/'app/brain_hooks.py').replace('\\','/')+'"') if os.name=='nt' else shlex.join([str(python),str(root/'app/brain_hooks.py')])
+    for event in ('SessionStart','Stop'):
+        entries=[]
+        for entry in settings.setdefault('hooks',{}).get(event,[]):
+            handlers=[handler for handler in entry.get('hooks',[]) if 'brain_hooks.py' not in handler.get('command','')]
+            if handlers: entries.append({**entry,'hooks':handlers})
+        entries.append({'hooks':[{'type':'command','command':command,'timeout':10}]})
+        settings['hooks'][event]=entries
+    backup(settings_path,root); atomic(settings_path,json.dumps(settings,indent=2,ensure_ascii=False)+'\n')
+    changed.append(str(settings_path))
     return changed
 
 def deploy(root,python,vault,role='capture',configure_clients=False):

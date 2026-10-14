@@ -23,13 +23,23 @@ def test_client_config_preservation(brain,tmp_path,monkeypatch):
     original='model = "user-choice"\n\n[mcp_servers.other]\ncommand = "keep"\n\n[mcp_servers.second-brain]\ncommand = "old"\n\n[mcp_servers.second-brain.env]\nOLD = "value"\n'
     (home/'.codex/config.toml').write_text(original)
     (home/'.claude.json').write_text(json.dumps({'theme':'dark','mcpServers':{'other':{'command':'keep'}}}))
+    (home/'.claude').mkdir()
+    (home/'.claude/settings.json').write_text(json.dumps({'theme':'keep','hooks':{'Stop':[{'hooks':[{'type':'command','command':'keep-owner-hook'}]}]}}))
+    (home/'.codex/AGENTS.md').write_text('Owner instructions remain.\n')
     monkeypatch.setattr(sys,'platform','linux')
+    installer.clients(cfg.ROOT,cfg.PYTHON,home)
     installer.clients(cfg.ROOT,cfg.PYTHON,home)
     data=tomllib.loads((home/'.codex/config.toml').read_text())
     assert data['model']=='user-choice' and data['mcp_servers']['other']['command']=='keep'
     assert 'env' not in data['mcp_servers']['second-brain']
     claude=json.loads((home/'.claude.json').read_text())
     assert claude['theme']=='dark' and claude['mcpServers']['other']['command']=='keep'
+    instructions=(home/'.codex/AGENTS.md').read_text()
+    assert 'Owner instructions remain.' in instructions and instructions.count('<!-- BEGIN SECOND-BRAIN -->')==1
+    settings=json.loads((home/'.claude/settings.json').read_text())
+    assert settings['theme']=='keep'
+    commands=[h['command'] for e in settings['hooks']['Stop'] for h in e['hooks']]
+    assert 'keep-owner-hook' in commands and sum('brain_hooks.py' in c for c in commands)==1
 
 def test_upgrade_preserves_identity_role_token(brain):
     vault,state=brain

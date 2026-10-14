@@ -39,6 +39,8 @@ If the vault already exists, use its actual path instead of cloning again. Defau
 
 The installer creates a native environment from `uv.lock`, a local index/configuration, a fresh token, client configuration backups and startup registration. Claude Code and Codex configuration are supported. Claude Desktop configuration is added on Windows/macOS. Restart clients and verify their exposed tools. Web ChatGPT/Claude and Cowork access require their own verified connector route; local installation does not establish those connections.
 
+It also installs a managed Codex instruction block and Claude Code SessionStart/Stop hooks for the shared memory protocol, preserving unrelated owner instructions and hooks. Those hooks request concise milestones after meaningful work; they do not save raw conversations. Other MCP clients receive the server's protocol instructions, subject to that client's capabilities.
+
 The first model download comes from the FastEmbed-supported BAAI embedding model. Later embedding runs force local/offline use. Initial indexing can take time; fresh-file search is available while it completes.
 
 ## Windows installation
