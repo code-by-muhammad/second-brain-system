@@ -14,8 +14,10 @@ def save_status(status):
     temp.write_text(json.dumps(status,indent=2),encoding='utf-8')
     os.replace(temp,path)
 
-WITHHELD_PATH='[withheld; inspect private maintenance status]'
-WITHHELD_DETAIL='Review detail withheld; inspect private maintenance status.'
+LEGACY_WITHHELD_PATH='[withheld; inspect private maintenance status]'
+LEGACY_WITHHELD_DETAIL='Review detail withheld; inspect private maintenance status.'
+WITHHELD_PATH='[withheld; see DEVICE-SETUP local path-SHA lookup]'
+WITHHELD_DETAIL='Review detail withheld; use the documented local path-SHA lookup in DEVICE-SETUP and inspect matching notes locally.'
 
 def _diagnostic_text(value,limit=2000):
     if not isinstance(value,str): raise ValueError('Invalid diagnostic text.')
@@ -28,7 +30,7 @@ def _review_path(row):
     value=row.get('path')
     # A prior safe withheld locator keeps its useful opaque hash. Neither this
     # hash nor cached attributes authorize a read or a write.
-    if value==WITHHELD_PATH and row.get('path_withheld') is True and isinstance(row.get('path_sha256'),str) and re.fullmatch('[a-f0-9]{64}',row['path_sha256']):
+    if value in (WITHHELD_PATH,LEGACY_WITHHELD_PATH) and row.get('path_withheld') is True and isinstance(row.get('path_sha256'),str) and re.fullmatch('[a-f0-9]{64}',row['path_sha256']):
         return {'path':WITHHELD_PATH,'path_withheld':True,'path_sha256':row['path_sha256']}
     try: _diagnostic_path(value); return {'path':value}
     except (ValueError,TypeError,UnicodeError,OSError):
@@ -40,7 +42,7 @@ def _review_reasons(reasons,limit=None):
     if not isinstance(reasons,list): return [WITHHELD_DETAIL]
     result=[]
     for reason in reasons if limit is None else reasons[:limit]:
-        try: result.append(_diagnostic_text(reason))
+        try: result.append(_diagnostic_text(WITHHELD_DETAIL if reason==LEGACY_WITHHELD_DETAIL else reason))
         except (ValueError,UnicodeError): result.append(WITHHELD_DETAIL)
     return result
 
@@ -52,7 +54,7 @@ def health_status(path,review_limit=20):
     public={}
     for key in ('at','status','stage','git','aggregation','error_type','error'):
         if key not in status: continue
-        try: public[key]=_diagnostic_text(status[key])
+        try: public[key]=_diagnostic_text(WITHHELD_DETAIL if status[key]==LEGACY_WITHHELD_DETAIL else status[key])
         except (ValueError,UnicodeError): public[key]='needs attention' if key=='status' else WITHHELD_DETAIL
     for key in ('captures_linked','completed_private_artifacts_removed'):
         value=status.get(key)
@@ -148,6 +150,9 @@ def _display_text(value,limit):
     _diagnostic_text(value,limit)
     return html.escape(' '.join(value.split()),quote=True)
 
+class _DailyIdentityReview(ValueError):
+    """An owner-edited or ambiguous marker must not cause another entry."""
+
 def _daily_link(p,raw,meta,when):
     link=_capture_link(p)
     day=when.strftime('%Y-%m-%d-%A')
@@ -166,8 +171,10 @@ def _daily_link(p,raw,meta,when):
         for a,b in replacements.items(): body=body.replace(a,b)
     identity='- **What / Why / How / Result / Next:** [['+link+'|Saved milestone and evidence]]'
     lines=body.split('\n')
-    if any(line==marker and i+1<len(lines) and lines[i+1]==identity for i,line in enumerate(lines)):
-        return False
+    markers=[i for i,line in enumerate(lines) if line==marker]
+    if markers:
+        if len(markers)==1 and markers[0]+1<len(lines) and lines[markers[0]+1]==identity: return False
+        raise _DailyIdentityReview('Daily capture identity needs owner reconciliation.')
     title=_display_text(next((line[2:] for line in raw.splitlines() if line.startswith('# ')),'AI milestone'),180)
     source=_display_text(meta['source_app'],2000)
     entry=f'\n### {when:%H:%M} — {title}\n{marker}\n{identity}\n- **Source:** {source}\n- **Links:** [[Maps/AI-Context]]\n'
@@ -216,6 +223,8 @@ def maintenance(sync=True):
                 add_review(status,p,['invalid capture date; original preserved']); continue
             try:
                 if _daily_link(p,raw,meta,when): status['captures_linked']+=1
+            except _DailyIdentityReview:
+                add_review(status,p,['daily capture marker has an edited, missing or ambiguous identity; owner must reconcile the existing daily entry before retry; owner content preserved'])
             except (OSError,UnicodeError,ValueError):
                 add_review(status,p,['daily note or template could not be linked; inspect the daily/template path, UTF-8, write access and concurrent changes; original preserved'])
         for p in (s.VAULT/'02-Areas/AI-Memory').rglob('*.md'):

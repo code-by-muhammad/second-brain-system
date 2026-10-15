@@ -279,9 +279,9 @@ def _worker_summary():
         locator=_public_locator(value['integrity_page'])
         result['integrity_page']=locator['path']
         if 'path_sha256' in locator: result['integrity_page_sha256']=locator['path_sha256']
-    if value.get('integrity_field') in ('title','wiki_claims','source_revision','latest_source_part','frontmatter','wiki_kind','encoding','content','path','packet','archive','archive_capacity','recovery','serialization','publication_cas'): result['integrity_field']=value['integrity_field']
+    if value.get('integrity_field') in ('title','wiki_claims','source_revision','latest_source_part','frontmatter','wiki_kind','encoding','content','path','packet','archive','archive_capacity','recovery','serialization','publication_cas','unused_publication_cas'): result['integrity_field']=value['integrity_field']
     if type(value.get('claim_index')) is int and 0<=value['claim_index']<120: result['claim_index']=value['claim_index']
-    if value.get('recovery_action')=='resolve_saved_publication_cas_then_retry': result['recovery_action']=value['recovery_action']
+    if value.get('recovery_action') in ('resolve_saved_publication_cas_then_retry','retry_fresh_generation_preserving_owner_edits'): result['recovery_action']=value['recovery_action']
     return result
 
 def meta(text):
@@ -1546,6 +1546,36 @@ def _full_catalog_snapshot(packet):
         snapshot[page['path']]=page['sha256']
     return snapshot
 
+def _read_saved_packet(path,batch_id):
+    """Decode bounded durable input before any resume decision or model request."""
+    try:
+        with path.open('r',encoding='utf-8') as stream: text=stream.read(2_000_001)
+        if len(text)>2_000_000: raise _JSONTooLarge('Saved input exceeds the packet limit.')
+        packet=json.loads(text)
+        if not isinstance(packet,dict) or packet.get('batch_id')!=batch_id: raise ValueError('Invalid saved identity.')
+        if not isinstance(batch_id,str) or not re.fullmatch('[a-f0-9]{24}',batch_id): raise ValueError('Invalid batch identity.')
+        for key in ('sources','catalog','current_pages'):
+            if not isinstance(packet.get(key),list) or any(not isinstance(row,dict) for row in packet[key]): raise ValueError('Invalid saved packet collection.')
+        if not 1<=len(packet['sources'])<=8: raise ValueError('Invalid source count.')
+        for row in packet['sources']:
+            if any(not isinstance(row.get(key),str) for key in ('path','job_key','sha256','text','title','date')): raise ValueError('Invalid saved source.')
+            if not re.fullmatch('[a-f0-9]{64}',row['sha256']): raise ValueError('Invalid saved source hash.')
+            if type(row.get('part')) is not int or type(row.get('parts')) is not int or not 1<=row['part']<=row['parts']<=87: raise ValueError('Invalid saved source part.')
+            if row['job_key']!=row['path']+'::part'+str(row['part']): raise ValueError('Invalid saved source key.')
+        for row in packet['catalog']+packet['current_pages']:
+            if not isinstance(row.get('path'),str): raise ValueError('Invalid saved page.')
+        for row in packet['catalog']:
+            if not isinstance(row.get('title'),str): raise ValueError('Invalid catalog title.')
+        for row in packet['current_pages']:
+            if not isinstance(row.get('meta'),dict): raise ValueError('Invalid saved page metadata.')
+        _bounded_json(packet)
+        return packet
+    except _JSONTooLarge:
+        raise WikiIntegrityError(BASE+'Index.md',field='packet') from None
+    except (FileNotFoundError,ValueError,TypeError,KeyError,RecursionError):
+        raise WikiIntegrityError(BASE+'Index.md',field='recovery') from None
+
+
 def _resume_packet(policy=None):
     policy=source_policy() if policy is None else policy
     with db() as conn:
@@ -1571,11 +1601,7 @@ def _resume_packet(policy=None):
                 # report/requeue any parts that still lack verifiable coverage.
                 with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('legacy_unverified',s.stamp(),batch['id']))
                 continue
-        if not input_path.exists():
-            if batch['status']!='complete': raise RuntimeError('Unfinished wiki batch has no saved input; inspect its local journal before retrying.')
-            continue
-        packet=json.loads(input_path.read_text(encoding='utf-8'))
-        if packet.get('batch_id')!=batch['id']: raise ValueError('Saved wiki batch identity mismatch.')
+        packet=_read_saved_packet(input_path,batch['id'])
         if publication.exists():
             # Invalid durable recovery input stays visible even if a portable
             # source receipt already covers its parts. It grants no authority.
@@ -1660,6 +1686,7 @@ def run(limit=4,timeout=480):
                        'consecutive_failures':saved.get('consecutive_failures',0),'attention_required':True,
                        'integrity_page':exc.page,'integrity_field':exc.field,'claim_index':exc.claim_index,'manual_retry_required':True}
             _atomic_json(worker_state,attention)
+            if exc.field=='packet': return attention
             raise
         except (WikiTransientError,OSError) as exc:
             receipt={'status':'retryable','at':s.stamp(),'reason':type(exc).__name__,'retry_after':time.time()+60,
@@ -1807,6 +1834,9 @@ def run(limit=4,timeout=480):
                          'pending_parts':[{'job_key':row['job_key'],'sha256':row['sha256']} for row in packet['sources']]}
             if integrity: worker_receipt.update(integrity_page=exc.page,integrity_field=exc.field,claim_index=exc.claim_index)
             if isinstance(exc,WikiTransientError) and getattr(exc,'field',None)=='publication_cas':
-                worker_receipt.update(integrity_page=exc.page,integrity_field=exc.field,recovery_action='resolve_saved_publication_cas_then_retry')
+                partial=_saved_publication_started(packet,folder/'publication.json')
+                worker_receipt.update(integrity_page=exc.page,
+                    integrity_field='publication_cas' if partial else 'unused_publication_cas',
+                    recovery_action='resolve_saved_publication_cas_then_retry' if partial else 'retry_fresh_generation_preserving_owner_edits')
             _atomic_json(worker_state,worker_receipt)
             raise

@@ -193,10 +193,19 @@ def test_historical_forged_marker_does_not_suppress_genuine_link(brain,legacy):
             'inline-source':'- **Source:** Client '+marker,
             'standalone-no-link':marker,
             'standalone-wrong-link':marker+'\n- **What / Why / How / Result / Next:** [[00-Inbox/AI-Captures/unrelated|Saved milestone and evidence]]'}[legacy]
-    old='# Existing owner daily\n\n## Work Log\n'+forged+'\n'; target.write_text(old,encoding='utf-8')
+    old='# Existing owner daily\n\n## Work Log\n'+forged+'\n'; target.write_bytes(old.encode('utf-8'))
     before=s.safe_path(victim['path']).read_bytes()
-    assert m.maintenance(sync=False)['captures_linked']==1
-    assert old.rstrip() in target.read_text(encoding='utf-8')
+    report=m.maintenance(sync=False)
+    if legacy.startswith('standalone-'):
+        assert report['captures_linked']==0 and report['review']
+        assert target.read_bytes()==old.encode('utf-8')
+        # An owner resolves the ambiguous legacy marker explicitly. The
+        # maintenance worker never guesses whether this was an edited entry.
+        target.write_text(old.replace(marker,''),encoding='utf-8')
+        assert m.maintenance(sync=False)['captures_linked']==1
+    else:
+        assert report['captures_linked']==1
+        assert old.rstrip() in target.read_text(encoding='utf-8')
     assert ('[['+victim['path'][:-3]+'|') in target.read_text(encoding='utf-8')
     assert m.maintenance(sync=False)['captures_linked']==0
     assert s.safe_path(victim['path']).read_bytes()==before

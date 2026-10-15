@@ -166,7 +166,7 @@ If `wiki status` reports `integrity_field: path`, compare lint’s safe page/pat
 
 ### Legacy history capacity and publication repair
 
-The compiler and Git support exact SHA-named Log archives up to 64 MiB, using bounded 64 KiB reads. Normal rotation is near 1 MB. A larger legacy Log stops before reading history, spooling or calling a model with `integrity_field: archive_capacity`; preserve it and arrange an explicit owner-reviewed history migration. Do not delete history or increase just one component's capacity. Ordinary notes retain the existing 2,000,000-character Git guard. Local archive raw bytes stay exact; existing Git text settings may normalize CRLF to LF on other devices, so cross-device identity is textual/provenance identity rather than a raw EOL-byte guarantee. No Git attributes are changed.
+The compiler and Git support canonical Log archives up to 64 MiB, using bounded 64 KiB reads; archives above the ordinary note character limit require a matching SHA filename. Normal rotation is near 1 MB. A larger legacy Log stops before reading history, spooling or calling a model with `integrity_field: archive_capacity`; preserve it and arrange an explicit owner-reviewed history migration. Do not delete history or increase just one component's capacity. Ordinary notes retain the existing 2,000,000-character Git guard. Local archive raw bytes stay exact; existing Git text settings may normalize CRLF to LF on other devices, so cross-device identity is textual/provenance identity rather than a raw EOL-byte guarantee. No Git attributes are changed.
 
 An archive collision repaired by the owner can resume a fully validated saved publication with `wiki retry` and the usual bounded worker run; it does not request another response. An unsafe unused legacy plan is preserved as superseded and the retry uses a new generation. Never edit private input/output/plan hashes or remove pending spools to force progress.
 
@@ -178,4 +178,45 @@ Daily capture-link failures are shown in maintenance review with the affected ca
 Source review accepts representation-only LF/CRLF/CR/BOM checkout differences on other devices. A genuine changed or missing source still requires review; no source normalization or automatic owner edit is performed. Capture display text is escaped in daily notes, while its immutable saved milestone remains authoritative.
 
 
-If worker/receipt status withholds a locator, use its opaque path SHA and private local diagnostics to identify the affected file; the public Index locator is not an instruction to overwrite Index. Preserve the original file and pending plan. Unsafe optional receipts are flagged before reading, while valid neighboring receipts still verify. Historical verification ignores local `git replace` views without deleting your references, so reported origin bytes come from canonical Git objects.
+If worker/receipt status withholds a locator, use the local path-SHA lookup below to identify the affected file; the public Index locator is not an instruction to overwrite Index. Preserve the original file and pending plan. Unsafe optional receipts are flagged before reading, while valid neighboring receipts still verify. Historical verification ignores local `git replace` views without deleting your references, so reported origin bytes come from canonical Git objects.
+
+### Owner edits and saved input recovery
+
+An ordinary Log archive of at most 2,000,000 decoded characters can receive an owner annotation, Obsidian link update or credential redaction and synchronize under its existing filename. This uses the ordinary UTF-8 universal-newline character limit, including a BOM as one character; it is not a 2 MB byte limit. Creation/recovery still verifies the compiler's saved raw archive identity. Git still checks strict UTF-8, NUL, credentials, the 64 MiB streaming bound and the exact staged raw or calculated CRLF-to-LF representation. Editing history does not change old publication receipts or make an archive a model source.
+
+An archive above that ordinary character limit receives only the narrowly bounded capacity exception: its current raw SHA256 must match its filename. If an owner edits such an archive, stop and review the edit. Preserve the previous version and pending publication artifacts. With no saved publication still depending on that archive, an owner can calculate the edited file's raw SHA256 locally, rename the reviewed archive to that digest, and deliberately reconcile its history-chain links. Review the resulting Git rename/deletion explicitly; automatic sync preserves deletions and cannot finalize that migration for you. If a saved partial publication still references the old path or bytes, resolve that transaction first from its verified before/after evidence. Do not rewrite private plan/input/output hashes, discard spools, or relax the capacity/credential guard to make a migration pass.
+
+Daily entries with one exact standalone capture marker and the immediately following canonical capture link stay idempotent. If the owner changes that identity line, inserts a line between them, removes the link, or duplicates the marker, maintenance preserves the daily note and capture and reports owner reconciliation. Restore the intended canonical marker/link pair, or explicitly remove a stray marker if a new genuine entry should be added. The service never guesses which owner entry to discard. Inline historical display markers cannot suppress a genuine capture.
+
+`unused_publication_cas` with `retry_fresh_generation_preserving_owner_edits` means the saved plan has no independently verified semantic publication. Creating an archive alone does not qualify. Keep owner edits and the old artifacts; normal backoff or an explicit retry prepares a fresh generation and may request another model response. Do not restore an old Index or source-record before-image just to clear this diagnostic. `publication_cas` and `resolve_saved_publication_cas_then_retry` retain the actual partial-publication repair procedure above.
+
+`recovery` attention means saved input is missing, malformed, has the wrong batch identity, or fails essential stored-packet checks. It stops before model requests and does not charge source/systemic strikes. Preserve all artifacts and restore only independently verified matching saved input before retry; never fabricate a packet. Ordinary input read I/O failures retain 60-second backoff. Oversized saved input retains the separate `packet` diagnostic.
+
+### Local path-SHA lookup
+
+When status withholds a filename, use its `path_sha256` in a private terminal on the affected device. The digest identifies the exact vault-relative POSIX path string, encoded as UTF-8 with `surrogatepass`; it is not a hash of note contents and grants no write authority. The following Python 3.12 snippet enumerates names without reading notes or traversing linked directories. Use the runtime's configured Python. It prints only matching paths, escaped for a terminal, and does not save anything. Keep that output local if the filename contains private information or possible credentials; do not paste it into chat, screenshots or notifications.
+
+```python
+from pathlib import Path
+import hashlib, os, re
+
+vault = Path(input('Absolute local vault path: ')).expanduser().resolve(strict=True)
+wanted = input('Reported path_sha256: ').strip().lower()
+if not vault.is_dir() or not re.fullmatch(r'[a-f0-9]{64}', wanted):
+    raise SystemExit('Use a real vault directory and a 64-character SHA256.')
+matches = 0
+for current, dirs, files in os.walk(vault, followlinks=False):
+    dirs[:] = [name for name in dirs
+               if name not in ('.git', '.obsidian')
+               and not (Path(current) / name).is_symlink()
+               and not os.path.isjunction(Path(current) / name)]
+    for name in files:
+        relative = (Path(current) / name).relative_to(vault).as_posix()
+        digest = hashlib.sha256(relative.encode('utf-8', errors='surrogatepass')).hexdigest()
+        if digest == wanted:
+            print(ascii(relative))
+            matches += 1
+print('Matching local paths:', matches)
+```
+
+No match can mean the file was renamed, moved, removed, or has not synchronized to this device. Inspect the affected device's current paths and preserved local journal deliberately; do not guess a replacement or overwrite Index because it is the generic public locator. Git failure diagnostics screen raw filenames before JSON escaping and use the same opaque locator when needed. This changes displayed diagnostics, not which otherwise valid note filenames may synchronize.

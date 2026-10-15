@@ -12,6 +12,7 @@ import brain_store as s
 
 FOLDERS={'00-Inbox','01-Projects','02-Areas','03-Resources','04-Archive','05-Daily','06-People','07-Meetings','Maps','Templates'}
 MIN_GIT=(2,38)
+NOTE_CHARACTER_LIMIT=2_000_000
 ARCHIVE_BLOCK=65536
 ARCHIVE_BYTES_LIMIT=64*1024*1024
 _ARCHIVE=re.compile(r'02-Areas/AI-Memory/Wiki/Log-Archives/([a-f0-9]{64})\.md\Z')
@@ -36,11 +37,15 @@ def _scan_archive(stream,expected_size,expected_sha=None):
         raise ValueError('size')
     raw_hash=hashlib.sha256(); lf_hash=hashlib.sha256()
     decoder=codecs.getincrementaldecoder('utf-8')('strict')
-    remaining=expected_size; carry=''; whitespace=False; final_cr=b''
+    remaining=expected_size; carry=''; whitespace=False; final_cr=b''; characters=0; decoded_cr=False
     def screen(text):
-        nonlocal carry,whitespace
+        nonlocal carry,whitespace,characters,decoded_cr
         if '\x00' in text: raise ValueError('characters')
         if not text: return
+        # Match Path.read_text(encoding='utf-8')'s universal-newline character
+        # count, including a BOM as one character. Carry CR across decoder blocks.
+        characters+=len(text)-text.count('\r\n')-int(decoded_cr and text.startswith('\n'))
+        decoded_cr=text.endswith('\r')
         collapsed=_WHITESPACE.sub(' ',text)
         if whitespace and collapsed.startswith(' '): collapsed=collapsed[1:]
         whitespace=text[-1].isspace()
@@ -61,26 +66,38 @@ def _scan_archive(stream,expected_size,expected_sha=None):
     except UnicodeError: raise ValueError('encoding') from None
     sha=raw_hash.hexdigest()
     if expected_sha is not None and sha!=expected_sha: raise ValueError('hash')
-    return {'raw_sha256':sha,'lf_sha256':lf_hash.hexdigest(),'bytes':expected_size}
+    return {'raw_sha256':sha,'lf_sha256':lf_hash.hexdigest(),'bytes':expected_size,'characters':characters}
+
+def _note_locator(relative):
+    """Screen the raw path before JSON escaping can obscure SECRET boundaries."""
+    try:
+        s.clean_text(relative,400)
+        relative.encode('utf-8')
+        return json.dumps(relative,ensure_ascii=True)
+    except (ValueError,UnicodeError):
+        digest=hashlib.sha256(relative.encode('utf-8','surrogatepass')).hexdigest()
+        return '[withheld locator; path_sha256='+digest+']'
 
 def _archive_failure(relative,reason):
     descriptions={'credentials':'possible credential; redact before syncing',
                   'characters':'invalid characters',
                   'encoding':'invalid UTF-8',
-                  'hash':'archive bytes do not match its SHA256 filename',
+                  'hash':'oversized archive bytes do not match its SHA256 filename; review the edit and assign a content-matching SHA256 filename before syncing',
                   'changed':'archive changed during validation',
                   'size':'archive exceeds the 64 MiB sync limit',
                   'staged':'staged archive differs beyond permitted CRLF-to-LF conversion',
                   'read':'archive could not be read',
                   'blob':'staged archive could not be verified locally'}
-    return GitSyncError('Note '+json.dumps(relative,ensure_ascii=True)+' blocks sync: '+descriptions.get(reason,'archive validation failed')+'. Original preserved.')
+    return GitSyncError('Note '+_note_locator(relative)+' blocks sync: '+descriptions.get(reason,'archive validation failed')+'. Original preserved.')
 
 def _archive_file(relative,target):
     try:
         with target.open('rb') as stream:
             size=os.fstat(stream.fileno()).st_size
-            result=_scan_archive(stream,size,_ARCHIVE.fullmatch(relative).group(1))
+            result=_scan_archive(stream,size)
             if os.fstat(stream.fileno()).st_size!=size: raise ValueError('changed')
+            if result['characters']>NOTE_CHARACTER_LIMIT and result['raw_sha256']!=_ARCHIVE.fullmatch(relative).group(1):
+                raise ValueError('hash')
             return result
     except ValueError as exc: raise _archive_failure(relative,str(exc)) from None
     except OSError: raise _archive_failure(relative,'read') from None
@@ -143,10 +160,10 @@ def sync(vault=None):
             git('reset','--pathspec-from-file=-','--pathspec-file-nul',input=paths_input(unchanged))
 
     def validate_note(rel,text):
-        try: s.clean_text(text,2_000_000)
+        try: s.clean_text(text,NOTE_CHARACTER_LIMIT)
         except ValueError as exc:
             reason='possible credential; redact before syncing' if s.SECRET.search(text) else 'invalid characters or note exceeds the allowed size'
-            raise GitSyncError('Note '+json.dumps(rel,ensure_ascii=True)+' blocks sync: '+reason+'. Original preserved.') from exc
+            raise GitSyncError('Note '+_note_locator(rel)+' blocks sync: '+reason+'. Original preserved.') from exc
 
     s.STATE.mkdir(parents=True,exist_ok=True)
     # Network stages are serialized with other syncs, but not with local captures.
@@ -165,7 +182,7 @@ def sync(vault=None):
                 for parent in (target,*target.parents):
                     if parent==vault.parent: break
                     if parent.is_symlink() or os.path.isjunction(parent):
-                        raise GitSyncError('Linked note '+json.dumps(rel,ensure_ascii=True)+' is not synchronized automatically.')
+                        raise GitSyncError('Linked note '+_note_locator(rel)+' is not synchronized automatically.')
                 if not target.resolve().is_relative_to(vault.resolve()):
                     raise GitSyncError('Note path leaves vault; synchronization refused.')
                 if not target.is_file(): continue
@@ -173,7 +190,7 @@ def sync(vault=None):
                 else:
                     try: text=target.read_text(encoding='utf-8')
                     except (OSError,UnicodeError) as exc:
-                        raise GitSyncError('Note '+json.dumps(rel,ensure_ascii=True)+' cannot be read as UTF-8; original preserved.') from exc
+                        raise GitSyncError('Note '+_note_locator(rel)+' cannot be read as UTF-8; original preserved.') from None
                     validate_note(rel,text)
                 eligible.append(rel)
             if eligible:
