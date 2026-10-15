@@ -44,3 +44,5 @@ Shared scalar aliases are measured once per value and counted per expanded use. 
 Archive hash/UTF-8/descriptor integrity is checked when creating or recovering a rotation. Permanent archive Markdown syncs through the existing Git service. Ordinary lint does not periodically rehash the entire history; archives and the compilation Log are never source/topic/model context.
 
 Catalog discovery also uses bounded derived reads and skips case-renamed Log/archive history without loading it. Normal raw topic hashes and strict parser checks remain unchanged; oversized topics receive controlled content attention.
+
+Maintenance also skips compiler Log/archive history before reading it, bounds other derived-header inspection, and streams exact original source hashes. Malformed/oversized metadata and source growth/read failures remain review flags while capture linking and Git synchronization continue. The worker’s archive guarantees and original source bytes are preserved.

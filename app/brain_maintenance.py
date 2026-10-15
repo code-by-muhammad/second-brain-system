@@ -5,7 +5,7 @@ from pathlib import Path
 from filelock import FileLock
 import brain_store as s
 import brain_settings as cfg
-from brain_wiki import meta as parse_meta
+from brain_wiki import meta as parse_meta, _read_derived, _current_hash, BASE as WIKI_BASE
 from brain_markdown import frontmatter
 
 def save_status(status):
@@ -60,11 +60,16 @@ def review_sources(path,meta):
             stale.append('invalid SHA256 metadata for source: '+src)
             continue
         if not source.is_file(): stale.append('missing source: '+src)
-        elif recorded and s.digest(source.read_bytes())!=recorded.lower(): stale.append('source changed: '+src)
+        elif recorded and _current_hash(source)!=recorded.lower(): stale.append('source changed: '+src)
         elif not recorded and source.stat().st_mtime>path.stat().st_mtime:
             stale.append('source may have changed; no recorded hash: '+src)
     if time.time()-path.stat().st_mtime>30*86400: stale.append('review older than 30 days')
     return stale
+
+def _compiler_history(path):
+    relative=path.relative_to(s.VAULT).as_posix().casefold()
+    base=WIKI_BASE.casefold()
+    return relative==base+'log.md' or relative.startswith(base+'log-archives/')
 
 def maintenance(sync=True):
     status={'at':s.stamp(),'status':'running','stage':'starting','captures_linked':0,'review':[],'git':'pending' if sync else 'not requested'}
@@ -119,7 +124,12 @@ def maintenance(sync=True):
             else: body=body[:end].rstrip()+'\n'+entry+'\n'+body[end:]
             s._write(target,body,'daily_capture_link'); status['captures_linked']+=1
         for p in (s.VAULT/'02-Areas/AI-Memory').rglob('*.md'):
-            try: raw=p.read_text(encoding='utf-8'); meta=frontmatter(raw,strict=True)
+            # Compiler history has no derived-header review contract. In
+            # particular, a legacy raw archive may exceed the note-size cap.
+            if _compiler_history(p): continue
+            try:
+                s.safe_path(p.relative_to(s.VAULT).as_posix())
+                _,raw=_read_derived(p); meta=frontmatter(raw,strict=True)
             except (OSError,UnicodeError,ValueError):
                 add_review(status,p,['derived metadata could not be read; original preserved']); continue
             if not isinstance(meta,dict) or not meta: continue
