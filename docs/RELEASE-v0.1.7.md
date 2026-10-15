@@ -76,3 +76,5 @@ Known catalog hashes remain binding in duplicate or partial legacy catalogs. Unu
 Malformed durable output/plan JSON and unsafe saved resume paths now stop with safe batch-located recovery diagnostics rather than stale worker status. Original evidence and pending publication remain preserved; explicit owner reconciliation is documented in the device guide.
 
 Private-artifact cleanup preserves malformed completed journals and continues ordinary upkeep. Valid completed artifacts still expire, while source notes, receipts and pending artifacts remain intact.
+
+Recorded unfinished publication remains held after owner edits or removes the last matching published note. A prior write record or unresolved crash intent can require reconciliation but never grants replay authority. Repeated retry and missing private-plan evidence cannot release that hold; archive-only unused work retains its existing behavior.

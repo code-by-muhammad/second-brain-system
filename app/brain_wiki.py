@@ -307,7 +307,7 @@ def _worker_summary():
         if 'path_sha256' in locator: result['integrity_page_sha256']=locator['path_sha256']
     if value.get('integrity_field') in ('title','wiki_claims','source_revision','latest_source_part','frontmatter','wiki_kind','encoding','content','path','packet','archive','archive_capacity','recovery','serialization','publication_cas','unused_publication_cas'): result['integrity_field']=value['integrity_field']
     if type(value.get('claim_index')) is int and 0<=value['claim_index']<120: result['claim_index']=value['claim_index']
-    if value.get('recovery_action') in ('resolve_saved_publication_cas_then_retry','retry_fresh_generation_preserving_owner_edits','resolve_saved_source_revision_then_retry'): result['recovery_action']=value['recovery_action']
+    if value.get('recovery_action') in ('resolve_saved_publication_cas_then_retry','retry_fresh_generation_preserving_owner_edits','resolve_saved_source_revision_then_retry','reconcile_saved_publication_then_retry'): result['recovery_action']=value['recovery_action']
     return result
 
 def meta(text):
@@ -1365,6 +1365,63 @@ def _saved_publication_started(packet,publication):
         return _publication_started(plan)
     except (OSError,ValueError,KeyError,TypeError,RecursionError): return False
 
+def _publication_hold_records(plan,value):
+    """Carry only plan-matching historical markers; they confer no write authority."""
+    if not isinstance(value,dict) or value.get('packet_sha256')!=plan['packet_sha256'] or value.get('result_sha256')!=plan['result_sha256'] or value.get('entries')!=plan['entries']:
+        raise _recovery_integrity(plan['batch_id'])
+    semantic={(write['path'],write['after']) for write in plan['writes'] if write['kind']!='wiki_log_archive' and write['before']!=write['after']}
+    records=set()
+    for field in ('completed','prior_semantic'):
+        items=value.get(field,[])
+        if not isinstance(items,list): raise _recovery_integrity(plan['batch_id'])
+        for item in items:
+            if isinstance(item,dict) and (item.get('path'),item.get('sha256')) in semantic: records.add((item['path'],item['sha256']))
+    intent=value.get('in_flight')
+    if isinstance(intent,dict) and (intent.get('path'),intent.get('sha256')) in semantic: records.add((intent['path'],intent['sha256']))
+    if value.get('state') in ('published','complete'): records.update(semantic)
+    return [{'path':path,'sha256':digest} for path,digest in sorted(records)]
+
+
+def _hold_missing_publication(ident,publication):
+    if not publication.exists() and (publication.parent/'journal.json').exists():
+        error=_recovery_integrity(ident)
+        error.recovery_action='reconcile_saved_publication_then_retry'
+        raise error
+
+
+def _hold_prior_publication(packet,publication,plan=None):
+    """Historical progress can require a hold, never authorize replay or policy bypass."""
+    _hold_missing_publication(packet['batch_id'],publication)
+    if not publication.exists(): return
+    try:
+        if plan is None:
+            result=json.loads((publication.parent/'output.json').read_text(encoding='utf-8'))
+            plan=json.loads(publication.read_text(encoding='utf-8'))
+            _validate(packet,result,screen_paths=False); _verify_publication_plan(plan,packet,result)
+        if _publication_started(plan): return
+        journal=publication.parent/'journal.json'
+        if not journal.exists(): return
+        value=json.loads(journal.read_text(encoding='utf-8'))
+        recorded=bool(_publication_hold_records(plan,value))
+        if value.get('state')=='applying' and not recorded and value.get('semantic_intent_version')!=1:
+            # Old empty/archives-only progress cannot prove whether the next
+            # semantic replacement preceded a crash. Hold changed context;
+            # this ambiguity never grants publication authority.
+            changed=any(_current_hash(_publication_target(write['path'])) not in (write['before'],write['after']) for write in plan['writes'])
+            changed=changed or any(_current_hash(s.safe_path(row['path']))!=row['sha256'] for row in packet['sources'])
+            changed=changed or any(_policy_excluded(row['path'],source_policy()) for row in packet['sources'])
+            expected=_full_catalog_snapshot(packet)
+            changed=changed or (expected is not None and expected!={page['path']:page['sha256'] for page in pages()})
+            changed=changed or any(page.get('sha256') and _current_hash(s.safe_path(page['path']))!=page['sha256'] for page in packet['catalog']+packet.get('current_pages',[]))
+            recorded=changed
+        if recorded:
+            error=_recovery_integrity(packet['batch_id'])
+            error.recovery_action='reconcile_saved_publication_then_retry'
+            raise error
+    except WikiIntegrityError: raise
+    except (OSError,ValueError,KeyError,TypeError,RecursionError): raise _recovery_integrity(packet['batch_id']) from None
+
+
 def apply(packet,result):
     cfg.require_maintainer()
     _validate_shape(result)
@@ -1380,6 +1437,7 @@ def apply(packet,result):
     folder=cfg.STATE/'wiki/batches'/ident; journal=folder/'journal.json'; publication=folder/'publication.json'
     with FileLock(str(cfg.STATE/'writer.lock'),timeout=30):
         already_planned=publication.exists()
+        _hold_prior_publication(packet,publication)
         _assert_source_policy(packet,allow_durable=_saved_publication_started(packet,publication))
         with db() as conn: previous=conn.execute('SELECT * FROM batches WHERE id=?',(ident,)).fetchone()
         if previous and previous['status']=='complete':
@@ -1426,22 +1484,43 @@ def apply(packet,result):
                 if write['kind']=='wiki_log' and not _publication_started(plan): raise _WikiLogChanged('Compilation log changed before initial publication; reuse saved output on retry.')
                 raise _publication_conflict(write['path'])
         receipts=[]; progress=[]
-        _atomic_json(journal,{'version':2,'state':'applying','packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress})
+        try:
+            prior_semantic=_publication_hold_records(plan,json.loads(journal.read_text(encoding='utf-8'))) if journal.exists() else []
+        except (OSError,ValueError,KeyError,TypeError,RecursionError): raise _recovery_integrity(ident) from None
+        # Preserve observed afterimages and older hold-only history before a
+        # replay resets its progress journal. Owner edits must not erase it.
+        known={(item['path'],item['sha256']) for item in prior_semantic}
         for write in plan['writes']:
+            if write['kind']!='wiki_log_archive' and write['before']!=write['after'] and _current_hash(_publication_target(write['path']))==write['after']:
+                known.add((write['path'],write['after']))
+        prior_semantic=[{'path':path,'sha256':digest} for path,digest in sorted(known)]
+        _atomic_json(journal,{'version':2,'state':'applying','semantic_intent_version':1,'packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress,'prior_semantic':prior_semantic})
+        for write in plan['writes']:
+            _hold_prior_publication(packet,publication,plan)
             _assert_source_policy(packet,allow_durable=_publication_started(plan))
             target=_publication_target(write['path'])
             if _current_hash(target)==write['after']:
                 receipt={'path':write['path'],'status':'recovered','sha256':write['after']}
             else:
                 if _current_hash(target)!=write['before']: raise _publication_conflict(write['path'])
-                if write['kind']=='wiki_log_archive': receipt=_stream_publish(write,_archive_payload(plan,packet))
-                elif plan['version']==3 and write['kind']=='wiki_log': receipt=_stream_publish(write)
-                else: receipt=s._write(target,write['text'],write['kind'],write['before'])
-                if receipt.get('sha256')!=write['after'] or _current_hash(target)!=write['after']:
-                    raise OSError('Published note does not match the durable planned hash.')
+                checkpoint={'version':2,'state':'applying','semantic_intent_version':1,'packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress,'prior_semantic':prior_semantic}
+                semantic=write['kind']!='wiki_log_archive' and write['before']!=write['after']
+                if semantic: _atomic_json(journal,{**checkpoint,'in_flight':{'path':write['path'],'sha256':write['after']}})
+                try:
+                    if write['kind']=='wiki_log_archive': receipt=_stream_publish(write,_archive_payload(plan,packet))
+                    elif plan['version']==3 and write['kind']=='wiki_log': receipt=_stream_publish(write)
+                    else: receipt=s._write(target,write['text'],write['kind'],write['before'])
+                    if receipt.get('sha256')!=write['after'] or _current_hash(target)!=write['after']:
+                        raise OSError('Published note does not match the durable planned hash.')
+                except Exception:
+                    # Ordinary caught pre-write failure is distinguishable from
+                    # abrupt process termination. BaseException keeps intent.
+                    if semantic and _current_hash(target)==write['before']:
+                        _atomic_json(journal,{**checkpoint,'attempted_without_write':{'path':write['path'],'sha256':write['after']}})
+                    raise
             if write['path'] in plan['topic_paths']: receipts.append(receipt)
             progress.append({'path':write['path'],'sha256':write['after']})
-            _atomic_json(journal,{'version':2,'state':'applying','packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress})
+            _atomic_json(journal,{'version':2,'state':'applying','semantic_intent_version':1,'packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress,'prior_semantic':prior_semantic})
         _atomic_json(journal,{'version':2,'state':'published','packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'receipts':receipts})
         _finish_database(packet,plan,receipts)
         _atomic_json(journal,{'version':2,'state':'complete','packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'receipts':receipts})
@@ -1625,6 +1704,7 @@ def _resume_packet(policy=None):
         if not isinstance(batch['id'],str) or not re.fullmatch('[a-f0-9]{24}',batch['id']): raise _recovery_integrity(None)
         folder=cfg.STATE/'wiki/batches'/batch['id']; journal=folder/'journal.json'; input_path=folder/'input.json'
         publication=folder/'publication.json'
+        if batch['status']!='complete': _hold_missing_publication(batch['id'],publication)
         if batch['status']=='stale' and not publication.exists(): continue
         # An error may still own a valid durable plan (for example an archive
         # collision awaiting owner repair). Only those errors may replay output;
@@ -1655,6 +1735,7 @@ def _resume_packet(policy=None):
             except WikiIntegrityError as exc:
                 exc.batch_id=batch['id']; raise
             except (OSError,ValueError,TypeError,KeyError,RecursionError): raise _recovery_integrity(batch['id']) from None
+            _hold_prior_publication(packet,publication,plan)
             if batch['status']!='complete' and not _publication_started(plan):
                 try: _screen_saved_output_paths(output)
                 except WikiIntegrityError as exc:
@@ -1759,7 +1840,7 @@ def run(limit=4,timeout=480):
                        'integrity_page':exc.page,'integrity_field':exc.field,'claim_index':exc.claim_index,'manual_retry_required':True}
             batch_id=getattr(exc,'batch_id',None)
             if isinstance(batch_id,str) and re.fullmatch('[a-f0-9]{24}',batch_id): attention['batch_id']=batch_id
-            if getattr(exc,'recovery_action',None)=='resolve_saved_source_revision_then_retry': attention['recovery_action']=exc.recovery_action
+            if getattr(exc,'recovery_action',None) in ('resolve_saved_source_revision_then_retry','reconcile_saved_publication_then_retry'): attention['recovery_action']=exc.recovery_action
             _atomic_json(worker_state,attention)
             if exc.field in ('packet','content'): return attention
             raise
@@ -1831,6 +1912,7 @@ def run(limit=4,timeout=480):
             # Excluded work may only repair actual partial publication from
             # verified saved output; an unused durable plan cannot exempt it.
             repairing=not model_ran and _saved_publication_started(packet,folder/'publication.json')
+            _hold_prior_publication(packet,folder/'publication.json')
             current_policy=_assert_source_policy(packet,allow_durable=repairing)
             recovered_excluded=sum(_policy_excluded(row['path'],current_policy) for row in packet['sources']) if repairing else 0
             if model_ran:
@@ -1870,6 +1952,9 @@ def run(limit=4,timeout=480):
             return {'status':'complete','batch_id':packet['batch_id'],'receipts':receipts,'lint':lint(),
                     'recovered_excluded_source_parts':recovered_excluded}
         except Exception as exc:
+            if not isinstance(exc,WikiIntegrityError):
+                try: _hold_prior_publication(packet,folder/'publication.json')
+                except WikiIntegrityError as recovery: exc=recovery
             if isinstance(exc,WikiPolicyError): return _policy_attention(exc)
             if isinstance(exc,WikiPolicyChanged):
                 with db() as conn: conn.execute("UPDATE batches SET status='superseded',updated=? WHERE id=? AND status!='complete'",(s.stamp(),packet['batch_id']))
@@ -1909,11 +1994,13 @@ def run(limit=4,timeout=480):
                          'batch_id':packet['batch_id'],'reason':reason,'retry_after':time.time()+10800 if global_failure else time.time()+backoff if backoff else 0,
                          'backoff_seconds':backoff,'consecutive_failures':failures,'attention_required':attention,
                          'pending_parts':[{'job_key':row['job_key'],'sha256':row['sha256']} for row in packet['sources']]}
-            if integrity: worker_receipt.update(integrity_page=exc.page,integrity_field=exc.field,claim_index=exc.claim_index)
+            if integrity:
+                worker_receipt.update(integrity_page=exc.page,integrity_field=exc.field,claim_index=exc.claim_index)
+                if getattr(exc,'recovery_action',None)=='reconcile_saved_publication_then_retry': worker_receipt['recovery_action']=exc.recovery_action
             if isinstance(exc,WikiTransientError) and getattr(exc,'field',None)=='publication_cas':
                 partial=_saved_publication_started(packet,folder/'publication.json')
                 worker_receipt.update(integrity_page=exc.page,
                     integrity_field='publication_cas' if partial else 'unused_publication_cas',
                     recovery_action='resolve_saved_publication_cas_then_retry' if partial else 'retry_fresh_generation_preserving_owner_edits')
             _atomic_json(worker_state,worker_receipt)
-            raise
+            raise exc
