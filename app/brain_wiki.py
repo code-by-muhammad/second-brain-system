@@ -41,9 +41,9 @@ class WikiOutputError(ValueError):
         self.source=source
 
 class WikiIntegrityError(WikiOutputError):
-    def __init__(self,page,claim_index=None):
+    def __init__(self,page,claim_index=None,field='wiki_claims'):
         super().__init__('Existing derived wiki metadata requires owner review before merging this topic.')
-        self.page=page; self.claim_index=claim_index
+        self.page=page; self.claim_index=claim_index; self.field=field
 
 class WikiPolicyError(ValueError):
     """A shared source policy must be repaired before trusting the wiki queue."""
@@ -75,7 +75,8 @@ def _json_hash(value): return s.digest(json.dumps(value,sort_keys=True,ensure_as
 def _claim_hash(claim):
     # Status may become uncertain/superseded while the original evidence survives.
     if not isinstance(claim,dict) or any(not isinstance(claim.get(key),str) for key in ('text','source','quote')): return None
-    return _json_hash({k:normalized(claim[k]) for k in ('text','source','quote')})
+    try: return _json_hash({k:normalized(claim[k]) for k in ('text','source','quote')})
+    except UnicodeError: return None
 
 def _valid_claim(claim):
     return _claim_hash(claim) is not None and claim.get('status') in ('historical','uncertain','superseded') and bool(claim['text'].strip()) and len(claim['quote'].strip())>=12 and bool(claim['source'])
@@ -83,22 +84,39 @@ def _valid_claim(claim):
 def _valid_source_revision(revision):
     return isinstance(revision,dict) and all(isinstance(revision.get(key),str) and re.fullmatch('[a-f0-9]{64}',revision[key]) for key in ('sha256','text_sha256')) and ('date' not in revision or isinstance(revision['date'],str))
 
+def _validate_existing_claim(page,claim,index):
+    if not _valid_claim(claim): raise WikiIntegrityError(page,index)
+    if 'source_revision' in claim and not _valid_source_revision(claim['source_revision']):
+        raise WikiIntegrityError(page,index,'source_revision')
+    try:
+        # Historical notes need not exist. Both model context and persisted
+        # packets require JSON-compatible values and real UTF-8, without coercion.
+        s.safe_path(claim['source'])
+        context=json.dumps(claim,sort_keys=True,ensure_ascii=False,allow_nan=False)
+        context.encode('utf-8'); s.clean_text(context,2_000_000)
+    except (ValueError,TypeError,RecursionError,UnicodeError): raise WikiIntegrityError(page,index) from None
+
 def _validate_existing_claims(page,claims):
     if not isinstance(claims,list): raise WikiIntegrityError(page)
-    for index,claim in enumerate(claims):
-        if not _valid_claim(claim) or 'source_revision' in claim and not _valid_source_revision(claim['source_revision']):
-            raise WikiIntegrityError(page,index)
-        try:
-            # Historical source notes need not still exist. Validate the safe
-            # Markdown boundary and JSON context types without coercing dates.
-            s.safe_path(claim['source'])
-            json.dumps(claim,sort_keys=True,allow_nan=False)
-        except (ValueError,TypeError,RecursionError): raise WikiIntegrityError(page,index) from None
+    for index,claim in enumerate(claims): _validate_existing_claim(page,claim,index)
 
 def _existing_topic_title(page):
     title=page['meta'].get('title',page['path'])
-    if not isinstance(title,str): raise WikiIntegrityError(page['path'])
+    if not isinstance(title,str): raise WikiIntegrityError(page['path'],field='title')
+    try: title.encode('utf-8'); s.clean_text(title,2_000_000)
+    except (ValueError,UnicodeError): raise WikiIntegrityError(page['path'],field='title') from None
     return title
+
+def _validate_packet_context(packet):
+    # Saved packets predate new safeguards too. Screen their actual selected
+    # metadata before a request, without changing their durable source evidence.
+    for page in packet.get('current_pages',[]):
+        _validate_existing_claims(page['path'],page['meta'].get('wiki_claims',[]))
+        title=page['meta'].get('title')
+        if title is not None: _existing_topic_title(page)
+    for page in packet.get('catalog',[]):
+        _existing_topic_title({'path':page['path'],'meta':page})
+
 def _list(value): return value if isinstance(value,list) else []
 def _tags(value): return [value] if isinstance(value,str) else _list(value)
 def _short_part(row): return len(normalized(row['text']).strip())<12
@@ -130,6 +148,8 @@ def _worker_summary():
         result['reason']=reason if reason in controlled or isinstance(reason,str) and re.fullmatch('[A-Za-z_][A-Za-z0-9_]{0,63}',reason) else 'inspect private worker diagnostics'
     if isinstance(value.get('batch_id'),str) and re.fullmatch('[a-f0-9]{24}',value['batch_id']): result['batch_id']=value['batch_id']
     if isinstance(value.get('integrity_page'),str) and value['integrity_page'].startswith(BASE): result['integrity_page']=value['integrity_page'][:400]
+    if value.get('integrity_field') in ('title','wiki_claims','source_revision','latest_source_part'): result['integrity_field']=value['integrity_field']
+    if type(value.get('claim_index')) is int and 0<=value['claim_index']<120: result['claim_index']=value['claim_index']
     return result
 
 def meta(text):
@@ -622,7 +642,7 @@ def _source_bytes(raw,active=None):
     if active is not None and not active(): return None
     metadata=meta(text)
     return {'text':text,'variants':variants,'text_sha256':s.digest(text.encode()),
-            'date':str(metadata.get('date','unknown'))[:10],'_meta':metadata}
+            'date':str(metadata.get('date','unknown'))[:10],'raw_sha256':s.digest(raw),'_meta':metadata}
 
 class _EvidenceHistory:
     """Read-only, bounded Git evidence. No filters, network, or receipt attestation.
@@ -695,7 +715,9 @@ class _EvidenceHistory:
         try:
             target=s.safe_path(source)
             if target.is_file() and target.stat().st_size<=2_000_000:
-                raw=target.read_bytes(); size=len(raw); info=_source_bytes(raw)
+                with target.open('rb') as stream: raw=stream.read(2_000_001)
+                size=len(raw)
+                if size<=2_000_000: info=_source_bytes(raw)
         except (OSError,ValueError,UnicodeError): pass
         while self.current and (len(self.current)>=256 or self.current_bytes+size>16_000_000):
             oldest=next(iter(self.current)); self.current_bytes-=self.current.pop(oldest)[1]
@@ -798,18 +820,20 @@ def _render_topic(page,packet,ident,result_hash,history=None):
     old_meta=meta(target.read_text(encoding='utf-8')) if old else {}
     old_page={'path':rel,'meta':old_meta}
     old_keys={_json_hash({k:normalized(v) if k=='quote' else v for k,v in claim.items() if k!='source_revision'}) for claim in previous_claims}
-    for claim in unique.values():
-        source=s.safe_path(claim['source'])
-        proof=None
-        if source.exists():
-            raw=source.read_bytes(); text=normalized(raw.decode('utf-8-sig')); hashes[claim['source']]=s.digest(raw)
-            date=str(meta(text).get('date','unknown'))[:10]
-            key=_json_hash({k:v for k,v in claim.items() if k!='source_revision'})
+    for index,claim in enumerate(unique.values()):
+        current=history._current(claim['source']); proof=None; date='unknown'
+        key=_json_hash({k:v for k,v in claim.items() if k!='source_revision'})
+        if current:
+            hashes[claim['source']]=current['raw_sha256']; date=current['date']
             if key not in old_keys:
-                proof=history.source(claim['source'],s.digest(raw),claim['quote'])
+                proof=history.source(claim['source'],current['raw_sha256'],claim['quote'])
             else: proof=history.claim(old_page,claim)
         else:
-            date='unknown'; proof=history.claim(old_page,claim)
+            # Missing, undecodable and oversized current files are unavailable,
+            # not alternate evidence. Only the exact recorded Git origin may help.
+            proof=history.claim(old_page,claim)
+            if not proof: raise WikiIntegrityError(rel,index,'source_revision')
+            hashes[claim['source']]=proof['sha256']
         if proof:
             claim.setdefault('source_revision',{'sha256':proof['sha256'],'text_sha256':proof['text_sha256'],'date':proof['date']})
             date=claim['source_revision'].get('date',proof['date'])
@@ -830,9 +854,12 @@ def _source_note(row,topic_pages):
     target=s.safe_path(BASE+'Sources/'+s.digest(row['path'].encode())[:16]+'.md')
     info=meta(target.read_text(encoding='utf-8')) if target.exists() else {}
     linked=sorted(p['path'] for p in topic_pages if any(_valid_claim(c) and c['source']==row['path'] for c in _list(p['meta'].get('wiki_claims'))))
+    latest=info.get('latest_source_part',0)
+    if latest is None: latest=0
+    if type(latest) is not int or latest<0: raise WikiIntegrityError(target.relative_to(s.VAULT).as_posix(),field='latest_source_part')
     now=s.stamp()
     info.update({'date':now[:10],'type':'note','tags':['ai-memory','derived','wiki-source'],'sources':[row['path']],
-                 'wiki_pages':linked,'latest_source_part':max(int(info.get('latest_source_part') or 0),row.get('part',1)),
+                 'wiki_pages':linked,'latest_source_part':max(latest,row.get('part',1)),
                  'source_parts':row.get('parts',1),'source_hashes':{row['path']:row['sha256']},'updated_at':now,'maintained_by':cfg.DEVICE_ID})
     body=f'# {row["title"]}\n\nOriginal: [[{row["path"][:-3]}]]\n\nSource date: {row["date"]}\n\n## Wiki pages\n'+'\n'.join('- [['+path[:-3]+']]' for path in linked)
     return target,s.note_text(info,body)
@@ -851,7 +878,7 @@ def _publication_plan(packet,result,dispositions):
     now=s.stamp(); sources={row['path']:row for row in packet['sources']}
     content='# Shared wiki index\n\nStart here, then open the cited dated sources.\n'
     for kind in KINDS:
-        content+='\n## '+kind+'\n'+'\n'.join('- [['+p['path'][:-3]+'|'+p['meta'].get('title',Path(p['path']).stem)+']]' for p in sorted(topic_pages.values(),key=lambda p:p['path']) if p['meta']['wiki_kind']==kind)+'\n'
+        content+='\n## '+kind+'\n'+'\n'.join('- [['+p['path'][:-3]+'|'+_existing_topic_title(p)+']]' for p in sorted(topic_pages.values(),key=lambda p:p['path']) if p['meta']['wiki_kind']==kind)+'\n'
     source_count=len(set(p.name for p in (s.VAULT/BASE/'Sources').glob('*.md')) | {s.digest(row['path'].encode())[:16]+'.md' for row in packet['sources']})
     content+='\n## Source records\n'+str(source_count)+' source records. Original notes are preserved.\n'
     info={'date':now[:10],'type':'note','tags':['ai-memory','derived','wiki-index'],'updated_at':now,'maintained_by':cfg.DEVICE_ID,'sources':list(sources),'source_hashes':{k:v['sha256'] for k,v in sources.items()}}
@@ -995,6 +1022,8 @@ def lint():
     issues=[]; historical=[]; equivalent=[]; history=_EvidenceHistory()
     allpages=pages(issues); known={p['path'] for p in allpages}
     for p in allpages:
+        try: _existing_topic_title(p)
+        except WikiIntegrityError: issues.append({'page':p['path'],'issue':'malformed title metadata','field':'title'})
         claims=p['meta'].get('wiki_claims',[])
         if not isinstance(claims,list):
             issues.append({'page':p['path'],'issue':'malformed claim metadata'}); claims=[]
@@ -1026,13 +1055,13 @@ def lint():
                 issues.append({'page':p['path'],'issue':'malformed related link metadata'}); continue
             if related not in known: issues.append({'page':p['path'],'issue':'broken related link','target':related})
         for index,claim in enumerate(claims):
-            if not _valid_claim(claim):
-                issues.append({'page':p['path'],'issue':'malformed claim metadata','claim_index':index}); continue
-            try: s.safe_path(claim['source'])
-            except ValueError:
-                issues.append({'page':p['path'],'issue':'malformed claim metadata','claim_index':index}); continue
-            if 'source_revision' in claim and not _valid_source_revision(claim['source_revision']):
-                issues.append({'page':p['path'],'issue':'malformed source revision metadata','source':claim['source'],'claim_index':index}); continue
+            try: _validate_existing_claim(p['path'],claim,index)
+            except WikiIntegrityError as exc:
+                issue='malformed source revision metadata' if exc.field=='source_revision' else 'malformed claim metadata'
+                diagnostic={'page':p['path'],'issue':issue,'field':exc.field,'claim_index':index}
+                if exc.field=='source_revision': diagnostic['source']=claim['source']
+                issues.append(diagnostic)
+                continue
             proof=history.claim(p,claim)
             if not proof:
                 current=history._current(claim['source'])
@@ -1184,15 +1213,16 @@ def run(limit=4,timeout=480):
         # does not exhaust the attention budget; persistent processing errors do.
         if saved.get('retry_after',0)>time.time() and not (saved.get('status')=='retryable' and saved_output):
             return {'status':'blocked','reason':saved.get('reason'),'retry_after':saved['retry_after']}
-        if packet is None:
-            try: packet=prepare(limit)
-            except WikiPolicyError as exc: return _policy_attention(exc)
-            except WikiIntegrityError as exc:
-                attention={'status':'attention','at':s.stamp(),'reason':'WikiIntegrityError','retry_after':0,'backoff_seconds':0,
-                           'consecutive_failures':saved.get('consecutive_failures',0),'attention_required':True,
-                           'integrity_page':exc.page,'claim_index':exc.claim_index,'manual_retry_required':True}
-                _atomic_json(worker_state,attention)
-                return attention
+        try:
+            if packet is None: packet=prepare(limit)
+            if packet: _validate_packet_context(packet)
+        except WikiPolicyError as exc: return _policy_attention(exc)
+        except WikiIntegrityError as exc:
+            attention={'status':'attention','at':s.stamp(),'reason':'WikiIntegrityError','retry_after':0,'backoff_seconds':0,
+                       'consecutive_failures':saved.get('consecutive_failures',0),'attention_required':True,
+                       'integrity_page':exc.page,'integrity_field':exc.field,'claim_index':exc.claim_index,'manual_retry_required':True}
+            _atomic_json(worker_state,attention)
+            return attention
         if not packet: return {'status':'idle',**status()}
         folder=cfg.STATE/'wiki'/'batches'/packet['batch_id']; output=folder/'output.json'; schema=folder/'schema.json'
         short_sources=[row for row in packet['sources'] if _short_part(row)]
@@ -1298,6 +1328,6 @@ def run(limit=4,timeout=480):
                          'batch_id':packet['batch_id'],'reason':reason,'retry_after':time.time()+10800 if global_failure else time.time()+backoff if backoff else 0,
                          'backoff_seconds':backoff,'consecutive_failures':failures,'attention_required':attention,
                          'pending_parts':[{'job_key':row['job_key'],'sha256':row['sha256']} for row in packet['sources']]}
-            if integrity: worker_receipt.update(integrity_page=exc.page,claim_index=exc.claim_index)
+            if integrity: worker_receipt.update(integrity_page=exc.page,integrity_field=exc.field,claim_index=exc.claim_index)
             _atomic_json(worker_state,worker_receipt)
             raise
