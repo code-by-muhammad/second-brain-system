@@ -14,7 +14,7 @@ def frontmatter(text: str, *, strict: bool = False) -> dict:
         return {}
     try:
         value = yaml.safe_load(''.join(lines[1:end]))
-    except (yaml.YAMLError, ValueError):
+    except (yaml.YAMLError, ValueError, RecursionError):
         if strict:
             raise ValueError('Invalid YAML frontmatter.') from None
         return {}
