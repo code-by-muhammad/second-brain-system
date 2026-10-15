@@ -236,15 +236,49 @@ def _read_worker_state():
     except (OSError,ValueError,TypeError):
         return {**default,'status':'attention','attention_required':True,'reason':'malformed private worker state; inspect it or reset with wiki retry'}
 
+def _public_locator(relative, wiki_only=True):
+    """Render cached locators without trusting cache contents or exposing raw paths."""
+    try:
+        relative.encode('utf-8')
+        s.clean_text(relative,400)
+        if any(ord(char)<32 or ord(char)==127 for char in relative): raise ValueError('Control character in path.')
+        if wiki_only and not relative.startswith(BASE): raise ValueError('Not a wiki path.')
+        s.safe_path(relative)
+        return {'path':relative}
+    except (OSError,ValueError,UnicodeError):
+        return {'path':BASE+'Index.md','path_sha256':s.digest(relative.encode('utf-8',errors='surrogatepass'))}
+
+
+def _public_pending_parts(value):
+    result=[]
+    if not isinstance(value,list): return result
+    for row in value[:8]:
+        if not isinstance(row,dict): continue
+        key=row.get('job_key'); fingerprint=row.get('sha256')
+        if not isinstance(key,str) or len(key)>420 or not isinstance(fingerprint,str) or not re.fullmatch('[a-f0-9]{64}',fingerprint): continue
+        match=re.fullmatch(r'(.+)::part([1-9][0-9]{0,2})',key)
+        if not match or int(match[2])>(2_000_000+22999)//23000: continue
+        if 'path_sha256' in _public_locator(match[1],wiki_only=False): continue
+        result.append({'job_key':key,'sha256':fingerprint})
+    return result
+
+
 def _worker_summary():
     value=_read_worker_state()
     result={key:value[key] for key in ('status','attention_required','consecutive_failures','retry_after')}
     reason=value.get('reason')
     if reason is not None:
         controlled=('model authentication/quota requires attention','malformed private worker state; inspect it or reset with wiki retry')
-        result['reason']=reason if reason in controlled or isinstance(reason,str) and re.fullmatch('[A-Za-z_][A-Za-z0-9_]{0,63}',reason) else 'inspect private worker diagnostics'
+        try:
+            s.clean_text(reason,200); reason.encode('utf-8')
+            safe_reason=reason in controlled or re.fullmatch('[A-Za-z_][A-Za-z0-9_]{0,63}',reason)
+        except (ValueError,UnicodeError): safe_reason=False
+        result['reason']=reason if safe_reason else 'inspect private worker diagnostics'
     if isinstance(value.get('batch_id'),str) and re.fullmatch('[a-f0-9]{24}',value['batch_id']): result['batch_id']=value['batch_id']
-    if isinstance(value.get('integrity_page'),str) and value['integrity_page'].startswith(BASE): result['integrity_page']=value['integrity_page'][:400]
+    if isinstance(value.get('integrity_page'),str):
+        locator=_public_locator(value['integrity_page'])
+        result['integrity_page']=locator['path']
+        if 'path_sha256' in locator: result['integrity_page_sha256']=locator['path_sha256']
     if value.get('integrity_field') in ('title','wiki_claims','source_revision','latest_source_part','frontmatter','wiki_kind','encoding','content','path','packet','archive','archive_capacity','recovery','serialization','publication_cas'): result['integrity_field']=value['integrity_field']
     if type(value.get('claim_index')) is int and 0<=value['claim_index']<120: result['claim_index']=value['claim_index']
     if value.get('recovery_action')=='resolve_saved_publication_cas_then_retry': result['recovery_action']=value['recovery_action']
@@ -624,9 +658,11 @@ def _hydrate_receipts(sources):
     """SQLite is local: import only independently verifiable shared per-part proof."""
     rows={row['job_key']:row for row in sources}; cache=None; verified=[]; issues=[]
     for path in (s.VAULT/BASE/'Receipts').glob('*.md'):
+        locator=_public_locator(path.relative_to(s.VAULT).as_posix())
         try:
-            s.safe_path(path.relative_to(s.VAULT).as_posix())
-            info=meta(path.read_text(encoding='utf-8')); payload=info.get('wiki_receipt')
+            if 'path_sha256' in locator: raise ValueError('Unsafe receipt locator.')
+            _,text=_read_derived(path)
+            info=meta(text); payload=info.get('wiki_receipt')
             if not isinstance(payload,dict) or payload.get('version')!=1 or info.get('receipt_sha256')!=_json_hash(payload): raise ValueError('Invalid receipt hash or version.')
             entries=payload.get('parts')
             if not isinstance(entries,list) or not entries or any(not isinstance(entry,dict) for entry in entries): raise ValueError('Invalid receipt part structure.')
@@ -638,7 +674,7 @@ def _hydrate_receipts(sources):
             if cache is None: cache=_claim_cache()
             verified.extend(_verified_entries(payload,rows,cache))
         except (OSError,ValueError,KeyError,TypeError,AttributeError):
-            issues.append({'path':path.relative_to(s.VAULT).as_posix(),'issue':'Invalid or unreadable optional source-part receipt; valid other receipts continue.'})
+            issues.append({**locator,'issue':'Invalid or unreadable optional source-part receipt; valid other receipts continue.'})
     if verified:
         with db() as conn:
             for entry in verified:
@@ -968,7 +1004,7 @@ class _EvidenceHistory:
         env=os.environ.copy()
         # The empty protocol allowlist also prevents promised-object transport
         # on supported older Git releases without GIT_NO_LAZY_FETCH.
-        env.update(GIT_OPTIONAL_LOCKS='0',GIT_TERMINAL_PROMPT='0',GIT_NO_LAZY_FETCH='1',GIT_ALLOW_PROTOCOL='')
+        env.update(GIT_OPTIONAL_LOCKS='0',GIT_TERMINAL_PROMPT='0',GIT_NO_LAZY_FETCH='1',GIT_ALLOW_PROTOCOL='',GIT_NO_REPLACE_OBJECTS='1')
         try:
             with _GIT_POPEN(['git','--no-pager','--literal-pathspecs','-c','log.showSignature=false','-C',str(s.VAULT),*args],
                             stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=env,**cfg.child_options()) as proc:
@@ -1613,10 +1649,11 @@ def run(limit=4,timeout=480):
         worker_state=cfg.STATE/'wiki-worker-status.json'
         saved=_read_worker_state()
         if saved.get('attention_required'):
-            return {'status':'attention','reason':saved.get('reason'),'batch_id':saved.get('batch_id'),
-                    'consecutive_failures':saved.get('consecutive_failures',0),'manual_retry_required':True,
-                    'pending_parts':saved.get('pending_parts',[]),
-                    **{key:value for key,value in _worker_summary().items() if key in ('integrity_page','integrity_field','recovery_action')}}
+            summary=_worker_summary()
+            return {'status':'attention','reason':summary.get('reason'),'batch_id':summary.get('batch_id'),
+                    'consecutive_failures':summary['consecutive_failures'],'manual_retry_required':True,
+                    'pending_parts':_public_pending_parts(saved.get('pending_parts')),
+                    **{key:value for key,value in summary.items() if key in ('integrity_page','integrity_page_sha256','integrity_field','recovery_action')}}
         try: packet=_resume_packet(policy)
         except WikiIntegrityError as exc:
             attention={'status':'attention','at':s.stamp(),'reason':'WikiIntegrityError','retry_after':0,'backoff_seconds':0,

@@ -49,6 +49,9 @@ The v0.1.6 audit fixes passed independent Codex and Claude reviews, four-platfor
 | R61 | A capture-device LF/CRLF/CR or BOM-equivalent checkout is reported as a changed source although compiler evidence accepts it | Keep raw SHA as the fast path, then compute the compiler's six representation digests with strict UTF-8 and bounded streaming. Genuine changes, missing sources and invalid metadata remain flagged; publication CAS remains raw. |
 | R62 | Capture title/source_app can inject another event's daily marker or a section heading, suppressing a later genuine link | Escape and collapse display fields only; preserve immutable capture/event bytes. Deduplicate by exact marker and adjacent canonical capture link, reject unsafe link paths, and retain normal/legacy entry idempotency. |
 | R63 | A concurrent owner daily edit or new-day creation during the consumed read is blessed by the later write and overwritten | Retain the consumed raw before hash or absent state, check it immediately before writing and pass the existing-page SHA into the writer. Conflict leaves the capture unlinked and owner bytes unchanged for review. |
+| R64 | Legacy worker page/reason/batch/pending fields or an invalid optional receipt filename reach public wiki diagnostics without the established screening | Render only validated known fields and bounded canonical pending identities; use a safe Index locator plus exact opaque path SHA for withheld names. Preserve private cache/files and valid ordinary diagnostic usefulness. |
+| R65 | A local Git replacement maps committed blob A to uncommitted blob B; historical verification reports B's bytes under A's recorded origin | Disable replacement objects on every historical Git read, preserving canonical committed objects, local-only reads, transport denial and genuine historical proofs. |
+| R66 | Optional receipt hydration reads a 2M+1-byte receipt through unbounded read_text | Use the existing bounded 2 MB derived-note reader; flag invalid/oversized receipts, preserve files, and continue verifying valid neighbors. |
 
 
 
@@ -190,3 +193,18 @@ Daily writes retain the raw hash consumed before rendering, or the distinct abse
 - [Python html.escape](https://docs.python.org/3.12/library/html.html#html.escape): escape HTML-special display characters instead of interpolating comments.
 - [Python incremental codecs](https://docs.python.org/3.12/library/codecs.html#incremental-encoding-and-decoding): strict decoders retain split-codepoint state between binary chunks.
 - [Pinned PyYAML constructor source](https://github.com/yaml/pyyaml/blob/6.0.3/lib/yaml/constructor.py): explicit tag constructors can fail independently of YAML syntax parsing; the reproduced TypeError is contained at that boundary.
+
+## R64 through R66 public diagnostics and canonical provenance
+
+Fresh Codex review of frozen eda6304 found public wiki diagnostic exposure and Git replacement-object provenance errors. Root executed a corrected synthetic 23-case before contract: 19 failures and four controls, with all 88 tracked hashes unchanged. Separate root checks reproduced two pending-row leaks with one control and two attention reason/batch-field leaks. Earlier private probe-construction/collection mistakes remain preserved separately and are not counted as product failures. Root additionally reproduced the optional-receipt unbounded read with a finite 2M+1-byte fixture.
+
+Public worker summaries screen cached locators for UTF-8, bounded length, safe Markdown paths, control characters and the existing conservative credential detector. Withheld paths point to Index plus an opaque SHA256 of the exact original path string; this grants no read/write authority. Cached class-shaped reasons also pass that detector, including underscore-prefixed token shapes. The attention return uses those controlled fields, and pending rows expose only validated canonical job keys and raw SHA values, at most the existing eight-part batch bound. Unknown cached row attributes are omitted. Private cache bytes and pending publication data are not rewritten or reset by these reads.
+
+Optional receipt names are screened before content reads or diagnostic formatting. Invalid/unsafe paths receive a safe locator and path hash, while ordinary safe names stay actionable. The existing bounded derived reader checks at most 2,000,001 bytes before decoding; invalid UTF-8, oversize and malformed receipts become controlled issues without preventing valid neighboring proof verification. Equivalent BOM/CRLF valid receipts remain supported and their source files are unchanged.
+
+Historical Git verification sets GIT_NO_REPLACE_OBJECTS=1 on every Git subprocess. A replacement view can no longer supply different uncommitted bytes while retaining an earlier canonical blob identifier. Genuine original history remains verifiable; local replacement references themselves are neither modified nor deleted. Existing minimum-version transport denial, lazy-fetch prevention, read/time/command budgets and exact quotation/hash checks remain in force. Normal maintenance fetch/push behavior is unchanged.
+
+- [Git replacement objects](https://git-scm.com/docs/git-replace): replacement references affect ordinary object reads by default; GIT_NO_REPLACE_OBJECTS disables that view for canonical evidence reads.
+- [Python bounded binary reads](https://docs.python.org/3.12/library/io.html#io.BufferedIOBase.read): a sized binary read bounds input before decoding.
+
+These repair tests are not release approval. Fresh final tests/reviews and the previously documented platform/deployment gates remain required.

@@ -58,3 +58,7 @@ The existing Git service now streams exact SHA-named compiler archives up to 64 
 Daily aggregation isolates missing/invalid templates, bounded-read failures and failed writes into per-capture review flags, preserving originals and attempting the remaining maintenance/Git phases. Git's own invalid-note safeguards still apply. Display fields are escaped to prevent marker/heading injection; exact marker-plus-capture-link identity preserves genuine and legacy idempotency. Daily owner edits are checked against the consumed raw before image and remain untouched on conflict, within the existing cooperative writer limits.
 
 Maintenance review now recognizes the compiler's LF/CRLF/CR and optional-BOM source representations through bounded streaming after a raw-hash mismatch. Real content changes remain flagged, source files stay unchanged and publication CAS remains raw.
+
+Public wiki diagnostics also re-screen legacy worker cache fields and optional receipt filenames. Unsafe locators use Index plus an opaque path SHA; pending attention rows expose only validated known identities. Invalid receipts are read within the existing 2 MB note limit and do not erase valid neighboring proof. Private caches, original receipts and pending plans remain unchanged.
+
+Historical source reads ignore local Git replacement-object views, verifying canonical committed objects instead. The repository's replacement references are retained, ordinary Git synchronization is unchanged, and missing or altered historical proof remains visible.
