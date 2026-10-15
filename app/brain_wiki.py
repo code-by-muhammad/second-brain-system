@@ -46,7 +46,7 @@ class WikiOutputError(ValueError):
 
 class WikiIntegrityError(WikiOutputError):
     def __init__(self,page,claim_index=None,field='wiki_claims'):
-        super().__init__('Wiki private packet exceeds its 2,000,000-character operation limit; review catalog/packet sizing before retrying.' if field=='packet' else 'Existing derived wiki metadata requires owner review before merging this topic.')
+        super().__init__('Wiki private packet exceeds its operation limits (2,000,000 characters, 100,000 traversal nodes, depth 128); review catalog/packet sizing before retrying.' if field=='packet' else 'Existing derived wiki metadata requires owner review before merging this topic.')
         self.page=page; self.claim_index=claim_index; self.field=field
 
 class WikiPolicyError(ValueError):
@@ -76,6 +76,7 @@ def _atomic_json(path,value):
         if os.path.exists(name): os.unlink(name)
 
 class _JSONTooLarge(ValueError): pass
+class _JSONStructureTooLarge(ValueError): pass
 
 def _bounded_json(value,limit=2_000_000,**options):
     # Validate the finite object graph before treating an over-budget value as
@@ -86,7 +87,7 @@ def _bounded_json(value,limit=2_000_000,**options):
         item,depth,leaving=stack.pop()
         if leaving: active.remove(id(item)); seen.add(id(item)); continue
         nodes+=1
-        if nodes>100000 or depth>128: raise ValueError('JSON context exceeds structural bounds.')
+        if nodes>100000 or depth>128: raise _JSONStructureTooLarge('JSON context exceeds structural bounds.')
         if isinstance(item,str):
             if not oversized:
                 ident=id(item); cached=strings.get(ident); size=cached[1] if cached is not None else None
@@ -106,7 +107,7 @@ def _bounded_json(value,limit=2_000_000,**options):
             if ident in active: raise ValueError('Circular JSON context.')
             if ident in seen: continue
             active.add(ident); stack.append((item,depth,True))
-            if len(item)*(2 if isinstance(item,dict) else 1)+nodes>100000: raise ValueError('JSON context exceeds structural bounds.')
+            if len(item)*(2 if isinstance(item,dict) else 1)+nodes>100000: raise _JSONStructureTooLarge('JSON context exceeds structural bounds.')
             if isinstance(item,dict):
                 if options.get('sort_keys',False): sorted(item)
                 for key,child in item.items():
@@ -227,7 +228,7 @@ def _validate_packet_context(packet):
     for page in packet.get('catalog',[]):
         _existing_topic_title({'path':page['path'],'meta':page})
     try: _bounded_json(packet,ensure_ascii=False,default=str)
-    except _JSONTooLarge: raise WikiIntegrityError(BASE+'Index.md',field='packet') from None
+    except (_JSONTooLarge,_JSONStructureTooLarge): raise WikiIntegrityError(BASE+'Index.md',field='packet') from None
     except (ValueError,TypeError,RecursionError,UnicodeError):
         page=next((page['path'] for page in packet.get('current_pages',[])),BASE+'Index.md')
         raise WikiIntegrityError(page) from None
@@ -409,7 +410,7 @@ def inventory(include_excluded=False,policy=None):
     for root in SOURCE_ROOTS:
         for p in (s.VAULT/root).rglob('*.md'):
             rel=p.relative_to(s.VAULT).as_posix()
-            if rel.startswith('02-Areas/AI-Memory/'): continue
+            if rel.casefold().startswith('02-areas/ai-memory/'): continue
             if not include_excluded and _policy_excluded(rel,policy): continue
             try:
                 if p.stat().st_size>2_000_000: continue
@@ -557,7 +558,7 @@ def prepare(limit=4):
         while True:
             packet=base_packet if generation==0 else {**base_packet,'retry_generation':generation}
             try: ident=s.digest(_bounded_json(packet,sort_keys=True,default=str).encode())[:24]
-            except _JSONTooLarge: raise WikiIntegrityError(BASE+'Index.md',field='packet') from None
+            except (_JSONTooLarge,_JSONStructureTooLarge): raise WikiIntegrityError(BASE+'Index.md',field='packet') from None
             except (ValueError,TypeError,RecursionError,UnicodeError):
                 raise WikiIntegrityError(relevant[0]['path'] if relevant else BASE+'Index.md') from None
             previous=conn.execute('SELECT status FROM batches WHERE id=?',(ident,)).fetchone()
@@ -1371,18 +1372,32 @@ def _saved_publication_started(packet,publication):
     except (OSError,ValueError,KeyError,TypeError,RecursionError): return False
 
 def _publication_hold_records(plan,value):
-    """Carry only plan-matching historical markers; they confer no write authority."""
+    """Validate supplied history before filtering hold-only semantic markers."""
+    def invalid():
+        error=_recovery_integrity(plan['batch_id'])
+        error.recovery_action='reconcile_saved_publication_then_retry'
+        raise error
     if not isinstance(value,dict) or not isinstance(value.get('state'),str) or value['state'] not in ('applying','published','complete') or value.get('packet_sha256')!=plan['packet_sha256'] or value.get('result_sha256')!=plan['result_sha256'] or value.get('entries')!=plan['entries']:
-        raise _recovery_integrity(plan['batch_id'])
+        invalid()
+    # Missing controls remain legacy history. Only an actual JSON integer can
+    # identify the current intent protocol; bool/float equality is insufficient.
+    if 'semantic_intent_version' in value and type(value['semantic_intent_version']) is not int: invalid()
+    if 'legacy_semantic_ambiguity' in value and type(value['legacy_semantic_ambiguity']) is not bool: invalid()
+    planned={(write['path'],write['after']) for write in plan['writes']}
     semantic={(write['path'],write['after']) for write in plan['writes'] if write['kind']!='wiki_log_archive' and write['before']!=write['after']}
     records=set()
+    def record(item):
+        if not isinstance(item,dict) or not isinstance(item.get('path'),str) or not isinstance(item.get('sha256'),str): invalid()
+        pair=(item['path'],item['sha256'])
+        if pair not in planned: invalid()
+        # Valid archive/unchanged progress is neither semantic hold evidence
+        # nor authority to bypass current source policy or owner changes.
+        if pair in semantic: records.add(pair)
     for field in ('completed','prior_semantic'):
         items=value.get(field,[])
-        if not isinstance(items,list): raise _recovery_integrity(plan['batch_id'])
-        for item in items:
-            if isinstance(item,dict) and (item.get('path'),item.get('sha256')) in semantic: records.add((item['path'],item['sha256']))
-    intent=value.get('in_flight')
-    if isinstance(intent,dict) and (intent.get('path'),intent.get('sha256')) in semantic: records.add((intent['path'],intent['sha256']))
+        if not isinstance(items,list): invalid()
+        for item in items: record(item)
+    if 'in_flight' in value: record(value['in_flight'])
     if value.get('state') in ('published','complete'): records.update(semantic)
     return [{'path':path,'sha256':digest} for path,digest in sorted(records)]
 
@@ -1472,6 +1487,18 @@ def apply(packet,result):
             conflicts=[write for write in plan['writes'] if write['kind'] not in ('wiki_log','wiki_log_archive') and _current_hash(_publication_target(write['path'])) not in (write['before'],write['after'])]
             if conflicts: raise _publication_conflict(conflicts[0]['path'])
             _assert_source_policy(packet)
+            if journal.exists():
+                _hold_prior_publication(packet,publication,plan)
+                saved=json.loads(journal.read_text(encoding='utf-8'))
+                if _publication_hold_records(plan,saved):
+                    error=_recovery_integrity(ident)
+                    error.recovery_action='reconcile_saved_publication_then_retry'
+                    raise error
+                # Only validated archive/unchanged progress is unused. Clear
+                # its old plan pairs before replacing the plan, so a crash at
+                # either checkpoint remains recoverable. Retain all controls.
+                unused={key:value for key,value in saved.items() if key not in ('completed','prior_semantic','in_flight','attempted_without_write')}
+                _atomic_json(journal,{**unused,'completed':[],'prior_semantic':[]})
             _atomic_json(folder/('publication-obsolete-'+_current_hash(publication)[:24]+'.json'),plan)
             plan=_publication_plan(packet,result,dispositions)
             _assert_source_policy(packet)
@@ -1704,7 +1731,7 @@ def _read_saved_packet(path,batch_id):
             if not isinstance(row.get('sha256'),str) or not re.fullmatch('[a-f0-9]{64}',row['sha256']): raise ValueError('Invalid saved current-page hash.')
         _bounded_json(packet)
         return packet
-    except _JSONTooLarge:
+    except (_JSONTooLarge,_JSONStructureTooLarge):
         raise _recovery_integrity(batch_id,'packet') from None
     except (FileNotFoundError,ValueError,TypeError,KeyError,RecursionError):
         raise _recovery_integrity(batch_id) from None
