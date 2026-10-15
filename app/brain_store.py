@@ -116,6 +116,8 @@ def update_current(path:str,title:str,content:str,source_paths:list[str],expecte
     """Only derived pages, with source evidence and compare-and-swap for existing files."""
     cfg.require_maintainer()
     p=safe_path(path); rel=p.relative_to(VAULT).as_posix()
+    if rel.casefold().startswith('02-areas/ai-memory/wiki/'):
+        raise ValueError('Wiki pages and writer Control are compiler-owned; use the wiki worker or an explicit handoff/migration.')
     allowed=rel.startswith('02-Areas/AI-Memory/') or (rel.startswith('01-Projects/') and rel.endswith('/AI-Memory.md')) or rel=='Maps/AI-Context.md'
     if not allowed: raise ValueError('Only designated derived memory pages may be updated.')
     clean_text(title,180); clean_text(content)

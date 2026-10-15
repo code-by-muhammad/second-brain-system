@@ -5,6 +5,7 @@ import brain_settings as cfg
 
 LABEL='local.second-brain'
 TASK='SecondBrainLocalService'
+LINUX_UNIT='second-brain.service'
 
 def definition(platform=None):
     platform=platform or sys.platform
@@ -45,10 +46,10 @@ def install():
         subprocess.run(['launchctl','bootout',f'gui/{os.getuid()}/{LABEL}'],capture_output=True)
         subprocess.run(['launchctl','bootstrap',f'gui/{os.getuid()}',str(target)],check=True)
     else:
-        target=Path.home()/'.config/systemd/user/second-brain.service'; target.parent.mkdir(parents=True,exist_ok=True)
+        target=Path.home()/'.config/systemd/user'/LINUX_UNIT; target.parent.mkdir(parents=True,exist_ok=True)
         target.write_text(definition(),encoding='utf-8')
         subprocess.run(['systemctl','--user','daemon-reload'],check=True)
-        subprocess.run(['systemctl','--user','enable','--now','second-brain.service'],check=True)
+        subprocess.run(['systemctl','--user','enable','--now',LINUX_UNIT],check=True)
     return {'status':'installed','definition':str(target)}
 
 def start():
@@ -60,13 +61,13 @@ def start():
             plist=Path.home()/'Library/LaunchAgents'/f'{LABEL}.plist'
             subprocess.run(['launchctl','bootstrap',domain,str(plist)],check=True,**cfg.child_options())
         command=['launchctl','kickstart',target]
-    else: command=['systemctl','--user','start','second-brain.service']
+    else: command=['systemctl','--user','start',LINUX_UNIT]
     subprocess.run(command,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,**cfg.child_options())
 
 def stop():
     if sys.platform=='win32': command=['schtasks.exe','/End','/TN',TASK]
     elif sys.platform=='darwin': command=['launchctl','bootout',f'gui/{os.getuid()}/{LABEL}']
-    else: command=['systemctl','--user','stop','second-brain.service']
+    else: command=['systemctl','--user','stop',LINUX_UNIT]
     subprocess.run(command,check=True,**cfg.child_options())
     registry=cfg.STATE/'service-pids.json'
     if registry.exists():

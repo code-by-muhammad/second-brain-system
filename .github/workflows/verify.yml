@@ -2,6 +2,8 @@ name: Verify portable brain
 on:
   push:
     branches: [main]
+    tags: ['v*']
+  pull_request:
   workflow_dispatch:
 concurrency:
   group: portable-brain-${{ github.ref }}
@@ -15,7 +17,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-2025, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 12
+    timeout-minutes: 18
     env:
       UV_HTTP_TIMEOUT: '60'
       UV_CONCURRENT_DOWNLOADS: '3'
@@ -26,6 +28,14 @@ jobs:
           version: '0.9.16'
           enable-cache: false
       - run: uv sync --locked --python 3.12
+      - name: Prepare isolated runner user service bus
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@$(id -u).service"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
       - run: uv run --locked python -m pytest -q
       - run: uv run --locked python -m compileall -q app install.py update.py
       - run: uv run --locked python tests/smoke_import.py

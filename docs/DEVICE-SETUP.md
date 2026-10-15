@@ -2,19 +2,19 @@
 
 Use this guide with a local Codex agent on Windows, macOS or Linux. The notes repository shares knowledge; the software repository shares tested releases. Each device installs its own runtime, credentials, index and local MCP connection. The Windows maintainer compiles the shared wiki. New devices use capture/search mode.
 
-Release covered: **v0.1.5**. Check the shared `02-Areas/AI-Memory/Second-Brain-System.md` for a newer explicitly approved release before starting. Do not install an arbitrary branch or silently select the newest internet release.
+Release covered: **v0.1.6**. Check the shared `02-Areas/AI-Memory/Second-Brain-System.md` for a newer explicitly approved release before starting. Do not install an arbitrary branch or silently select the newest internet release.
 
 ## Give this prompt to the other device's Codex agent
 
-> Set up my existing shared Second Brain on this device using the private code-by-muhammad/second-brain notes repository and the approved code-by-muhammad/second-brain-system release v0.1.5. Follow docs/DEVICE-SETUP.md and the shared AI-Context and wiki Control pages. Inspect existing installation and client settings first. Reuse an existing vault; preserve notes, local edits, credentials and unrelated settings. Verify the release manifest before running the installer. Use capture/search role; do not transfer wiki ownership or create a compiler schedule. Install native locked dependencies, configure supported local MCP clients, download the local embedding model and register the per-user service. Test authenticated health, tools, source search/read and a single clearly labeled onboarding capture; verify that capture reaches the Windows vault through the existing maintenance sync. Test service restart and verify again after reboot. Report actual receipts and remaining failures. If GitHub authentication needs me, show the official device login flow; never ask me to paste tokens or copy another device's auth files.
+> Set up my existing shared Second Brain on this device using the private code-by-muhammad/second-brain notes repository and the approved code-by-muhammad/second-brain-system release v0.1.6. Follow docs/DEVICE-SETUP.md and the shared AI-Context and wiki Control pages. Inspect existing installation and client settings first. Reuse an existing vault; preserve notes, local edits, credentials and unrelated settings. Verify the release manifest before running the installer. Use capture/search role; do not transfer wiki ownership or create a compiler schedule. Install native locked dependencies, configure supported local MCP clients, download the local embedding model and register the per-user service. Test authenticated health, tools, source search/read and a single clearly labeled onboarding capture; verify that capture reaches the Windows vault through the existing maintenance sync. Test service restart and verify again after reboot. Report actual receipts and remaining failures. If GitHub authentication needs me, show the official device login flow; never ask me to paste tokens or copy another device's auth files.
 
 ## Inspect before installing
 
-Find the existing vault, runtime `device.json` and clients. If already installed, use the update procedure below. Do not clone over an existing directory or overwrite uncommitted work. Use the current device's login and Git identity.
+Find the existing vault, runtime `device.json` and clients. If already installed, use the update procedure below. An existing runtime cannot be redirected to another vault: installation rejects that change before editing settings. For another vault, use a separate runtime and rebuild its native index explicitly. Do not clone over an existing directory or overwrite uncommitted work. Use the current device's login and Git identity.
 
-Required tools: [Git](https://git-scm.com/downloads), [GitHub CLI](https://cli.github.com/) and [uv](https://docs.astral.sh/uv/getting-started/installation/) from their official distributions. The installer obtains Python 3.12 through uv and uses the checked-in dependency lock. Do not copy the Windows virtual environment onto another OS. Installing Codex or Claude is separate from installing this service; the local clients must already be installed and authenticated for their own use.
+Required tools: Git 2.38 or newer ([Git](https://git-scm.com/downloads)), [GitHub CLI](https://cli.github.com/) and [uv](https://docs.astral.sh/uv/getting-started/installation/) from their official distributions. The installer obtains Python 3.12 through uv and uses the checked-in dependency lock. Do not copy the Windows virtual environment onto another OS. Installing Codex or Claude is separate from installing this service; the local clients must already be installed and authenticated for their own use.
 
-Run `gh auth status`. If authentication is missing, use `gh auth login` on that device. Private repository access is required. Do not print or paste tokens.
+Run `git --version` and confirm Git 2.38 or newer, then run `gh auth status`. If authentication is missing, use `gh auth login` on that device. Private repository access is required. Do not print or paste tokens.
 
 ## New Mac or Linux installation
 
@@ -23,10 +23,10 @@ These commands assume there is no vault or runtime at the chosen paths. Change t
 ```sh
 brain_vault="$HOME/Documents/Second-Brain"
 brain_root="$HOME/.local/share/second-brain"
-brain_release="$brain_root/releases/v0.1.5"
+brain_release="$brain_root/releases/v0.1.6"
 
 gh repo clone code-by-muhammad/second-brain "$brain_vault"
-gh repo clone code-by-muhammad/second-brain-system "$brain_release" -- --branch v0.1.5 --depth 1
+gh repo clone code-by-muhammad/second-brain-system "$brain_release" -- --branch v0.1.6 --depth 1
 cd "$brain_release"
 uv run --no-project --python 3.12 python -c "from pathlib import Path; import update; print(update.verify(Path.cwd())['version'])"
 uv run --no-project --python 3.12 install.py --root "$brain_root" --vault "$brain_vault" --configure-clients --download-model --install-service
@@ -36,7 +36,7 @@ brain_python="$brain_release/.venv/bin/python"
 "$brain_python" "$brain_root/app/brain_cli.py" health
 ```
 
-The manifest check must report `0.1.5` without an exception. macOS uses a per-user LaunchAgent, consistent with [Apple's launchd documentation](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html). Linux uses a systemd user service; a working systemd user session is required. A machine without one needs an explicit startup decision, not a false success claim. Run under the intended normal user. Keep the user session available while testing; sleep/offline is not continuous service availability.
+The manifest check must report `0.1.6` without an exception. macOS uses a per-user LaunchAgent, consistent with [Apple's launchd documentation](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html). Linux uses a systemd user service; a working systemd user session is required. A machine without one needs an explicit startup decision, not a false success claim. Run under the intended normal user. Keep the user session available while testing; sleep/offline is not continuous service availability.
 
 ## New Windows installation
 
@@ -45,10 +45,10 @@ Use PowerShell as the intended normal user. These example paths are for another 
 ```powershell
 $brainVault = Join-Path $env:USERPROFILE 'Documents\Second-Brain'
 $brainRoot = Join-Path $env:LOCALAPPDATA 'Second-Brain-System'
-$brainRelease = Join-Path $brainRoot 'releases\v0.1.5'
+$brainRelease = Join-Path $brainRoot 'releases\v0.1.6'
 
 gh repo clone code-by-muhammad/second-brain $brainVault
-gh repo clone code-by-muhammad/second-brain-system $brainRelease -- --branch v0.1.5 --depth 1
+gh repo clone code-by-muhammad/second-brain-system $brainRelease -- --branch v0.1.6 --depth 1
 Set-Location -LiteralPath $brainRelease
 uv run --no-project --python 3.12 python -c "from pathlib import Path; import update; print(update.verify(Path.cwd())['version'])"
 uv run --no-project --python 3.12 install.py --root $brainRoot --vault $brainVault --configure-clients --download-model --install-service
@@ -80,13 +80,21 @@ The installer configures Claude Code, Claude Desktop and Codex settings where ap
 
 Notes synchronize automatically through the existing per-device maintenance service. Same-note conflicts, staged edits and deletions require review; never force-push or discard the user's work. A laptop can capture/read locally while another laptop is off. Synchronization catches up when it returns online.
 
-Software updates are explicit. Read the approved version from the shared system status. Use the Python recorded in that device's `device.json` to run the currently installed release's updater. For v0.1.5:
+Software updates are explicit. Read the approved version from the shared system status. For the first upgrade from v0.1.5, **use the verified new v0.1.6 updater**, because the old updater does not contain the rollback and preflight fixes. Download the approved tag into `<runtime>/releases/v0.1.6` with `gh repo clone code-by-muhammad/second-brain-system <candidate directory> -- --branch v0.1.6 --depth 1`. If that directory already exists, verify it and reuse it; do not clone over it or change its files. Use the current Python from `device.json` to verify the candidate manifest using `update.verify(Path(<candidate directory>))` before executing its installer/updater.
 
 ```text
-<device Python> <current release_root>/update.py --root <runtime root> --version v0.1.5
+<candidate v0.1.6 Python> <verified v0.1.6 checkout>/update.py --root <runtime root> --version v0.1.6
 ```
 
-The updater verifies the new tag's file hashes, installs native locked dependencies, preserves identity/auth/role, restarts the service and polls authenticated versioned health. A failed upgrade attempts to restore the previous release. Never replace a healthy runtime by copying folders or running `git pull` inside its active release. A change on the Windows PC is shared as a tested tagged release; each device installs that tag when asked.
+Before the update command, prepare the verified candidate environment with `uv sync --locked --no-dev --project <verified v0.1.6 checkout> --python 3.12`. Use `<candidate>/.venv/bin/python` on Mac/Linux or `<candidate>/.venv/Scripts/python.exe` on Windows to run the updater and migration dry run. This matters when a v0.1.5 POSIX installation recorded the faulty base interpreter: that old interpreter cannot import the updater dependencies. Manifest verification itself uses only the standard library and can run before environment creation.
+
+Capture/search devices use that command without migration flags. The updater verifies the tag, prepares native locked dependencies and preflights client settings while the old service remains healthy. It serializes the switch against compilation and maintenance, preserves identity/auth/role, and polls authenticated versioned health. Failure restores exact software/device/client snapshots without invoking the old faulty installer; original notes, tokens and SQLite are not rolled back.
+
+The designated maintainer's first v0.1.6 upgrade also needs a legacy-publication migration. Its agent must use the candidate Python to run the new checkout's `app/brain_cli.py wiki migrate` with `BRAIN_SYSTEM_ROOT` set to the existing runtime. This defaults to a dry run. Inspect verified and unverified source parts first; a Source note alone is not proof that all parts completed. Then invoke the new updater with `--migrate-wiki --requeue-unverified`. It migrates exact per-part proofs and repairs source navigation while holding the compiler lock, and leaves unproved parts queued for a normal bounded worker batch. The Windows maintainer performs this once; new capture devices do not compile or migrate shared wiki state.
+
+New shared `Wiki/Receipts/` pages contain source/chunk and claim hashes plus explicit per-part dispositions. Another designated maintainer can verify them and hydrate its own local queue without copying a live SQLite database or repeating the entire backlog. Historical journals and claims remain preserved. The general `brain_update_current` tool cannot replace compiler-owned wiki or Control pages.
+
+Never replace a healthy runtime by copying folders or running `git pull` inside its active release. A change on Windows is shared as a tested tagged software release; each device installs that verified tag explicitly. Ownership transfer still requires disabling the previous writer first; shared receipts are replay evidence, not a distributed lock.
 
 ## Troubleshooting
 
@@ -96,4 +104,4 @@ The updater verifies the new tag's file hashes, installs native locked dependenc
 - Sync paused: preserve all files and staged changes; inspect the conflict. The service must remain the only sync owner.
 - Wiki compilation: the designated Windows maintainer owns it. Do not run `wiki run`, `wiki retry` or create a schedule on a capture device.
 
-Reference: [v0.1.5 source and installer](https://github.com/code-by-muhammad/second-brain-system/tree/v0.1.5), [operating README](../README.md), and the shared vault's `Maps/AI-Context.md` and `02-Areas/AI-Memory/Wiki/Control.md`.
+Reference: [v0.1.6 source and installer](https://github.com/code-by-muhammad/second-brain-system/tree/v0.1.6), [operating README](../README.md), and the shared vault's `Maps/AI-Context.md` and `02-Areas/AI-Memory/Wiki/Control.md`.

@@ -120,12 +120,14 @@ def brain_health() -> dict:
         health['wiki']=wiki_status()
     except Exception: health['wiki']={'status':'unavailable; inspect local logs'}
     p=store.STATE/'maintenance-status.json'
-    if p.exists(): health['maintenance']=json.loads(p.read_text())
+    if p.exists():
+        from brain_maintenance import health_status
+        health['maintenance']=health_status(p)
     p=store.STATE/'index-bootstrap-status.json'
     if p.exists(): health['initial_index_validation']=json.loads(p.read_text())
     try:
         import sqlite3
-        with sqlite3.connect(f'file:{store.STATE.as_posix()}/memory.db?mode=ro',uri=True,timeout=2) as conn:
+        with sqlite3.connect((store.STATE/'memory.db').resolve().as_uri()+'?mode=ro',uri=True,timeout=2) as conn:
             health['index']={t:conn.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in ('entity','search_vector_chunks','search_vector_embeddings_rowids')}
     except Exception: health['index']={'status':'initializing or unavailable'}
     return health

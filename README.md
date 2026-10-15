@@ -26,14 +26,15 @@ The service exposes six constrained tools: `brain_context`, `brain_search`, `bra
 
 For agent instructions, Windows commands, acceptance checks and later upgrades, use [the device setup guide](docs/DEVICE-SETUP.md).
 
-Prerequisites: Git, [GitHub CLI](https://cli.github.com/), and [uv from Astral](https://docs.astral.sh/uv/getting-started/installation/). Authenticate on that device; do not copy tokens from another computer.
+Prerequisites: Git 2.38 or newer, [GitHub CLI](https://cli.github.com/), and [uv from Astral](https://docs.astral.sh/uv/getting-started/installation/). Authenticate on that device; do not copy tokens from another computer.
 
 ```sh
 gh auth login
 gh repo clone code-by-muhammad/second-brain ~/Documents/Second-Brain
 gh repo clone code-by-muhammad/second-brain-system ~/Code/second-brain-system
 cd ~/Code/second-brain-system
-git checkout v0.1.5
+git checkout v0.1.6
+uv run --no-project --python 3.12 python -c "from pathlib import Path; import update; print(update.verify(Path.cwd())['version'])"
 uv run --no-project --python 3.12 install.py --vault "$HOME/Documents/Second-Brain" --configure-clients --download-model --install-service
 ```
 
@@ -81,15 +82,15 @@ Keep one live sync transport. Syncthing is not enabled by this release. GitHub c
 
 ## Software releases and recovery
 
-Notes sync does not upgrade running software. Install an explicit release using the current runtime Python:
+Notes sync does not upgrade running software. Install an explicit release using the verified candidate Python:
 
 ```text
-python <software-checkout>/update.py --root <runtime> --version v0.1.5
+<candidate v0.1.6 Python> <verified v0.1.6 checkout>/update.py --root <runtime> --version v0.1.6
 ```
 
-The updater clones only the owner's private repository, verifies the release file hashes, creates a native environment before stopping the service, preserves tokens/paths/role, registers startup/client settings and polls authenticated MCP health for the expected version for up to two minutes. It records the prior release, stops a failed new service before restoring the former one, and verifies restored health. Hashes detect accidental corruption; they do not substitute for repository access controls or independent code review.
+For the initial v0.1.5 upgrade, bootstrap the verified v0.1.6 checkout as described in [the device guide](docs/DEVICE-SETUP.md); running the old updater would retain its old rollback behavior. The updater clones only the owner's private repository, verifies the release file hashes, creates a native environment and preflights client settings before stopping the service, preserves tokens/paths/role, and polls authenticated MCP health for the expected version. Failed upgrades restore exact app/device/client snapshots and verify former health without executing the old installer. The designated maintainer explicitly reviews and applies legacy receipt migration under the compiler lock; capture devices omit that option. Hashes detect accidental corruption; they do not substitute for repository access controls or independent code review.
 
-To return to the previous release manually, stop the registered service; use the previous `release_root` and Python from `state/previous-release.json` to run its `install.py` with the same `--root`, `--vault`, `--reuse-python`, `--configure-clients`, `--install-service`; then start the service. Source notes and SQLite are not deleted. Original pre-migration app/task backups are retained on the initial Windows host.
+Automatic rollback uses the private software/device/client snapshot recorded in `state/previous-release.json`, stops the failed service, restores exact bytes and re-registers the former service before testing health. Do not execute a v0.1.5 installer for POSIX rollback: its interpreter dereference is the defect fixed here. An agent can inspect the recorded snapshot to perform the same explicit restoration if automatic recovery is interrupted. Source notes, tokens and SQLite are preserved.
 
 Ownership transfer: finish/sync pending work, disable the old worker schedule, stop shared maintenance on the old host, change its role to capture, record the new device ID in the shared Control page, sync that page, then explicitly enable maintainer role/schedule on the new host. The Control page prevents accidental duplicate writers; it is not a global lease during a network partition.
 

@@ -42,6 +42,11 @@ async def test_authenticated_mcp_and_safe_writes(tmp_path):
                 first=(await c.call_tool('brain_capture',args)).data
                 assert (await c.call_tool('brain_capture',args)).data['status']=='duplicate'
                 assert 'QUARTZ-57321' in (await c.call_tool('brain_read',{'path':first['path']})).data['content']
+                search=(await c.call_tool('brain_search',{'query':'ye synthetic marker kahan hai',
+                              'english_query':'QUARTZ-57321','limit':4})).data
+                assert first['path'] in {row['path'] for row in search['results']}
+                assert first['path'] in {row['path'] for row in search['fresh_file_matches']}
+                assert len({row['path'] for row in search['results']})==len(search['results'])
                 for path in ('../outside.md','.obsidian/secret.md','C:/Windows/private.md'):
                     assert (await c.call_tool('brain_read',{'path':path},raise_on_error=False)).is_error
                 update={'path':'02-Areas/AI-Memory/Synthetic.md','title':'Synthetic derived page','content':'Supported synthetic marker.', 'source_paths':[first['path']]}
@@ -52,6 +57,9 @@ async def test_authenticated_mcp_and_safe_writes(tmp_path):
                 assert (state/'write-backups'/receipt['sha256']).exists()
                 bad={**update,'path':'01-Projects/Original.md','expected_sha256':None}
                 assert (await c.call_tool('brain_update_current',bad,raise_on_error=False)).is_error
+                compiler_owned={**update,'path':'02-Areas/AI-Memory/Wiki/Control.md','expected_sha256':None}
+                assert (await c.call_tool('brain_update_current',compiler_owned,raise_on_error=False)).is_error
+                assert not (vault/'02-Areas/AI-Memory/Wiki/Control.md').exists()
         finally:
             # Only this test's own process tree is terminated.
             if os.name=='nt': subprocess.run(['taskkill','/PID',str(proc.pid),'/T','/F'],capture_output=True)

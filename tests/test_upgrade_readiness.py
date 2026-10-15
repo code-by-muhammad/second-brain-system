@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 import pytest
 from test_integrity import updater
@@ -13,6 +14,9 @@ def test_upgrade_waits_for_the_expected_running_version(tmp_path,monkeypatch):
 def test_upgrade_readiness_has_a_bounded_deadline(tmp_path,monkeypatch):
     with pytest.raises(RuntimeError,match='startup deadline'): updater.wait_health('python',tmp_path,'new',timeout=0)
     root=tmp_path/'runtime'; (root/'state').mkdir(parents=True)
+    home=tmp_path/'home'; home.mkdir()
+    monkeypatch.setattr(Path,'home',classmethod(lambda cls:home))
+    monkeypatch.setenv('APPDATA',str(home/'AppData/Roaming'))
     release=root/'releases/v0.1.1'; release.mkdir(parents=True)
     previous=tmp_path/'old-release'; previous.mkdir()
     (root/'device.json').write_text(json.dumps({'release_root':str(previous),'python':'old-python','version':'0.1.0','vault':str(tmp_path/'vault'),'role':'maintainer'}))
@@ -30,7 +34,8 @@ def test_upgrade_readiness_has_a_bounded_deadline(tmp_path,monkeypatch):
     monkeypatch.setattr(updater,'wait_health',health)
     with pytest.raises(RuntimeError,match='synthetic new-service failure'): updater.main()
     new_stop=next(i for i,c in enumerate(calls) if c[-2:]==['service','stop'] and c[0]!='old-python')
-    restore=next(i for i,c in enumerate(calls) if len(c)>1 and c[1]==str(previous/'install.py'))
+    restore=next(i for i,c in enumerate(calls) if c[-2:]==['service','install'] and c[0]=='old-python')
     old_start=next(i for i,c in enumerate(calls) if c[-2:]==['service','start'] and c[0]=='old-python')
     assert new_stop<restore<old_start
     assert health_calls==['0.1.1','0.1.0']
+    assert not any(len(c)>1 and c[1]==str(previous/'install.py') for c in calls)

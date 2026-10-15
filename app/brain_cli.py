@@ -13,6 +13,8 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command',choices=['health','search','read','wiki','service'])
     parser.add_argument('action',nargs='?',default='status'); parser.add_argument('--limit',type=int,default=4)
+    parser.add_argument('--apply',action='store_true',help='Apply an explicitly reviewed legacy migration.')
+    parser.add_argument('--requeue-unverified',action='store_true',help='Keep unverified legacy parts pending instead of claiming completion.')
     args=parser.parse_args()
     if args.command=='health': result=asyncio.run(mcp_call('brain_health',{}))
     elif args.command=='search': result=asyncio.run(mcp_call('brain_search',{'query':args.action,'limit':args.limit}))
@@ -23,11 +25,12 @@ def main():
         elif args.action=='run': result=wiki.run(args.limit)
         elif args.action=='prepare': result=wiki.prepare(args.limit)
         elif args.action=='lint': result=wiki.lint()
+        elif args.action=='migrate':
+            result=wiki.migrate_legacy_receipts(requeue_unverified=args.requeue_unverified,dry_run=not args.apply)
+        elif args.action=='relink': result=wiki.rebuild_source_links()
         elif args.action=='retry':
-            cfg.require_maintainer()
-            with wiki.db() as conn: conn.execute('UPDATE sources SET error=NULL,attempts=0')
-            result={'status':'retry queue reset'}
-        else: parser.error('wiki action: status, run, prepare, lint, retry')
+            result=wiki.reset_retries()
+        else: parser.error('wiki action: status, run, prepare, lint, retry, migrate, relink')
     else:
         import brain_service as service
         if args.action=='install': result=service.install()
