@@ -622,8 +622,9 @@ def test_same_topic_with_malformed_claim_stops_for_integrity_attention(brain,mon
     target=s.safe_path(receipt['path']); info=w.meta(target.read_text()); info['wiki_claims'].append('preserve malformed legacy evidence')
     target.write_text(s.note_text(info,'# Existing derived page\n\nPreserve owner history.'),encoding='utf-8'); before=target.read_bytes()
     source.write_text(source.read_text()+'\nA later historical review remains pending.',encoding='utf-8')
-    packet=w.prepare(); fake_model(monkeypatch,explicit(packet,result))
-    with pytest.raises(Exception): w.run()
+    calls=fake_model(monkeypatch,result)
+    with pytest.raises(w.WikiIntegrityError): w.prepare()
+    assert w.run()['status']=='attention' and len(calls)==0
     saved=json.loads((cfg.STATE/'wiki-worker-status.json').read_text())
     assert saved['attention_required'] is True and saved['integrity_page']==receipt['path']
     assert target.read_bytes()==before and w.status()['pending_source_parts']==1

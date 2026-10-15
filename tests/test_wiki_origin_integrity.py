@@ -24,26 +24,28 @@ def topic_with_origin(brain,revision):
     info['wiki_claims'][0]['source_revision']=revision
     topic.write_bytes(s.note_text(info,'# Preserved existing topic and explicit attribution.').encode())
     another=source.with_name('Another.md'); another.write_bytes(source.read_bytes())
-    packet=w.prepare(); result=copy.deepcopy(result)
+    result=copy.deepcopy(result)
     result['pages'][0]['claims'][0]['source']=another.relative_to(s.VAULT).as_posix()
-    return source,another,topic,packet,result
+    return source,another,topic,result
 
 
 @pytest.mark.parametrize('revision',MALFORMED,ids=['null','list','string','bool','empty-map','bad-sha','bad-canonical-sha','bad-date'])
 def test_malformed_origin_enters_immediate_attention_without_strikes_or_note_writes(brain,monkeypatch,revision):
-    source,another,topic,packet,result=topic_with_origin(brain,revision)
+    source,another,topic,result=topic_with_origin(brain,revision)
     original={path.relative_to(s.VAULT).as_posix():path.read_bytes() for path in s.VAULT.rglob('*.md')}
-    calls=fake_model(monkeypatch,explicit(packet,result))
-    with pytest.raises(w.WikiIntegrityError) as caught: w.run()
+    plans=set((cfg.STATE/'wiki/batches').rglob('publication.json'))
+    calls=fake_model(monkeypatch,result)
+    with pytest.raises(w.WikiIntegrityError) as caught: w.prepare()
     assert caught.value.page==topic.relative_to(s.VAULT).as_posix() and caught.value.claim_index==0
+    assert w.run()['status']=='attention'
     worker=json.loads((cfg.STATE/'wiki-worker-status.json').read_text())
     assert worker['attention_required'] is True and worker['reason']=='WikiIntegrityError'
     assert worker['consecutive_failures']==0 and worker['backoff_seconds']==worker['retry_after']==0
-    assert w.run()['status']=='attention' and len(calls)==1
+    assert w.run()['status']=='attention' and len(calls)==0
     with w.db() as conn:
         assert conn.execute('SELECT count(*) FROM sources WHERE attempts>0').fetchone()[0]==0
-        assert conn.execute('SELECT attempts FROM batches WHERE id=?',(packet['batch_id'],)).fetchone()[0]==0
-    assert not (cfg.STATE/'wiki/batches'/packet['batch_id']/'publication.json').exists()
+        assert conn.execute('SELECT count(*) FROM batches WHERE attempts>0').fetchone()[0]==0
+    assert set((cfg.STATE/'wiki/batches').rglob('publication.json'))==plans
     assert original=={path.relative_to(s.VAULT).as_posix():path.read_bytes() for path in s.VAULT.rglob('*.md')}
     issues=w.lint()['issues']
     assert any(issue['issue']=='malformed source revision metadata' and issue['claim_index']==0 for issue in issues)
@@ -52,7 +54,7 @@ def test_malformed_origin_enters_immediate_attention_without_strikes_or_note_wri
 
 @pytest.mark.parametrize('revision',MALFORMED,ids=['null','list','string','bool','empty-map','bad-sha','bad-canonical-sha','bad-date'])
 def test_explicit_malformed_origin_never_uses_current_or_legacy_fallback(brain,monkeypatch,revision):
-    _,_,topic,_,_=topic_with_origin(brain,revision)
+    _,_,topic,_=topic_with_origin(brain,revision)
     info=w.meta(topic.read_text()); claim=info['wiki_claims'][0]
     monkeypatch.setattr(w._EvidenceHistory,'_git',lambda *_:pytest.fail('Malformed explicit origin must not use legacy Git fallback'))
     assert w._EvidenceHistory().claim({'path':topic.relative_to(s.VAULT).as_posix(),'meta':info},claim) is None

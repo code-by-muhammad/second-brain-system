@@ -82,6 +82,23 @@ def _valid_claim(claim):
 
 def _valid_source_revision(revision):
     return isinstance(revision,dict) and all(isinstance(revision.get(key),str) and re.fullmatch('[a-f0-9]{64}',revision[key]) for key in ('sha256','text_sha256')) and ('date' not in revision or isinstance(revision['date'],str))
+
+def _validate_existing_claims(page,claims):
+    if not isinstance(claims,list): raise WikiIntegrityError(page)
+    for index,claim in enumerate(claims):
+        if not _valid_claim(claim) or 'source_revision' in claim and not _valid_source_revision(claim['source_revision']):
+            raise WikiIntegrityError(page,index)
+        try:
+            # Historical source notes need not still exist. Validate the safe
+            # Markdown boundary and JSON context types without coercing dates.
+            s.safe_path(claim['source'])
+            json.dumps(claim,sort_keys=True,allow_nan=False)
+        except (ValueError,TypeError,RecursionError): raise WikiIntegrityError(page,index) from None
+
+def _existing_topic_title(page):
+    title=page['meta'].get('title',page['path'])
+    if not isinstance(title,str): raise WikiIntegrityError(page['path'])
+    return title
 def _list(value): return value if isinstance(value,list) else []
 def _tags(value): return [value] if isinstance(value,str) else _list(value)
 def _short_part(row): return len(normalized(row['text']).strip())<12
@@ -296,16 +313,19 @@ def prepare(limit=4):
     terms=set(re.findall(r'[a-z0-9]{4,}', ' '.join(x['title'] for x in chosen).lower()))
     relevant=[]; context_size=0
     for p in current:
-        if not any(t in p['meta'].get('title',p['path']).lower() for t in terms): continue
+        title=_existing_topic_title(p)
+        if not any(t in title.lower() for t in terms): continue
         compact={**p,'meta':{key:p['meta'].get(key) for key in ('title','wiki_kind')}}
         compact['claim_count']=len(_list(p['meta'].get('wiki_claims')))
         compact['meta']['wiki_claims']=_list(p['meta'].get('wiki_claims'))[-12:]
-        size=len(json.dumps(compact,default=str))
+        try: size=len(json.dumps(compact,default=str))
+        except (TypeError,ValueError,RecursionError): raise WikiIntegrityError(p['path']) from None
         if context_size+size>40000: continue
+        _validate_existing_claims(p['path'],p['meta'].get('wiki_claims',[]))
         relevant.append(compact); context_size+=size
         if len(relevant)>=8: break
     base_packet={'version':2,'sources':chosen,'current_pages':relevant,
-            'catalog':[{'path':p['path'],'title':p['meta'].get('title',p['path']),
+            'catalog':[{'path':p['path'],'title':_existing_topic_title(p),
                         'sha256':p['sha256'],'claim_count':len(_list(p['meta'].get('wiki_claims')))} for p in current]}
     if policy['present']: base_packet['source_policy_rules_sha256']=policy['rules_sha256']
     # An interrupted attempt keeps its identity. A completed deferred attempt is
@@ -763,10 +783,7 @@ def _render_topic(page,packet,ident,result_hash,history=None):
     if target.exists() and not old: raise WikiTransientError('Existing target was not supplied; re-prepare with that page.')
     if old and _current_hash(target)!=old['sha256']: raise WikiTransientError('Wiki page changed since prepare.')
     previous_claims=meta(target.read_text(encoding='utf-8')).get('wiki_claims',[]) if old else []
-    if not isinstance(previous_claims,list): raise WikiIntegrityError(rel)
-    for index,claim in enumerate(previous_claims):
-        if not _valid_claim(claim): raise WikiIntegrityError(rel,index)
-        if 'source_revision' in claim and not _valid_source_revision(claim['source_revision']): raise WikiIntegrityError(rel,index)
+    _validate_existing_claims(rel,previous_claims)
     history=history or _EvidenceHistory()
     claims=previous_claims+page['claims']
     unique={}
@@ -1147,6 +1164,12 @@ def run(limit=4,timeout=480):
         if packet is None:
             try: packet=prepare(limit)
             except WikiPolicyError as exc: return _policy_attention(exc)
+            except WikiIntegrityError as exc:
+                attention={'status':'attention','at':s.stamp(),'reason':'WikiIntegrityError','retry_after':0,'backoff_seconds':0,
+                           'consecutive_failures':saved.get('consecutive_failures',0),'attention_required':True,
+                           'integrity_page':exc.page,'claim_index':exc.claim_index,'manual_retry_required':True}
+                _atomic_json(worker_state,attention)
+                return attention
         if not packet: return {'status':'idle',**status()}
         folder=cfg.STATE/'wiki'/'batches'/packet['batch_id']; output=folder/'output.json'; schema=folder/'schema.json'
         short_sources=[row for row in packet['sources'] if _short_part(row)]
