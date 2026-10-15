@@ -140,7 +140,7 @@ def _valid_claim(claim):
 def _valid_source_revision(revision):
     return isinstance(revision,dict) and all(isinstance(revision.get(key),str) and re.fullmatch('[a-f0-9]{64}',revision[key]) for key in ('sha256','text_sha256')) and ('date' not in revision or isinstance(revision['date'],str))
 
-def _screen_decoded_context(value):
+def _screen_decoded_context(value,*,max_nodes=20000,max_depth=64):
     # JSON escaping changes the established detector's input. Inspect decoded
     # scalars and key/value associations too, with bounded, cycle-safe traversal.
     stack=[(value,0,False)]; active=set(); seen=set(); nodes=0; chars=0
@@ -149,7 +149,7 @@ def _screen_decoded_context(value):
         if leaving:
             active.remove(id(item)); seen.add(id(item)); continue
         nodes+=1
-        if nodes>20000 or depth>64: raise ValueError('Derived context exceeds structural bounds.')
+        if nodes>max_nodes or depth>max_depth: raise ValueError('Derived context exceeds structural bounds.')
         if isinstance(item,str):
             chars+=len(item)
             if chars>2_000_000: raise ValueError('Derived context exceeds text bounds.')
@@ -236,7 +236,9 @@ def _validate_packet_context(packet):
         # decoded string/association except the already authenticated source
         # slices; serializing their JSON would recreate the boundary regression.
         context={**packet,'sources':[{key:value for key,value in row.items() if key!='text'} for row in packet['sources']]}
-        _screen_decoded_context(context)
+        # Whole-packet screening shares the already accepted packet budget.
+        # Individual claims retain their narrower default20k/64 bounds.
+        _screen_decoded_context(context,max_nodes=100000,max_depth=128)
     except (ValueError,TypeError,RecursionError,UnicodeError):
         raise WikiIntegrityError(BASE+'Index.md',field='content') from None
 
@@ -732,9 +734,10 @@ def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
             try:
                 raw=journal.read_bytes(); saved=json.loads(raw.decode('utf-8'))
                 receipt=json.loads(batch['receipt'])
+                if not isinstance(saved,dict) or not isinstance(receipt,list) or any(not isinstance(item,dict) or not isinstance(item.get('path'),str) for item in receipt): raise ValueError('Invalid legacy journal/receipt shape.')
                 if saved.get('state')!='complete' or saved.get('receipts')!=receipt: raise ValueError('Database/journal receipt mismatch.')
                 verified_batches.append((batch,saved,receipt,s.digest(raw)))
-            except (OSError,ValueError,TypeError):
+            except (OSError,ValueError,TypeError,AttributeError,RecursionError):
                 rejected.append({'batch_id':batch['id'],'reason':'complete local journal/database receipt unavailable or mismatched'})
         source_parts={}
         for row in rows.values(): source_parts.setdefault(row['path'],[]).append(row)
@@ -752,12 +755,14 @@ def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
             exact_packet=False
             try:
                 packet=json.loads(packet_path.read_text(encoding='utf-8'))
+                if not isinstance(packet,dict) or not isinstance(packet.get('sources'),list): raise ValueError('Invalid legacy packet shape.')
                 selected=[]
                 for original in packet['sources']:
+                    if not isinstance(original,dict) or not isinstance(original.get('text'),str): raise ValueError('Invalid legacy source row.')
                     row=candidates.get(original.get('job_key'))
                     if row and _source_identity(original)==_source_identity(row): selected.append(row)
                 exact_packet=True
-            except (OSError,ValueError,KeyError,TypeError):
+            except (OSError,ValueError,KeyError,TypeError,AttributeError,RecursionError):
                 # This fallback still needs local per-part completion plus an
                 # actual preserved claim from a receipt-verified topic page.
                 selected=list(candidates.values())
@@ -770,7 +775,7 @@ def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
                     output=json.loads((packet_path.parent/'output.json').read_text(encoding='utf-8'))
                     _validate_shape(output)
                     output_proofs={BASE+page['category']+'/'+page['slug']+'.md':{_claim_hash(claim) for claim in page['claims']} for page in output['pages']}
-                except (OSError,ValueError,TypeError,KeyError): pass
+                except (OSError,ValueError,TypeError,KeyError,AttributeError,RecursionError): pass
             for row in selected:
                 if row['job_key'] in covered: continue
                 proofs=[]
@@ -1403,7 +1408,7 @@ def _hold_prior_publication(packet,publication,plan=None):
         if not journal.exists(): return
         value=json.loads(journal.read_text(encoding='utf-8'))
         recorded=bool(_publication_hold_records(plan,value))
-        if value.get('state')=='applying' and not recorded and value.get('semantic_intent_version')!=1:
+        if value.get('state')=='applying' and not recorded and (value.get('semantic_intent_version')!=1 or value.get('legacy_semantic_ambiguity') is True):
             # Old empty/archives-only progress cannot prove whether the next
             # semantic replacement preceded a crash. Hold changed context;
             # this ambiguity never grants publication authority.
@@ -1485,7 +1490,12 @@ def apply(packet,result):
                 raise _publication_conflict(write['path'])
         receipts=[]; progress=[]
         try:
-            prior_semantic=_publication_hold_records(plan,json.loads(journal.read_text(encoding='utf-8'))) if journal.exists() else []
+            saved_progress=json.loads(journal.read_text(encoding='utf-8')) if journal.exists() else None
+            prior_semantic=_publication_hold_records(plan,saved_progress) if saved_progress is not None else []
+            # Legacy applying journals cannot disprove a replace-before-journal
+            # crash. Carry that uncertainty across upgrades and all checkpoints;
+            # it is a hold-only marker, never publication or policy authority.
+            legacy_ambiguity=bool(saved_progress is not None and saved_progress.get('state')=='applying' and (saved_progress.get('semantic_intent_version')!=1 or saved_progress.get('legacy_semantic_ambiguity') is True))
         except (OSError,ValueError,KeyError,TypeError,RecursionError): raise _recovery_integrity(ident) from None
         # Preserve observed afterimages and older hold-only history before a
         # replay resets its progress journal. Owner edits must not erase it.
@@ -1494,7 +1504,7 @@ def apply(packet,result):
             if write['kind']!='wiki_log_archive' and write['before']!=write['after'] and _current_hash(_publication_target(write['path']))==write['after']:
                 known.add((write['path'],write['after']))
         prior_semantic=[{'path':path,'sha256':digest} for path,digest in sorted(known)]
-        _atomic_json(journal,{'version':2,'state':'applying','semantic_intent_version':1,'packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress,'prior_semantic':prior_semantic})
+        _atomic_json(journal,{'version':2,'state':'applying','semantic_intent_version':1,'packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress,'prior_semantic':prior_semantic,'legacy_semantic_ambiguity':legacy_ambiguity})
         for write in plan['writes']:
             _hold_prior_publication(packet,publication,plan)
             _assert_source_policy(packet,allow_durable=_publication_started(plan))
@@ -1503,7 +1513,7 @@ def apply(packet,result):
                 receipt={'path':write['path'],'status':'recovered','sha256':write['after']}
             else:
                 if _current_hash(target)!=write['before']: raise _publication_conflict(write['path'])
-                checkpoint={'version':2,'state':'applying','semantic_intent_version':1,'packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress,'prior_semantic':prior_semantic}
+                checkpoint={'version':2,'state':'applying','semantic_intent_version':1,'packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress,'prior_semantic':prior_semantic,'legacy_semantic_ambiguity':legacy_ambiguity}
                 semantic=write['kind']!='wiki_log_archive' and write['before']!=write['after']
                 if semantic: _atomic_json(journal,{**checkpoint,'in_flight':{'path':write['path'],'sha256':write['after']}})
                 try:
@@ -1520,7 +1530,7 @@ def apply(packet,result):
                     raise
             if write['path'] in plan['topic_paths']: receipts.append(receipt)
             progress.append({'path':write['path'],'sha256':write['after']})
-            _atomic_json(journal,{'version':2,'state':'applying','semantic_intent_version':1,'packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress,'prior_semantic':prior_semantic})
+            _atomic_json(journal,{'version':2,'state':'applying','semantic_intent_version':1,'packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress,'prior_semantic':prior_semantic,'legacy_semantic_ambiguity':legacy_ambiguity})
         _atomic_json(journal,{'version':2,'state':'published','packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'receipts':receipts})
         _finish_database(packet,plan,receipts)
         _atomic_json(journal,{'version':2,'state':'complete','packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'receipts':receipts})
@@ -1791,6 +1801,12 @@ def _resume_packet(policy=None):
             if any(_current_hash(s.safe_path(row['path']))!=row['sha256'] or
                    any(actual['path']==row['path'] and actual['sha256']!=row['sha256'] for actual in canonical.values())
                    for row in packet['sources']):
+                with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('stale',s.stamp(),batch['id']))
+                continue
+            # Filesystem aliases/renames or temporary inventory omissions are
+            # stale unused selection, not corruption of a present source part.
+            current_paths={actual['path'] for actual in canonical.values()}
+            if any(row['path'] not in current_paths for row in packet['sources']):
                 with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('stale',s.stamp(),batch['id']))
                 continue
             for row in packet['sources']:

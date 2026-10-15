@@ -200,9 +200,21 @@ Recovery attention includes a validated `batch_id` when available. Inspect only 
 
 Older applying journals with empty or archive-only progress cannot distinguish a crash after semantic replacement from an ordinary pre-write failure. Changed source/policy/catalog/derived context therefore requires conservative owner review. Current journals record a semantic write intent before replacement; an abrupt process termination retains that intent. A normal caught pre-write failure clears it only when the target still matches its recorded before-image. Archive creation alone remains unused work, and repeated retry cannot release a genuine unfinished transaction.
 
+When replay upgrades an older applying journal, that uncertainty remains recorded through all applying checkpoints and retries. The marker only requires reconciliation; it cannot authorize an overwrite or exempt a source from policy. Preserve the original journal and current owner bytes even if a later checkpoint carries the current intent version.
+
 The existing database-complete, missing-plan legacy quarantine remains separate. It does not assert a verified final journal and still requires explicit migration/review; the new unfinished-plan hold does not replace that older recovery contract.
 
 `content` attention before a model request identifies invalid saved model context, such as a possible credential, NUL or invalid UTF-8 string. Keep the affected batch and its evidence for local review. Redact genuine credentials in their authoritative source deliberately; restore saved state only from matching verified evidence. Do not disable credential screening or edit private hashes to clear the diagnostic. Ordinary long words spanning a source-part boundary remain valid because full-source screening and canonical part verification preserve their original context.
+
+Packet-wide screening uses the existing 100,000-node/depth-128 structural envelope and 2,000,000-character packet cap. Individual claims retain their smaller 20,000-node/depth-64 bounds. The model still receives only the bounded selected catalog, so growing the local wiki does not send the full catalog on every request. Unsupported extreme input remains attention; a valid large catalog or valid claim wrapper alone does not require owner repair.
+
+An unused saved packet whose canonical source path disappeared is refreshed from current inventory, including a case-only rename on Windows. A wrong part identity for a still-present source remains recovery attention. A genuine unfinished publication retains its stricter source/owner reconciliation hold.
+
+Case-only source renames need an explicit reviewed Git rename before sharing them. On a case-insensitive filesystem, a filename changed only in Explorer/Finder may look correct locally while Git still records the old spelling; a case-sensitive device then cannot resolve the compiled evidence link. Synchronization pauses when tracked and actual path spellings disagree. Preserve all files, review the intended old/new names, and use two explicit `git mv` steps through a unique temporary name followed by an owner-reviewed rename commit. Recheck tracked paths and lint before the existing maintenance service resumes. Do not change `core.ignorecase`, delete a source, or stage unrelated work to clear the pause. Directory casing needs the same deliberate reconciliation.
+
+For a saved-state path refusal, use the validated `batch_id` to inspect that device's preserved batch folder. The path-SHA lookup below applies only when status or lint actually supplies `path_sha256`; Index may be a generic safe locator rather than the filename that needs repair. Do not guess a target from that locator.
+
+Legacy receipt migration treats malformed or deeply nested journals as unverified instead of crashing or deleting them. Missing/corrupt input or output can use only independently verified existing completion/claim evidence; it does not establish a new final receipt. Keep the artifacts, inspect the migration report and reconcile verified evidence before deliberately requeuing anything.
 
 ### Local path-SHA lookup
 

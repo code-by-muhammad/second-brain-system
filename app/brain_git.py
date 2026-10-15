@@ -78,6 +78,41 @@ def _note_locator(relative):
         digest=hashlib.sha256(relative.encode('utf-8','surrogatepass')).hexdigest()
         return '[withheld locator; path_sha256='+digest+']'
 
+def _worktree_case_path(vault,relative,directories):
+    """Find case-only aliases from actual directory entries, without note reads.
+
+    resolve() can retain an obsolete spelling on a case-insensitive filesystem.
+    Inspect only parents of tracked notes, caching shared directory listings.
+    Missing paths on a case-sensitive filesystem retain normal deletion review.
+    Links are left to the existing linked-note guard, never traversed here.
+    """
+    directory=vault; actual=[]
+    for part in relative.split('/'):
+        if directory.is_symlink() or os.path.isjunction(directory): return None
+        try:
+            if directory not in directories:
+                with os.scandir(directory) as entries:
+                    directories[directory]=frozenset(entry.name for entry in entries)
+            names=directories[directory]
+        except OSError:
+            raise GitSyncError('Tracked note path casing could not be inspected; local changes preserved for review.') from None
+        name=part if part in names else None
+        if name is None:
+            expected=directory/part
+            for candidate in names:
+                if candidate.casefold()!=part.casefold(): continue
+                target=directory/candidate
+                if target.is_symlink() or os.path.isjunction(target): continue
+                try:
+                    if expected.samefile(target): name=candidate; break
+                except OSError: continue
+            if name is None: return None
+        directory=directory/name
+        if directory.is_symlink() or os.path.isjunction(directory): return None
+        actual.append(name)
+    spelling='/'.join(actual)
+    return spelling if directory.is_file() and spelling!=relative else None
+
 def _archive_failure(relative,reason):
     descriptions={'credentials':'possible credential; redact before syncing',
                   'characters':'invalid characters',
@@ -151,6 +186,15 @@ def sync(vault=None):
     def paths_input(paths):
         return ''.join(path+'\0' for path in paths)
 
+    def casing_pause():
+        directories={}
+        for rel in index_entries():
+            if rel.split('/')[0] not in FOLDERS or not rel.lower().endswith('.md'): continue
+            actual=_worktree_case_path(vault,rel,directories)
+            if actual is not None:
+                return ('paused: tracked Markdown path casing differs from disk: '+_note_locator(rel)+
+                        ' -> '+_note_locator(actual)+'. Reconcile with an explicit Git rename and owner commit before syncing.')
+
     def undo_owned_staging(owned):
         # A hook or external Git client may stage other files (or a new version of
         # the same file). Only remove entries still identical to our own snapshot.
@@ -174,6 +218,7 @@ def sync(vault=None):
             raise GitSyncError('Git >= 2.38 is required for safe merge-tree preflight; upgrade Git before synchronization.')
         with FileLock(str(s.STATE/'writer.lock'),timeout=30):
             if staged_paths(): return 'paused: existing staged changes preserved'
+            if pause:=casing_pause(): return pause
             candidates=git('ls-files','--modified','--others','--exclude-standard','-z').stdout.split('\0')
             eligible=[]; archives={}
             for rel in dict.fromkeys(candidates):
@@ -237,6 +282,7 @@ def sync(vault=None):
                     raise GitSyncError('Git merge-tree preflight failed (exit '+str(result.returncode)+'); Git >= 2.38 is required. Inspect repository health; originals preserved.')
                 git('merge','--no-edit',upstream)
             elif behind: git('merge','--ff-only',upstream)
+            if pause:=casing_pause(): return pause
             head=git('rev-parse','HEAD').stdout.strip()
             branch=upstream_ref.removeprefix('refs/remotes/origin/')
         # Pin the verified commit; unrelated external commits made during network
