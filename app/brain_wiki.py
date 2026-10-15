@@ -652,8 +652,8 @@ def _receipt_note(ident,entries,kind='compiler'):
 def _verified_entries(payload,rows,claim_cache):
     verified=[]
     for entry in _list(payload.get('parts')):
-        if not isinstance(entry,dict): continue
-        row=rows.get(entry.get('job_key'))
+        if not isinstance(entry,dict) or not isinstance(entry.get('job_key'),str): continue
+        row=rows.get(entry['job_key'])
         if not row or any(entry.get(k)!=v for k,v in _portable_identity(row).items()): continue
         if not isinstance(entry.get('sha256'),str) or not re.fullmatch('[a-f0-9]{64}',entry['sha256']): continue
         if entry.get('status')=='published':
@@ -1372,7 +1372,7 @@ def _saved_publication_started(packet,publication):
 
 def _publication_hold_records(plan,value):
     """Carry only plan-matching historical markers; they confer no write authority."""
-    if not isinstance(value,dict) or value.get('packet_sha256')!=plan['packet_sha256'] or value.get('result_sha256')!=plan['result_sha256'] or value.get('entries')!=plan['entries']:
+    if not isinstance(value,dict) or not isinstance(value.get('state'),str) or value['state'] not in ('applying','published','complete') or value.get('packet_sha256')!=plan['packet_sha256'] or value.get('result_sha256')!=plan['result_sha256'] or value.get('entries')!=plan['entries']:
         raise _recovery_integrity(plan['batch_id'])
     semantic={(write['path'],write['after']) for write in plan['writes'] if write['kind']!='wiki_log_archive' and write['before']!=write['after']}
     records=set()
@@ -1516,16 +1516,21 @@ def apply(packet,result):
                 checkpoint={'version':2,'state':'applying','semantic_intent_version':1,'packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress,'prior_semantic':prior_semantic,'legacy_semantic_ambiguity':legacy_ambiguity}
                 semantic=write['kind']!='wiki_log_archive' and write['before']!=write['after']
                 if semantic: _atomic_json(journal,{**checkpoint,'in_flight':{'path':write['path'],'sha256':write['after']}})
+                returned_afterimage=False
                 try:
                     if write['kind']=='wiki_log_archive': receipt=_stream_publish(write,_archive_payload(plan,packet))
                     elif plan['version']==3 and write['kind']=='wiki_log': receipt=_stream_publish(write)
                     else: receipt=s._write(target,write['text'],write['kind'],write['before'])
-                    if receipt.get('sha256')!=write['after'] or _current_hash(target)!=write['after']:
+                    returned_afterimage=receipt.get('sha256')==write['after']
+                    if not returned_afterimage or _current_hash(target)!=write['after']:
                         raise OSError('Published note does not match the durable planned hash.')
-                except Exception:
-                    # Ordinary caught pre-write failure is distinguishable from
-                    # abrupt process termination. BaseException keeps intent.
-                    if semantic and _current_hash(target)==write['before']:
+                except Exception as error:
+                    if returned_afterimage: error._brain_note_replaced=True
+                    # Clear only proven pre-write intent. A completed replacement
+                    # or matching returned receipt remains history even if an
+                    # owner restores the before-image before verification.
+                    # BaseException also keeps intent without reclassification.
+                    if semantic and not returned_afterimage and not getattr(error,'_brain_note_replaced',False) and _current_hash(target)==write['before']:
                         _atomic_json(journal,{**checkpoint,'attempted_without_write':{'path':write['path'],'sha256':write['after']}})
                     raise
             if write['path'] in plan['topic_paths']: receipts.append(receipt)
@@ -1968,6 +1973,7 @@ def run(limit=4,timeout=480):
             return {'status':'complete','batch_id':packet['batch_id'],'receipts':receipts,'lint':lint(),
                     'recovered_excluded_source_parts':recovered_excluded}
         except Exception as exc:
+            post_replace_error=exc if getattr(exc,'_brain_note_replaced',False) else None
             if not isinstance(exc,WikiIntegrityError):
                 try: _hold_prior_publication(packet,folder/'publication.json')
                 except WikiIntegrityError as recovery: exc=recovery
@@ -2019,4 +2025,6 @@ def run(limit=4,timeout=480):
                     integrity_field='publication_cas' if partial else 'unused_publication_cas',
                     recovery_action='resolve_saved_publication_cas_then_retry' if partial else 'retry_fresh_generation_preserving_owner_edits')
             _atomic_json(worker_state,worker_receipt)
-            raise exc
+            # Report the original post-replacement failure while retaining the
+            # controlled recovery hold in public/private worker state.
+            raise post_replace_error if post_replace_error is not None else exc

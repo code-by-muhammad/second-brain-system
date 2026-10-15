@@ -69,14 +69,23 @@ def _write(p:Path,text:str,kind:str,expected_sha256:str|None=None):
         if not archive.exists(): archive.write_bytes(old)
     p.parent.mkdir(parents=True,exist_ok=True)
     fd,tmp=tempfile.mkstemp(prefix='.brain-',suffix='.tmp',dir=p.parent)
+    replaced=False
     try:
-        with os.fdopen(fd,'wb') as f: f.write(raw); f.flush(); os.fsync(f.fileno())
-        os.replace(tmp,p)
-    finally:
-        if os.path.exists(tmp): os.unlink(tmp)
-    entry={'at':stamp(),'action':kind,'path':p.relative_to(VAULT).as_posix(),'before':before,'after':digest(raw)}
-    with (STATE/'audit.jsonl').open('a',encoding='utf-8') as f: f.write(json.dumps(entry)+'\n')
-    return {'path':entry['path'],'status':'saved','sha256':entry['after'],'saved_at':entry['at']}
+        try:
+            with os.fdopen(fd,'wb') as f: f.write(raw); f.flush(); os.fsync(f.fileno())
+            os.replace(tmp,p)
+            replaced=True
+        finally:
+            if os.path.exists(tmp): os.unlink(tmp)
+        entry={'at':stamp(),'action':kind,'path':p.relative_to(VAULT).as_posix(),'before':before,'after':digest(raw)}
+        with (STATE/'audit.jsonl').open('a',encoding='utf-8') as f: f.write(json.dumps(entry)+'\n')
+        return {'path':entry['path'],'status':'saved','sha256':entry['after'],'saved_at':entry['at']}
+    except Exception as error:
+        # Preserve the original exception and the known replacement outcome.
+        # Callers may retain recovery intent; this does not authorize replay.
+        if replaced: error._brain_note_replaced=True
+        raise
+
 
 def capture(event_id:str,title:str,outcome:str,source_app:str,source_reference:str,
             project:str='',decisions:list[str]|None=None,next_steps:list[str]|None=None,
