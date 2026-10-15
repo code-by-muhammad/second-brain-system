@@ -4,7 +4,7 @@ import argparse, hashlib, json, os, secrets, shutil, stat, subprocess, sys, temp
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
-VERSION='0.1.6'
+VERSION='0.1.7'
 
 def private(path,directory=False):
     """Restrict a local state object before putting private content in it."""

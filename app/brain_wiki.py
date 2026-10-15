@@ -8,8 +8,10 @@ from filelock import FileLock, Timeout as LockTimeout
 from brain_markdown import frontmatter
 import brain_store as s
 import brain_settings as cfg
+_GIT_POPEN=subprocess.Popen  # Keep read-only evidence processes separate from the model runner.
 
 BASE='02-Areas/AI-Memory/Wiki/'
+SOURCE_POLICY='02-Areas/AI-Memory/Wiki-Source-Policy.md'
 SOURCE_ROOTS=('00-Inbox','01-Projects','02-Areas','03-Resources','04-Archive','06-People','07-Meetings')
 KINDS=('Projects','People','Concepts','Decisions','Experience')
 SHORT_PART_REASON='Deterministic skip: this exact source part contains fewer than 12 characters after trimming whitespace and cannot support a substantive evidence quote.'
@@ -42,6 +44,15 @@ class WikiIntegrityError(WikiOutputError):
     def __init__(self,page,claim_index=None):
         super().__init__('Existing derived wiki metadata requires owner review before merging this topic.')
         self.page=page; self.claim_index=claim_index
+
+class WikiPolicyError(ValueError):
+    """A shared source policy must be repaired before trusting the wiki queue."""
+    def __init__(self,reason,sha256=None):
+        super().__init__('Repair '+SOURCE_POLICY+': '+reason)
+        self.reason=reason; self.sha256=sha256
+
+class WikiPolicyChanged(WikiTransientError):
+    """New owner exclusions supersede unused work without blaming its sources."""
 
 def _validate_shape(result,schema=None):
     from jsonschema import validate,ValidationError
@@ -120,12 +131,86 @@ def db():
             yield conn
     finally: conn.close()
 
-def inventory():
+def source_policy():
+    """Strict shared JSON rules; no keyword heuristics or original-note edits."""
+    raw=None
+    try:
+        path=s.safe_path(SOURCE_POLICY)
+        if not path.exists():
+            return {'path':SOURCE_POLICY,'present':False,'sha256':None,'rules_sha256':None,
+                    'version':1,'exclude_paths':[],'exclude_prefixes':[]}
+        if not path.is_file() or path.stat().st_size>131072: raise ValueError('policy must be a regular Markdown file no larger than 128 KiB')
+        raw=path.read_bytes()
+        if len(raw)>131072: raise ValueError('policy exceeds 128 KiB')
+        lines=normalized(raw.decode('utf-8-sig')).splitlines()
+        fences=[i for i,line in enumerate(lines) if re.match(r'^\s*(?:```|~~~)',line)]
+        if len(fences)!=2 or lines[fences[0]]!='```json' or lines[fences[1]]!='```':
+            raise ValueError('provide exactly one unindented fenced json object and no other fenced blocks')
+        def pairs(items):
+            result={}
+            for key,value in items:
+                if key in result: raise ValueError('duplicate JSON object keys are forbidden')
+                result[key]=value
+            return result
+        def constant(value): raise ValueError('nonfinite JSON constants are forbidden')
+        rules=json.loads('\n'.join(lines[fences[0]+1:fences[1]]),object_pairs_hook=pairs,parse_constant=constant)
+        if not isinstance(rules,dict) or set(rules)!={'version','exclude_paths','exclude_prefixes'} or type(rules['version']) is not int or rules['version']!=1:
+            raise ValueError('required keys are version (integer 1), exclude_paths and exclude_prefixes only')
+        if any(not isinstance(rules[key],list) for key in ('exclude_paths','exclude_prefixes')):
+            raise ValueError('exclude_paths and exclude_prefixes must be JSON arrays')
+        if len(rules['exclude_paths'])+len(rules['exclude_prefixes'])>2048: raise ValueError('at most 2048 exclusion rules are allowed')
+        for key in ('exclude_paths','exclude_prefixes'):
+            values=rules[key]
+            if any(not isinstance(value,str) for value in values): raise ValueError('every exclusion rule must be a string')
+            if len(set(values))!=len(values): raise ValueError('duplicate exclusion rules are forbidden')
+            for value in values:
+                if not value or len(value)>400 or '\\' in value or any(ord(c)<32 or ord(c)==127 for c in value) or any(c in value for c in '*?[]'):
+                    raise ValueError('use literal forward-slash vault paths of at most 400 characters without controls or globs')
+                if value.split('/')[0] not in SOURCE_ROOTS or value.startswith('02-Areas/AI-Memory/'):
+                    raise ValueError('rules must target original source roots, outside derived AI-Memory')
+                if key=='exclude_paths':
+                    if not value.endswith('.md'): raise ValueError('exact paths must end with lowercase .md')
+                    s.safe_path(value)
+                else:
+                    if not value.endswith('/'): raise ValueError('directory prefixes must end with a forward slash')
+                    s.safe_path(value+'x.md')
+            rules[key]=sorted(values)
+        return {'path':SOURCE_POLICY,'present':True,'sha256':s.digest(raw),'rules_sha256':_json_hash(rules),**rules}
+    except (OSError,ValueError,UnicodeError,RecursionError) as exc:
+        # Do not put raw JSON, source names or parser excerpts in diagnostics.
+        reason=str(exc) if type(exc) is ValueError else 'policy is unreadable or invalid UTF-8/JSON'
+        raise WikiPolicyError(reason,s.digest(raw) if raw is not None else None) from None
+
+def _policy_summary(policy):
+    return {key:policy[key] for key in ('path','present','sha256','rules_sha256')} | {
+        'valid':True,'exclude_path_count':len(policy['exclude_paths']),'exclude_prefix_count':len(policy['exclude_prefixes']),
+        'matching':'case-sensitive exact paths and slash-terminated directory prefixes'}
+
+def _policy_excluded(path,policy):
+    return path in policy['exclude_paths'] or any(path.startswith(prefix) for prefix in policy['exclude_prefixes'])
+
+def _policy_attention(exc):
+    return {'status':'attention','attention_required':True,'reason':str(exc),
+            'source_policy':{'path':SOURCE_POLICY,'valid':False,'sha256':exc.sha256,'issue':exc.reason},
+            'eligible_sources':None,'eligible_source_parts':None,'pending_sources':None,'pending_source_parts':None,'ready_source_parts':None,
+            'excluded_sources':None,'excluded_source_parts':None,'excluded_pending_source_parts':None,
+            'portable_receipt_parts':None,'eligible_portable_receipt_parts':None,'excluded_verified_source_parts':None,
+            'worker':{'status':'attention','attention_required':True,'reason':'WikiPolicyError'},'role':cfg.ROLE}
+
+def _assert_source_policy(packet,allow_durable=False):
+    policy=source_policy()
+    if not allow_durable and any(_policy_excluded(row['path'],policy) for row in packet['sources']):
+        raise WikiPolicyChanged('A selected source is excluded by the current shared source policy; saved unused work must be superseded.')
+    return policy
+
+def inventory(include_excluded=False,policy=None):
+    policy=source_policy() if policy is None else policy
     result=[]
     for root in SOURCE_ROOTS:
         for p in (s.VAULT/root).rglob('*.md'):
             rel=p.relative_to(s.VAULT).as_posix()
             if rel.startswith('02-Areas/AI-Memory/'): continue
+            if not include_excluded and _policy_excluded(rel,policy): continue
             try:
                 if p.stat().st_size>2_000_000: continue
                 s.safe_path(rel)
@@ -142,8 +227,13 @@ def inventory():
     return sorted(result,key=lambda x:(0 if x['path'].startswith('01-Projects/') else 1 if x['path'].startswith('00-Inbox/') else 2,x['path'],x['part']))
 
 def status():
-    sources=inventory()
-    portable=_hydrate_receipts(sources)
+    try: policy=source_policy()
+    except WikiPolicyError as exc: return _policy_attention(exc)
+    all_sources=inventory(include_excluded=True,policy=policy)
+    sources=[row for row in all_sources if not _policy_excluded(row['path'],policy)]
+    excluded=[row for row in all_sources if _policy_excluded(row['path'],policy)]
+    portable=_hydrate_receipts(all_sources)
+    verified=set(portable['verified_job_keys'])
     with db() as conn:
         processed={r['path']:dict(r) for r in conn.execute('SELECT * FROM sources')}
         states={r['status']:r['n'] for r in conn.execute('SELECT status,count(*) n FROM batches GROUP BY status')}
@@ -157,6 +247,11 @@ def status():
             'ready_source_parts':len(eligible),'deferred_source_parts':sum(processed.get(x['job_key'],{}).get('deferred_until',0)>time.time() for x in pending),
             'batches':states,'failed_source_parts':sum(bool(processed.get(x['job_key'],{}).get('error')) and processed.get(x['job_key'],{}).get('attempt_hash')==x['sha256'] for x in pending),
             'portable_receipt_parts':portable['verified_parts'],'receipt_issue_count':len(portable['issues']),'receipt_issues':portable['issues'][:20],
+            'eligible_portable_receipt_parts':sum(row['job_key'] in verified for row in sources),
+            'excluded_verified_source_parts':sum(row['job_key'] in verified for row in excluded),
+            'excluded_sources':len({row['path'] for row in excluded}),'excluded_source_parts':len(excluded),
+            'excluded_pending_source_parts':sum(processed.get(row['job_key'],{}).get('processed_hash')!=row['sha256'] for row in excluded),
+            'source_policy':_policy_summary(policy),
             'worker':_worker_summary(),
             'recovery_issue_count':recovery_count,'recovery_issues':recovery,
             'role':cfg.ROLE,'oversize_policy':'notes up to 2 MB split into overlapping bounded parts; credential-like sources excluded'}
@@ -182,7 +277,9 @@ def pages(issues=None):
 
 def prepare(limit=4):
     cfg.require_maintainer()
-    sources=inventory(); _hydrate_receipts(sources)
+    policy=source_policy()
+    all_sources=inventory(include_excluded=True,policy=policy); _hydrate_receipts(all_sources)
+    sources=[row for row in all_sources if not _policy_excluded(row['path'],policy)]
     with db() as conn: old={r['path']:dict(r) for r in conn.execute('SELECT * FROM sources')}
     changed=[x for x in sources if _eligible(x,old.get(x['job_key'],{}))]
     chosen=[]; size=0
@@ -207,6 +304,7 @@ def prepare(limit=4):
     base_packet={'version':2,'sources':chosen,'current_pages':relevant,
             'catalog':[{'path':p['path'],'title':p['meta'].get('title',p['path']),
                         'sha256':p['sha256'],'claim_count':len(_list(p['meta'].get('wiki_claims')))} for p in current]}
+    if policy['present']: base_packet['source_policy_rules_sha256']=policy['rules_sha256']
     # An interrupted attempt keeps its identity. A completed deferred attempt is
     # history: a newly eligible retry must receive another immutable receipt ID.
     generation=0
@@ -280,6 +378,10 @@ def _validate(packet, result,require_dispositions=True):
 def _source_identity(row):
     return {key:row[key] for key in ('path','job_key','part','parts','sha256')} | {'part_sha256':s.digest(normalized(row['text']).encode())}
 
+def _portable_identity(row):
+    identity=_source_identity(row)
+    return {key:identity[key] for key in ('path','job_key','part','part_sha256')}
+
 def _receipt_entries(packet,result,dispositions):
     entries=[]
     for row in packet['sources']:
@@ -301,7 +403,8 @@ def _verified_entries(payload,rows,claim_cache):
     for entry in _list(payload.get('parts')):
         if not isinstance(entry,dict): continue
         row=rows.get(entry.get('job_key'))
-        if not row or any(entry.get(k)!=v for k,v in _source_identity(row).items()): continue
+        if not row or any(entry.get(k)!=v for k,v in _portable_identity(row).items()): continue
+        if not isinstance(entry.get('sha256'),str) or not re.fullmatch('[a-f0-9]{64}',entry['sha256']): continue
         if entry.get('status')=='published':
             good=True; count=0
             for proof in _list(entry.get('proofs')):
@@ -350,8 +453,9 @@ def _hydrate_receipts(sources):
     if verified:
         with db() as conn:
             for entry in verified:
-                conn.execute('INSERT INTO sources(path,processed_hash,error,attempts,attempt_hash,deferred_until) VALUES(?,?,NULL,0,NULL,0) ON CONFLICT(path) DO UPDATE SET processed_hash=excluded.processed_hash,error=NULL,attempts=0,attempt_hash=NULL,deferred_until=0',(entry['job_key'],entry['sha256']))
-    return {'verified_parts':len({entry['job_key'] for entry in verified}),'issues':issues}
+                conn.execute('INSERT INTO sources(path,processed_hash,error,attempts,attempt_hash,deferred_until) VALUES(?,?,NULL,0,NULL,0) ON CONFLICT(path) DO UPDATE SET processed_hash=excluded.processed_hash,error=NULL,attempts=0,attempt_hash=NULL,deferred_until=0',(entry['job_key'],rows[entry['job_key']]['sha256']))
+    verified_keys=sorted({entry['job_key'] for entry in verified})
+    return {'verified_parts':len(verified_keys),'verified_job_keys':verified_keys,'issues':issues}
 
 def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
     """Explicit, audited upgrade step; never infer part coverage from Source notes.
@@ -363,7 +467,7 @@ def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
     """
     cfg.require_maintainer()
     with FileLock(str(cfg.STATE/'writer.lock'),timeout=30):
-        rows={row['job_key']:row for row in inventory()}; cache=_claim_cache()
+        rows={row['job_key']:row for row in inventory(include_excluded=True)}; cache=_claim_cache()
         with db() as conn:
             local={row['path']:dict(row) for row in conn.execute('SELECT * FROM sources')}
             batches=[dict(row) for row in conn.execute("SELECT * FROM batches WHERE status IN ('complete','legacy_unverified')")]
@@ -485,11 +589,142 @@ def rebuild_source_links():
 
 def _current_hash(path): return s.digest(path.read_bytes()) if path.exists() else None
 
+def _source_bytes(raw):
+    text=normalized(raw.decode('utf-8-sig'))
+    variants={s.digest(raw):'exact'}
+    for newline,label in (('\n','LF'),('\r\n','CRLF'),('\r','CR')):
+        encoded=text.replace('\n',newline).encode('utf-8')
+        variants.setdefault(s.digest(encoded),label)
+        variants.setdefault(s.digest(b'\xef\xbb\xbf'+encoded),label+'+BOM')
+    return {'text':text,'variants':variants,'text_sha256':s.digest(text.encode()),
+            'date':str(meta(text).get('date','unknown'))[:10]}
+
+class _EvidenceHistory:
+    """Read-only, bounded Git evidence. No filters, network, or receipt attestation.
+
+    At most 64 commits per path, 256 Git commands, 16 MB of blob bytes and
+    15 seconds per verification pass. Caches exist only for this invocation.
+    """
+    def __init__(self):
+        self.deadline=time.monotonic()+15; self.commands=0; self.bytes=0
+        self.logs={}; self.blobs={}; self.current={}; self.current_bytes=0; self.results={}; self.topic_origins={}
+
+    def _git(self,*args):
+        remaining=self.deadline-time.monotonic()
+        if remaining<=0 or self.commands>=256: return None
+        self.commands+=1
+        env=os.environ.copy()
+        # The empty protocol allowlist also prevents promised-object transport
+        # on supported older Git releases without GIT_NO_LAZY_FETCH.
+        env.update(GIT_OPTIONAL_LOCKS='0',GIT_TERMINAL_PROMPT='0',GIT_NO_LAZY_FETCH='1',GIT_ALLOW_PROTOCOL='')
+        try:
+            with _GIT_POPEN(['git','--no-pager','--literal-pathspecs','-c','log.showSignature=false','-C',str(s.VAULT),*args],
+                            stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=env,**cfg.child_options()) as proc:
+                try: stdout,_=proc.communicate(timeout=min(3,remaining))
+                except subprocess.TimeoutExpired:
+                    proc.kill(); proc.communicate(); return None
+                return stdout if proc.returncode==0 else None
+        except (OSError,subprocess.TimeoutExpired): return None
+
+    def _versions(self,relative):
+        s.safe_path(relative)
+        if relative not in self.logs:
+            raw=self._git('log','--max-count=64','--format=%H','HEAD','--',relative)
+            self.logs[relative]=[line for line in (raw or b'').decode('ascii',errors='ignore').splitlines() if re.fullmatch('[a-f0-9]{40}|[a-f0-9]{64}',line)]
+        for commit in self.logs[relative]:
+            key=(commit,relative)
+            if key not in self.blobs:
+                info=None
+                tree=self._git('ls-tree','-z',commit,'--',relative)
+                records=(tree or b'').split(b'\x00')
+                if len(records)==2 and records[-1]==b'':
+                    header,separator,path=records[0].partition(b'\t')
+                    fields=header.split()
+                    if separator and path==relative.encode('utf-8') and len(fields)==3 and fields[0] in (b'100644',b'100755') and fields[1]==b'blob':
+                        oid=fields[2].decode('ascii',errors='ignore')
+                        if re.fullmatch('[a-f0-9]{40}|[a-f0-9]{64}',oid):
+                            size=self._git('cat-file','-s',oid)
+                            if size and size.strip().isdigit() and int(size)<=2_000_000 and self.bytes+int(size)<=16_000_000:
+                                raw=self._git('cat-file','blob',oid)
+                                if raw is not None and len(raw)==int(size):
+                                    self.bytes+=len(raw)
+                                    try: info=_source_bytes(raw) | {'git_commit':commit,'git_blob':oid}
+                                    except (UnicodeError,ValueError): pass
+                self.blobs[key]=info
+            if self.blobs[key] is not None: yield self.blobs[key]
+
+    def _current(self,source):
+        if source in self.current:
+            value=self.current.pop(source); self.current[source]=value
+            return value[0]
+        info=None; size=0
+        try:
+            target=s.safe_path(source)
+            if target.is_file() and target.stat().st_size<=2_000_000:
+                raw=target.read_bytes(); size=len(raw); info=_source_bytes(raw)
+        except (OSError,ValueError,UnicodeError): pass
+        while self.current and (len(self.current)>=256 or self.current_bytes+size>16_000_000):
+            oldest=next(iter(self.current)); self.current_bytes-=self.current.pop(oldest)[1]
+        self.current[source]=(info,size); self.current_bytes+=size
+        return info
+
+    def source(self,source,sha256,quote=None,text_sha256=None):
+        if not isinstance(source,str) or not isinstance(sha256,str) or not re.fullmatch('[a-f0-9]{64}',sha256): return None
+        if quote is not None and not isinstance(quote,str): return None
+        if text_sha256 is not None and (not isinstance(text_sha256,str) or not re.fullmatch('[a-f0-9]{64}',text_sha256)): return None
+        try: s.safe_path(source)
+        except (ValueError,TypeError): return None
+        key=(source,sha256,normalized(quote) if quote is not None else None,text_sha256)
+        if key in self.results: return self.results[key]
+        current=self._current(source)
+        candidates=((current,'current'),) if current else ()
+        for info,mode in candidates:
+            if sha256 in info['variants'] and (quote is None or normalized(quote) in info['text']) and (text_sha256 is None or text_sha256==info['text_sha256']):
+                proof={key:value for key,value in info.items() if key not in ('text','variants')}
+                proof.update(sha256=sha256,mode=mode,representation=info['variants'][sha256])
+                self.results[key]=proof; return proof
+        for info in self._versions(source):
+            if sha256 not in info['variants'] or quote is not None and normalized(quote) not in info['text'] or text_sha256 is not None and text_sha256!=info['text_sha256']: continue
+            proof={key:value for key,value in info.items() if key not in ('text','variants')}
+            proof.update(sha256=sha256,mode='git-history',representation=info['variants'][sha256])
+            self.results[key]=proof; return proof
+        self.results[key]=None
+        return None
+
+    def claim(self,page,claim):
+        revision=claim.get('source_revision')
+        if revision is not None:
+            if not isinstance(revision,dict) or not isinstance(revision.get('text_sha256'),str) or not re.fullmatch('[a-f0-9]{64}',revision['text_sha256']): return None
+            proof=self.source(claim['source'],revision.get('sha256'),claim['quote'],revision['text_sha256'])
+            if proof and 'date' in revision and revision['date']!=proof['date']: return None
+            return proof
+        source=claim['source']; hashes=page['meta'].get('source_hashes',{})
+        proof=self.source(source,hashes.get(source) if isinstance(hashes,dict) else None,claim['quote'])
+        if proof: return proof
+        key=(page['path'],_claim_hash(claim))
+        if key not in self.topic_origins:
+            origins=[]
+            for old in self._versions(page['path']):
+                info=meta(old['text']); old_hashes=info.get('source_hashes',{})
+                if not isinstance(old_hashes,dict): continue
+                for previous in _list(info.get('wiki_claims')):
+                    if _claim_hash(previous)!=key[1]: continue
+                    revision=previous.get('source_revision')
+                    if revision is not None and (not isinstance(revision,dict) or not isinstance(revision.get('text_sha256'),str) or not re.fullmatch('[a-f0-9]{64}',revision['text_sha256'])): continue
+                    candidate=revision if revision is not None else {'sha256':old_hashes.get(source)}
+                    origins.append(candidate)
+            self.topic_origins[key]=origins
+        for candidate in self.topic_origins[key]:
+            proof=self.source(source,candidate.get('sha256'),claim['quote'],candidate.get('text_sha256'))
+            if proof and 'date' in candidate and candidate['date']!=proof['date']: continue
+            if proof: return proof
+        return None
+
 def _plan_write(writes,path,text,kind):
     writes.append({'path':path.relative_to(s.VAULT).as_posix(),'text':text,'kind':kind,
                    'before':_current_hash(path),'after':s.digest(text.encode())})
 
-def _render_topic(page,packet,ident,result_hash):
+def _render_topic(page,packet,ident,result_hash,history=None):
     rel=BASE+page['category']+'/'+page['slug']+'.md'; target=s.safe_path(rel)
     snapshots={p['path']:p for p in packet['catalog'] if p.get('sha256')}
     snapshots.update({p['path']:p for p in packet['current_pages']})
@@ -500,23 +735,38 @@ def _render_topic(page,packet,ident,result_hash):
     if not isinstance(previous_claims,list): raise WikiIntegrityError(rel)
     for index,claim in enumerate(previous_claims):
         if not _valid_claim(claim): raise WikiIntegrityError(rel,index)
+    history=history or _EvidenceHistory()
     claims=previous_claims+page['claims']
     unique={}
     for claim in claims:
         claim={**claim,'quote':normalized(claim['quote'])}
         # A changed status is historical information too. Keep conflicting or
         # superseded versions instead of letting a later claim erase uncertainty.
-        unique[_json_hash(claim)]=claim
+        key=_json_hash({k:v for k,v in claim.items() if k!='source_revision'})
+        unique.setdefault(key,claim)
     if len(unique)>120: raise WikiOutputError('Page exceeds 120 claims; split it into narrower topics.')
     hashes={}; rendered=[]
+    old_meta=meta(target.read_text(encoding='utf-8')) if old else {}
+    old_page={'path':rel,'meta':old_meta}
+    old_keys={_json_hash({k:normalized(v) if k=='quote' else v for k,v in claim.items() if k!='source_revision'}) for claim in previous_claims}
     for claim in unique.values():
         source=s.safe_path(claim['source'])
+        proof=None
         if source.exists():
             raw=source.read_bytes(); text=normalized(raw.decode('utf-8-sig')); hashes[claim['source']]=s.digest(raw)
-            if claim['quote'] not in text: claim['status']='uncertain'
             date=str(meta(text).get('date','unknown'))[:10]
-        else: date='unknown'; claim['status']='uncertain'
-        rendered.append(f'- **{claim["status"]}; source date {date}:** {claim["text"]}\n  - Evidence: [[{claim["source"][:-3]}]] — '+json.dumps(claim['quote'],ensure_ascii=False))
+            key=_json_hash({k:v for k,v in claim.items() if k!='source_revision'})
+            if key not in old_keys:
+                proof=history.source(claim['source'],s.digest(raw),claim['quote'])
+            else: proof=history.claim(old_page,claim)
+        else:
+            date='unknown'; proof=history.claim(old_page,claim)
+        if proof:
+            claim.setdefault('source_revision',{'sha256':proof['sha256'],'text_sha256':proof['text_sha256'],'date':proof['date']})
+            date=claim['source_revision'].get('date',proof['date'])
+        evidence_note='; verified historical Git revision' if proof and proof['mode']=='git-history' else ''
+        if not proof: evidence_note='; evidence requires review'
+        rendered.append(f'- **{claim["status"]}; source date {date}{evidence_note}:** {claim["text"]}\n  - Evidence: [[{claim["source"][:-3]}]] — '+json.dumps(claim['quote'],ensure_ascii=False))
     now=s.stamp()
     info={'date':now[:10],'title':page['title'],'type':'note','tags':['ai-memory','derived','wiki'],
           'wiki_kind':page['category'],'wiki_claims':list(unique.values()),'related':page['related'],
@@ -540,9 +790,10 @@ def _source_note(row,topic_pages):
 
 def _publication_plan(packet,result,dispositions):
     ident=packet['batch_id']; result_hash=_json_hash(result); writes=[]
+    history=_EvidenceHistory()
     topic_pages={page['path']:page for page in pages()}
     for page in result['pages']:
-        rel,info,text=_render_topic(page,packet,ident,result_hash)
+        rel,info,text=_render_topic(page,packet,ident,result_hash,history)
         _plan_write(writes,s.safe_path(rel),text,'wiki_compile')
         topic_pages[rel]={'path':rel,'meta':info}
     for row in packet['sources']:
@@ -609,6 +860,7 @@ def apply(packet,result):
     if not re.fullmatch('[a-f0-9]{24}',ident): raise ValueError('Invalid batch identity.')
     folder=cfg.STATE/'wiki/batches'/ident; journal=folder/'journal.json'; publication=folder/'publication.json'
     with FileLock(str(cfg.STATE/'writer.lock'),timeout=30):
+        _assert_source_policy(packet,allow_durable=publication.exists())
         with db() as conn: previous=conn.execute('SELECT * FROM batches WHERE id=?',(ident,)).fetchone()
         if previous and previous['status']=='complete':
             receipts=json.loads(previous['receipt'])
@@ -625,9 +877,13 @@ def apply(packet,result):
             if plan.get('packet_sha256')!=_json_hash(packet) or plan.get('result_sha256')!=_json_hash(result): raise WikiOutputError('Batch output changed during recovery.')
         else:
             plan=_publication_plan(packet,result,dispositions)
+            # Owner decisions can arrive while bounded planning is running.
+            # Before a plan is durable, newly excluded work must not publish.
+            _assert_source_policy(packet)
             _atomic_json(folder/'input.json',packet); _atomic_json(folder/'output.json',result)
             _atomic_json(publication,plan)
         _verify_publication_plan(plan,packet,result)
+        _assert_source_policy(packet,allow_durable=True)
         for row in packet['sources']:
             if _current_hash(s.safe_path(row['path']))!=row['sha256']: raise WikiTransientError('Source changed during publication planning; rebuild the batch.')
         # The whole plan is durable before the first note write. A process killed
@@ -670,16 +926,32 @@ def _index_and_log(ident,receipts,sources):
         s._write(log,text,'wiki_log')
 
 def lint():
-    issues=[]; allpages=pages(issues); known={p['path'] for p in allpages}
+    issues=[]; historical=[]; equivalent=[]; history=_EvidenceHistory()
+    allpages=pages(issues); known={p['path'] for p in allpages}
     for p in allpages:
+        claims=p['meta'].get('wiki_claims',[])
+        if not isinstance(claims,list):
+            issues.append({'page':p['path'],'issue':'malformed claim metadata'}); claims=[]
         source_hashes=p['meta'].get('source_hashes',{})
         if not isinstance(source_hashes,dict):
             issues.append({'page':p['path'],'issue':'malformed source hash metadata'}); source_hashes={}
         for src,h in source_hashes.items():
-            try: target=s.safe_path(src)
+            try: s.safe_path(src)
             except (ValueError,TypeError):
                 issues.append({'page':p['path'],'issue':'malformed source path metadata'}); continue
-            if not target.exists() or s.digest(target.read_bytes())!=h: issues.append({'page':p['path'],'issue':'source missing or changed','source':src})
+            if not isinstance(h,str) or not re.fullmatch('[a-f0-9]{64}',h):
+                issues.append({'page':p['path'],'issue':'malformed source hash metadata','source':src}); continue
+            proof=history.source(src,h)
+            if proof and proof['mode']=='git-history':
+                # A hash alone is insufficient to bless historical attribution.
+                # At least one exact associated quote must occur in that blob;
+                # every individual claim is verified separately below.
+                proof=next((value for claim in claims if _valid_claim(claim) and claim['source']==src
+                            if (value:=history.source(src,h,claim['quote'])) is not None),None)
+            if not proof:
+                issues.append({'page':p['path'],'issue':'source missing or changed','source':src})
+            elif proof['mode']=='current' and proof['representation']!='exact':
+                equivalent.append({'page':p['path'],'source':src,'source_sha256':h,'representation':proof['representation']})
         related_paths=p['meta'].get('related',[])
         if not isinstance(related_paths,list):
             issues.append({'page':p['path'],'issue':'malformed related link metadata'}); related_paths=[]
@@ -687,17 +959,28 @@ def lint():
             if not isinstance(related,str):
                 issues.append({'page':p['path'],'issue':'malformed related link metadata'}); continue
             if related not in known: issues.append({'page':p['path'],'issue':'broken related link','target':related})
-        claims=p['meta'].get('wiki_claims',[])
-        if not isinstance(claims,list):
-            issues.append({'page':p['path'],'issue':'malformed claim metadata'}); claims=[]
-        for index,c in enumerate(claims):
-            if not _valid_claim(c):
+        for index,claim in enumerate(claims):
+            if not _valid_claim(claim):
                 issues.append({'page':p['path'],'issue':'malformed claim metadata','claim_index':index}); continue
-            try: target=s.safe_path(c['source'])
+            try: s.safe_path(claim['source'])
             except ValueError:
                 issues.append({'page':p['path'],'issue':'malformed claim metadata','claim_index':index}); continue
-            if not target.exists() or normalized(c['quote']) not in target.read_text(encoding='utf-8-sig'): issues.append({'page':p['path'],'issue':'evidence quote missing','source':c['source']})
-    report={'at':s.stamp(),'pages':len(allpages),'issues':issues,'semantic_review':'model preserves competing evidence; deterministic lint does not prove factual entailment'}
+            proof=history.claim(p,claim)
+            if not proof:
+                current=history._current(claim['source'])
+                issue='source revision unverified' if current and normalized(claim['quote']) in current['text'] else 'evidence quote missing'
+                issues.append({'page':p['path'],'issue':issue,'source':claim['source'],'claim_index':index})
+            elif proof['mode']=='git-history':
+                historical.append({'page':p['path'],'source':claim['source'],'claim_index':index,
+                    'source_sha256':proof['sha256'],'text_sha256':proof['text_sha256'],
+                    'git_commit':proof['git_commit'],'git_blob':proof['git_blob'],'representation':proof['representation'],
+                    'verification':'exact quote and recorded source SHA verified against an actual historical Git blob'})
+    report={'at':s.stamp(),'pages':len(allpages),'issues':issues,
+            'historical_evidence_count':len(historical),'verified_historical_evidence':historical[:100],
+            'equivalent_source_revision_count':len(equivalent),'equivalent_source_revisions':equivalent[:100],
+            'history_verification':{'max_commits_per_path':64,'max_git_commands':256,'max_git_blob_bytes':16_000_000,
+                                    'max_history_seconds':15,'git_commands':history.commands,'git_blob_bytes':history.bytes},
+            'semantic_review':'exact current/historical evidence checks do not prove factual entailment, chronology or current employment/completion'}
     (cfg.STATE/'wiki-lint.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
     return report
 
@@ -736,7 +1019,8 @@ def output_schema(packet,strict=False):
     schema['properties']['dispositions']['items']['properties']['source']['enum']=sorted({x['path'] for x in packet['sources']})
     return schema
 
-def _resume_packet():
+def _resume_packet(policy=None):
+    policy=source_policy() if policy is None else policy
     with db() as conn:
         batches=list(conn.execute("SELECT * FROM batches WHERE status IN ('pending','retryable','applying','published','complete') ORDER BY updated,id"))
     eligibility=None
@@ -761,12 +1045,15 @@ def _resume_packet():
             continue
         packet=json.loads(input_path.read_text(encoding='utf-8'))
         if packet.get('batch_id')!=batch['id']: raise ValueError('Saved wiki batch identity mismatch.')
+        if batch['status']!='complete' and not publication.exists() and any(_policy_excluded(row['path'],policy) for row in packet['sources']):
+            with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('superseded',s.stamp(),batch['id']))
+            continue
         if batch['status']!='complete' and any(_current_hash(s.safe_path(row['path']))!=row['sha256'] for row in packet['sources']):
             with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('stale',s.stamp(),batch['id']))
             continue
         if batch['status']!='complete' and not publication.exists():
             if eligibility is None:
-                _hydrate_receipts(inventory())
+                _hydrate_receipts(inventory(include_excluded=True,policy=policy))
                 with db() as conn: eligibility={row['path']:dict(row) for row in conn.execute('SELECT * FROM sources')}
             if any(not _eligible(row,eligibility.get(row['job_key'],{})) for row in packet['sources']):
                 # A later receipt/defer/retirement takes precedence over an old
@@ -790,13 +1077,15 @@ def reset_retries():
 def run(limit=4,timeout=480):
     cfg.require_maintainer()
     with FileLock(str(cfg.STATE/'wiki-worker.lock'),timeout=1):
+        try: policy=source_policy()
+        except WikiPolicyError as exc: return _policy_attention(exc)
         worker_state=cfg.STATE/'wiki-worker-status.json'
         saved=_read_worker_state()
         if saved.get('attention_required'):
             return {'status':'attention','reason':saved.get('reason'),'batch_id':saved.get('batch_id'),
                     'consecutive_failures':saved.get('consecutive_failures',0),'manual_retry_required':True,
                     'pending_parts':saved.get('pending_parts',[])}
-        packet=_resume_packet()
+        packet=_resume_packet(policy)
         resumed=packet is not None
         saved_output=resumed and (cfg.STATE/'wiki/batches'/packet['batch_id']/'output.json').exists()
         # Durable output can finish publication without spending another model
@@ -804,7 +1093,9 @@ def run(limit=4,timeout=480):
         # does not exhaust the attention budget; persistent processing errors do.
         if saved.get('retry_after',0)>time.time() and not (saved.get('status')=='retryable' and saved_output):
             return {'status':'blocked','reason':saved.get('reason'),'retry_after':saved['retry_after']}
-        if packet is None: packet=prepare(limit)
+        if packet is None:
+            try: packet=prepare(limit)
+            except WikiPolicyError as exc: return _policy_attention(exc)
         if not packet: return {'status':'idle',**status()}
         folder=cfg.STATE/'wiki'/'batches'/packet['batch_id']; output=folder/'output.json'; schema=folder/'schema.json'
         short_sources=[row for row in packet['sources'] if _short_part(row)]
@@ -829,6 +1120,10 @@ def run(limit=4,timeout=480):
         proc=None
         try:
             model_ran=bool(substantive_sources) and not (resumed and output.exists())
+            # Even a saved excluded plan may only replay its existing output;
+            # it cannot spend another model request after the owner exclusion.
+            current_policy=_assert_source_policy(packet,allow_durable=not model_ran and (folder/'publication.json').exists())
+            recovered_excluded=sum(_policy_excluded(row['path'],current_policy) for row in packet['sources']) if (folder/'publication.json').exists() else 0
             if model_ran:
                 if not binary: raise RuntimeError('Install official Codex CLI and sign in before running the wiki worker.')
                 if output.exists(): output.unlink()
@@ -863,8 +1158,16 @@ def run(limit=4,timeout=480):
             _atomic_json(output,result)
             receipts=apply(packet,result)
             _atomic_json(worker_state,{'status':'complete','at':s.stamp(),'batch_id':packet['batch_id'],'consecutive_failures':0,'attention_required':False})
-            return {'status':'complete','batch_id':packet['batch_id'],'receipts':receipts,'lint':lint()}
+            return {'status':'complete','batch_id':packet['batch_id'],'receipts':receipts,'lint':lint(),
+                    'recovered_excluded_source_parts':recovered_excluded}
         except Exception as exc:
+            if isinstance(exc,WikiPolicyError): return _policy_attention(exc)
+            if isinstance(exc,WikiPolicyChanged):
+                with db() as conn: conn.execute("UPDATE batches SET status='superseded',updated=? WHERE id=? AND status!='complete'",(s.stamp(),packet['batch_id']))
+                try: changed_policy=source_policy()
+                except WikiPolicyError as policy_error: return _policy_attention(policy_error)
+                return {'status':'policy_changed','reason':str(exc),'batch_id':packet['batch_id'],
+                        'source_policy':_policy_summary(changed_policy),'model_called':proc is not None}
             from jsonschema.exceptions import ValidationError
             runner=(folder/'runner.log').read_text(encoding='utf-8',errors='replace') if (folder/'runner.log').exists() else ''
             global_failure=_model_auth_quota_failure(proc.returncode if proc else None,runner,model_input)

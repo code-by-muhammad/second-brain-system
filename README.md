@@ -33,7 +33,7 @@ gh auth login
 gh repo clone code-by-muhammad/second-brain ~/Documents/Second-Brain
 gh repo clone code-by-muhammad/second-brain-system ~/Code/second-brain-system
 cd ~/Code/second-brain-system
-git checkout v0.1.6
+git checkout v0.1.7
 uv run --no-project --python 3.12 python -c "from pathlib import Path; import update; print(update.verify(Path.cwd())['version'])"
 uv run --no-project --python 3.12 install.py --vault "$HOME/Documents/Second-Brain" --configure-clients --download-model --install-service
 ```
@@ -68,13 +68,15 @@ python <runtime>/app/brain_cli.py wiki status
 python <runtime>/app/brain_cli.py wiki lint
 ```
 
-Maintainer only: `wiki run --limit 4` compiles a bounded batch. Three specifically attributed invalid-evidence failures leave that source part for attention while eligible peers can proceed. Unattributed compiler failures receive one-hour then two-hour backoff; after three consecutive failures the worker requires explicit attention, preserving pending work without blaming unrelated sources. Ordinary lock contention does not exhaust this budget; authentication/quota failures retain their separate three-hour cooldown. Inspect `wiki status` and fix the cause before `wiki retry` clears failure counters and worker attention. Queue and verified receipts survive restarts. Existing source changes requeue all parts of that source. Large Markdown sources are split into overlapping bounded input parts; source hashes still cover the entire original.
+Maintainer only: `wiki run --limit 4` compiles a bounded batch. Three specifically attributed invalid-evidence failures leave that source part for attention while eligible peers can proceed. Unattributed compiler failures receive one-hour then two-hour backoff; after three consecutive failures the worker requires explicit attention, preserving pending work without blaming unrelated sources. Ordinary lock contention does not exhaust this budget; authentication/quota failures retain their separate three-hour cooldown. Inspect `wiki status` and fix the cause before `wiki retry` clears failure counters and worker attention. Queue and verified receipts survive restarts. Changed parts requeue; unchanged canonical parts may reuse their independently verified receipts. Large Markdown sources are split into overlapping bounded input parts; raw source hashes still cover the entire original.
 
 The scheduled responsibility is configured separately through the desktop scheduler. Idle runs avoid a model request. The compiler requires the official Codex CLI, a local authenticated account, and remaining quota. Private source excerpts are sent to that model provider. SQLite, embedding model and search remain local. The current schedule requires its host and desktop app to be available; no 24/7 availability is implied.
 
 ## Shared and local data
 
-Shared knowledge: notes, immutable captures, wiki topic/source pages, index, compilation history and writer control page. Shared software: this repository and tagged releases. Local only: `device.json`, SQLite/WAL, model cache, auth files, Python environments, pending job database, logs and client/startup settings. Never copy the whole runtime folder through Git/Syncthing.
+Shared knowledge: notes, immutable captures, wiki topic/source pages, index, compilation history, writer control page and explicit wiki source policy. Shared software: this repository and tagged releases. Local only: `device.json`, SQLite/WAL, model cache, auth files, Python environments, pending job database, logs and client/startup settings. Never copy the whole runtime folder through Git/Syncthing.
+
+An optional `02-Areas/AI-Memory/Wiki-Source-Policy.md` selects exact source paths or directory prefixes to exclude from future wiki compilation. Excluded originals stay searchable and existing historical publications remain intact. Status reports exclusions separately from eligible completion; malformed policy stops new compilation. Follow [the device guide](docs/DEVICE-SETUP.md) for the strict format. Meaningful progress uses concise captures linked into daily notes by the existing service.
 
 Git sync runs every 15 minutes on each installed device, with one local maintenance owner. It merges independent offline edits only after a conflict-free preflight. Same-note conflicts, staged user changes, unknown files and source deletions pause sync for review. It never force-pushes. Automatic same-note conflict resolution would risk losing meaning.
 
@@ -85,10 +87,10 @@ Keep one live sync transport. Syncthing is not enabled by this release. GitHub c
 Notes sync does not upgrade running software. Install an explicit release using the verified candidate Python:
 
 ```text
-<candidate v0.1.6 Python> <verified v0.1.6 checkout>/update.py --root <runtime> --version v0.1.6
+<candidate v0.1.7 Python> <verified v0.1.7 checkout>/update.py --root <runtime> --version v0.1.7
 ```
 
-For the initial v0.1.5 upgrade, bootstrap the verified v0.1.6 checkout as described in [the device guide](docs/DEVICE-SETUP.md); running the old updater would retain its old rollback behavior. The updater clones only the owner's private repository, verifies the release file hashes, creates a native environment and preflights client settings before stopping the service, preserves tokens/paths/role, and polls authenticated MCP health for the expected version. Failed upgrades restore exact app/device/client snapshots and verify former health without executing the old installer. The designated maintainer explicitly reviews and applies legacy receipt migration under the compiler lock; capture devices omit that option. Hashes detect accidental corruption; they do not substitute for repository access controls or independent code review.
+For the initial v0.1.5 upgrade, bootstrap the verified v0.1.7 checkout as described in [the device guide](docs/DEVICE-SETUP.md); running the old updater would retain its old rollback behavior. The updater clones only the owner's private repository, verifies the release file hashes, creates a native environment and preflights client settings before stopping the service, preserves tokens/paths/role, and polls authenticated MCP health for the expected version. Failed upgrades restore exact app/device/client snapshots and verify former health without executing the old installer. The designated maintainer explicitly reviews and applies legacy receipt migration under the compiler lock; capture devices omit that option. Hashes detect accidental corruption; they do not substitute for repository access controls or independent code review.
 
 Automatic rollback uses the private software/device/client snapshot recorded in `state/previous-release.json`, stops the failed service, restores exact bytes and re-registers the former service before testing health. Do not execute a v0.1.5 installer for POSIX rollback: its interpreter dereference is the defect fixed here. An agent can inspect the recorded snapshot to perform the same explicit restoration if automatic recovery is interrupted. Source notes, tokens and SQLite are preserved.
 
