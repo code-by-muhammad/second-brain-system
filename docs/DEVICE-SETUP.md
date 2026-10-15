@@ -104,6 +104,8 @@ The owner has selected temporary session documents to remain searchable without 
 
 An unused saved publication plan is superseded when its source becomes excluded. If actual derived-note publication has already started, a fully validated plan may repair that partial publication without another model call. Merely saving a plan or finding an unchanged planned file does not qualify as progress. Invalid policy stops further writes until repaired.
 
+Historical verification has bounded object/command work and a cooperative 15-second budget checked between operations, including metadata parsing and cached-history traversal. An operation already running is not preempted. Each fetched revision's metadata is parsed once; missing or budget-exhausted evidence stays unresolved. Parsed headers and claim content are private cache data, never public proof fields.
+
 Agents should save one concise evidence-backed `brain_capture` milestone after meaningful work. The existing maintenance service links it into daily notes. Do not save raw session transcripts, manually append parallel daily logs, delete handoffs for the owner or create another schedule. Other devices keep capture/search role; compilation remains with the designated maintainer.
 
 Historical evidence checks require the actual earlier source revision. Keep the notes repository's history available; do not make a shallow notes clone or discard history to reduce storage without reviewing that consequence. Missing history remains an integrity issue. A verified old quotation does not establish a current fact. Normal new ingestion can remain on the existing hourly worker; report its actual pending count separately from installation and audit-fix readiness.

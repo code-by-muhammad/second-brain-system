@@ -589,25 +589,31 @@ def rebuild_source_links():
 
 def _current_hash(path): return s.digest(path.read_bytes()) if path.exists() else None
 
-def _source_bytes(raw):
+def _source_bytes(raw,active=None):
     text=normalized(raw.decode('utf-8-sig'))
     variants={s.digest(raw):'exact'}
     for newline,label in (('\n','LF'),('\r\n','CRLF'),('\r','CR')):
         encoded=text.replace('\n',newline).encode('utf-8')
         variants.setdefault(s.digest(encoded),label)
         variants.setdefault(s.digest(b'\xef\xbb\xbf'+encoded),label+'+BOM')
+    if active is not None and not active(): return None
+    metadata=meta(text)
     return {'text':text,'variants':variants,'text_sha256':s.digest(text.encode()),
-            'date':str(meta(text).get('date','unknown'))[:10]}
+            'date':str(metadata.get('date','unknown'))[:10],'_meta':metadata}
 
 class _EvidenceHistory:
     """Read-only, bounded Git evidence. No filters, network, or receipt attestation.
 
-    At most 64 commits per path, 256 Git commands, 16 MB of blob bytes and
-    15 seconds per verification pass. Caches exist only for this invocation.
+    At most 64 commits per path, 256 Git commands and 16 MB of blob bytes.
+    A cooperative 15-second budget is checked between bounded Git, parsing and
+    indexing operations; an in-flight Python operation is not preempted.
+    Caches exist only for this invocation.
     """
     def __init__(self):
         self.deadline=time.monotonic()+15; self.commands=0; self.bytes=0
-        self.logs={}; self.blobs={}; self.current={}; self.current_bytes=0; self.results={}; self.topic_origins={}
+        self.logs={}; self.blobs={}; self.current={}; self.current_bytes=0; self.results={}; self.topic_origins={}; self.revision_origins={}
+
+    def _active(self): return time.monotonic()<self.deadline
 
     def _git(self,*args):
         remaining=self.deadline-time.monotonic()
@@ -632,6 +638,7 @@ class _EvidenceHistory:
             raw=self._git('log','--max-count=64','--format=%H','HEAD','--',relative)
             self.logs[relative]=[line for line in (raw or b'').decode('ascii',errors='ignore').splitlines() if re.fullmatch('[a-f0-9]{40}|[a-f0-9]{64}',line)]
         for commit in self.logs[relative]:
+            if not self._active(): return
             key=(commit,relative)
             if key not in self.blobs:
                 info=None
@@ -646,10 +653,13 @@ class _EvidenceHistory:
                             size=self._git('cat-file','-s',oid)
                             if size and size.strip().isdigit() and int(size)<=2_000_000 and self.bytes+int(size)<=16_000_000:
                                 raw=self._git('cat-file','blob',oid)
-                                if raw is not None and len(raw)==int(size):
+                                if raw is not None and len(raw)==int(size) and self._active():
                                     self.bytes+=len(raw)
-                                    try: info=_source_bytes(raw) | {'git_commit':commit,'git_blob':oid}
+                                    try:
+                                        info=_source_bytes(raw,self._active)
+                                        if info is not None: info.update(git_commit=commit,git_blob=oid)
                                     except (UnicodeError,ValueError): pass
+                                    if not self._active(): info=None
                 self.blobs[key]=info
             if self.blobs[key] is not None: yield self.blobs[key]
 
@@ -657,11 +667,13 @@ class _EvidenceHistory:
         if source in self.current:
             value=self.current.pop(source); self.current[source]=value
             return value[0]
+        if not self._active(): return None
         info=None; size=0
         try:
             target=s.safe_path(source)
             if target.is_file() and target.stat().st_size<=2_000_000:
-                raw=target.read_bytes(); size=len(raw); info=_source_bytes(raw)
+                raw=target.read_bytes(); size=len(raw); info=_source_bytes(raw,self._active)
+                if not self._active(): info=None
         except (OSError,ValueError,UnicodeError): pass
         while self.current and (len(self.current)>=256 or self.current_bytes+size>16_000_000):
             oldest=next(iter(self.current)); self.current_bytes-=self.current.pop(oldest)[1]
@@ -680,16 +692,35 @@ class _EvidenceHistory:
         candidates=((current,'current'),) if current else ()
         for info,mode in candidates:
             if sha256 in info['variants'] and (quote is None or normalized(quote) in info['text']) and (text_sha256 is None or text_sha256==info['text_sha256']):
-                proof={key:value for key,value in info.items() if key not in ('text','variants')}
+                proof={key:info[key] for key in ('text_sha256','date','git_commit','git_blob') if key in info}
                 proof.update(sha256=sha256,mode=mode,representation=info['variants'][sha256])
                 self.results[key]=proof; return proof
         for info in self._versions(source):
             if sha256 not in info['variants'] or quote is not None and normalized(quote) not in info['text'] or text_sha256 is not None and text_sha256!=info['text_sha256']: continue
-            proof={key:value for key,value in info.items() if key not in ('text','variants')}
+            proof={key:info[key] for key in ('text_sha256','date','git_commit','git_blob') if key in info}
             proof.update(sha256=sha256,mode='git-history',representation=info['variants'][sha256])
             self.results[key]=proof; return proof
         self.results[key]=None
         return None
+
+    def _revision_origins(self,old):
+        key=old['git_blob']
+        if key in self.revision_origins: return self.revision_origins[key]
+        if not self._active(): return None
+        info=old['_meta']; hashes=info.get('source_hashes',{}); origins={}
+        if not isinstance(hashes,dict):
+            self.revision_origins[key]=origins; return origins
+        for previous in _list(info.get('wiki_claims')):
+            if not self._active(): return None
+            fingerprint=_claim_hash(previous)
+            if fingerprint is None: continue
+            revision=previous.get('source_revision')
+            if revision is not None and (not isinstance(revision,dict) or not isinstance(revision.get('text_sha256'),str) or not re.fullmatch('[a-f0-9]{64}',revision['text_sha256'])): continue
+            candidate=revision if revision is not None else {'sha256':hashes.get(previous['source'])}
+            origins.setdefault(fingerprint,[]).append(candidate)
+        if not self._active(): return None
+        self.revision_origins[key]=origins
+        return origins
 
     def claim(self,page,claim):
         revision=claim.get('source_revision')
@@ -703,16 +734,14 @@ class _EvidenceHistory:
         if proof: return proof
         key=(page['path'],_claim_hash(claim))
         if key not in self.topic_origins:
+            if not self._active(): return None
             origins=[]
             for old in self._versions(page['path']):
-                info=meta(old['text']); old_hashes=info.get('source_hashes',{})
-                if not isinstance(old_hashes,dict): continue
-                for previous in _list(info.get('wiki_claims')):
-                    if _claim_hash(previous)!=key[1]: continue
-                    revision=previous.get('source_revision')
-                    if revision is not None and (not isinstance(revision,dict) or not isinstance(revision.get('text_sha256'),str) or not re.fullmatch('[a-f0-9]{64}',revision['text_sha256'])): continue
-                    candidate=revision if revision is not None else {'sha256':old_hashes.get(source)}
-                    origins.append(candidate)
+                if not self._active(): return None
+                indexed=self._revision_origins(old)
+                if indexed is None: return None
+                origins.extend(indexed.get(key[1],[]))
+            if not self._active(): return None
             self.topic_origins[key]=origins
         for candidate in self.topic_origins[key]:
             proof=self.source(source,candidate.get('sha256'),claim['quote'],candidate.get('text_sha256'))
