@@ -112,6 +112,8 @@ During manual repair, keep origin dates quoted as strings, for example `date: "2
 
 Explicit topic titles must also be strings; quote a date-like title rather than saving a YAML date, number or null. A missing legacy title keeps its existing path fallback. Context that exceeds the model budget is omitted before claim validation, while all catalog titles remain subject to the type check.
 
+An unused pending packet cannot retain topic context from before an owner edit or repair. The worker checks stored topic hashes and full catalog identity before resuming it, preserves the old artifacts, and prepares a current snapshot. A validated plan that has actually changed a derived note may instead finish its partial publication from saved output without another model request.
+
 Agents should save one concise evidence-backed `brain_capture` milestone after meaningful work. The existing maintenance service links it into daily notes. Do not save raw session transcripts, manually append parallel daily logs, delete handoffs for the owner or create another schedule. Other devices keep capture/search role; compilation remains with the designated maintainer.
 
 Historical evidence checks require the actual earlier source revision. Keep the notes repository's history available; do not make a shallow notes clone or discard history to reduce storage without reviewing that consequence. Missing history remains an integrity issue. A verified old quotation does not establish a current fact. Normal new ingestion can remain on the existing hourly worker; report its actual pending count separately from installation and audit-fix readiness.

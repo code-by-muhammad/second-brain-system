@@ -1087,11 +1087,21 @@ def output_schema(packet,strict=False):
     schema['properties']['dispositions']['items']['properties']['source']['enum']=sorted({x['path'] for x in packet['sources']})
     return schema
 
+def _full_catalog_snapshot(packet):
+    catalog=packet.get('catalog')
+    if not isinstance(catalog,list): return None
+    snapshot={}
+    for page in catalog:
+        if not isinstance(page,dict) or not isinstance(page.get('path'),str) or not isinstance(page.get('sha256'),str) or not re.fullmatch('[a-f0-9]{64}',page['sha256']) or page['path'] in snapshot:
+            return None
+        snapshot[page['path']]=page['sha256']
+    return snapshot
+
 def _resume_packet(policy=None):
     policy=source_policy() if policy is None else policy
     with db() as conn:
         batches=list(conn.execute("SELECT * FROM batches WHERE status IN ('pending','retryable','applying','published','complete') ORDER BY updated,id"))
-    eligibility=None
+    eligibility=None; current_catalog=None
     for batch in batches:
         folder=cfg.STATE/'wiki/batches'/batch['id']; journal=folder/'journal.json'; input_path=folder/'input.json'
         publication=folder/'publication.json'
@@ -1119,6 +1129,19 @@ def _resume_packet(policy=None):
         if batch['status']!='complete' and any(_current_hash(s.safe_path(row['path']))!=row['sha256'] for row in packet['sources']):
             with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('stale',s.stamp(),batch['id']))
             continue
+        if batch['status']!='complete':
+            expected=_full_catalog_snapshot(packet)
+            if expected is not None and current_catalog is None:
+                current_catalog={page['path']:page['sha256'] for page in pages()}
+            changed=expected is not None and expected!=current_catalog
+            # Older packets may not carry a full catalog hash map. Their
+            # explicitly supplied current-page snapshots still remain binding.
+            changed=changed or any(page.get('sha256') and _current_hash(s.safe_path(page['path']))!=page['sha256'] for page in packet.get('current_pages',[]))
+            if changed and not _saved_publication_started(packet,publication):
+                # Do not spend quota on known stale unused context. Keep its
+                # artifacts, then let fresh preparation validate owner repairs.
+                with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('superseded',s.stamp(),batch['id']))
+                continue
         if batch['status']!='complete' and not publication.exists():
             if eligibility is None:
                 _hydrate_receipts(inventory(include_excluded=True,policy=policy))
