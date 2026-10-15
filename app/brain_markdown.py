@@ -14,7 +14,9 @@ def frontmatter(text: str, *, strict: bool = False) -> dict:
         return {}
     try:
         value = yaml.safe_load(''.join(lines[1:end]))
-    except (yaml.YAMLError, ValueError, RecursionError):
+    # Pinned SafeLoader constructors may raise these on malformed explicit
+    # scalar tags. Keep containment local; do not swallow unrelated/fatal errors.
+    except (yaml.YAMLError, ValueError, RecursionError, KeyError, AttributeError, IndexError):
         if strict:
             raise ValueError('Invalid YAML frontmatter.') from None
         return {}

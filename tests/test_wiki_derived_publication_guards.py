@@ -37,9 +37,12 @@ def test_non_utf8_derived_auxiliary_stops_with_controlled_attention_and_no_strik
     target=s.VAULT/w.BASE/('Sources/'+s.digest(rel.encode())[:16]+'.md' if location=='source-record' else 'Log.md')
     target.write_bytes('# Synthetic owner auxiliary note; preserve encoding.\n'.encode('utf-16'))
     before=note_snapshot();packet=w.prepare();calls=fake_model(monkeypatch,explicit(packet,result))
-    with pytest.raises(w.WikiIntegrityError) as caught:w.run()
-    assert caught.value.page==target.relative_to(s.VAULT).as_posix() and caught.value.field=='encoding'
-    report=w.run();assert report['status']=='attention' and report['consecutive_failures']==0 and len(calls)==1 and note_snapshot()==before
+    if location=='log':
+        report=w.run();assert report['status']=='attention' and report['integrity_field']=='encoding' and len(calls)==0
+    else:
+        with pytest.raises(w.WikiIntegrityError) as caught:w.run()
+        assert caught.value.page==target.relative_to(s.VAULT).as_posix() and caught.value.field=='encoding'
+    report=w.run();assert report['status']=='attention' and report['consecutive_failures']==0 and len(calls)==(0 if location=='log' else 1) and note_snapshot()==before
     assert w.status()['worker']['integrity_page']==target.relative_to(s.VAULT).as_posix()
     with w.db() as conn: assert conn.execute('SELECT count(*) FROM sources WHERE attempts>0').fetchone()[0]==0
 

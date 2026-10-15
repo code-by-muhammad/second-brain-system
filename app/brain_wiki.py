@@ -1,6 +1,6 @@
 """Incremental wiki compiler: bounded model input, exact evidence, durable replay-safe jobs."""
 from __future__ import annotations
-import hashlib, json, math, os, re, shutil, sqlite3, subprocess, tempfile, time
+import codecs, hashlib, json, math, os, re, shutil, sqlite3, subprocess, tempfile, time
 from pathlib import Path
 from datetime import datetime, date
 from contextlib import contextmanager
@@ -35,6 +35,9 @@ SCHEMA['properties']['dispositions']={'type':'array','items':{'type':'object','a
 class WikiTransientError(ValueError):
     """A revision race is retryable and says nothing about source quality."""
 
+class _WikiLogChanged(WikiTransientError):
+    """An unused Log-only CAS race may reuse its already saved model output."""
+
 class WikiOutputError(ValueError):
     def __init__(self,message,source=None):
         super().__init__(message)
@@ -42,7 +45,7 @@ class WikiOutputError(ValueError):
 
 class WikiIntegrityError(WikiOutputError):
     def __init__(self,page,claim_index=None,field='wiki_claims'):
-        super().__init__('Existing derived wiki metadata requires owner review before merging this topic.')
+        super().__init__('Wiki private packet exceeds its 2,000,000-character operation limit; review catalog/packet sizing before retrying.' if field=='packet' else 'Existing derived wiki metadata requires owner review before merging this topic.')
         self.page=page; self.claim_index=claim_index; self.field=field
 
 class WikiPolicyError(ValueError):
@@ -76,7 +79,7 @@ class _JSONTooLarge(ValueError): pass
 def _bounded_json(value,limit=2_000_000,**options):
     # Validate the finite object graph before treating an over-budget value as
     # measurable. Shared aliases are legal; cycles and bad types are not.
-    stack=[(value,0,False)]; active=set(); seen=set(); nodes=0; oversized=False
+    stack=[(value,0,False)]; active=set(); seen=set(); nodes=0; oversized=False; strings={}; string_total=0
     ascii_only=options.get('ensure_ascii',True); finite=not options.get('allow_nan',True)
     while stack:
         item,depth,leaving=stack.pop()
@@ -85,11 +88,18 @@ def _bounded_json(value,limit=2_000_000,**options):
         if nodes>100000 or depth>128: raise ValueError('JSON context exceeds structural bounds.')
         if isinstance(item,str):
             if not oversized:
-                size=2
-                for char in item:
-                    code=ord(char)
-                    size+=2 if char in '\"\\\b\f\n\r\t' else 6 if code<32 or ascii_only and 127<=code<=65535 else 12 if ascii_only and code>65535 else 1
-                    if size>limit: oversized=True; break
+                ident=id(item); cached=strings.get(ident); size=cached[1] if cached is not None else None
+                if size is None:
+                    size=2
+                    for char in item:
+                        code=ord(char)
+                        size+=2 if char in '\"\\\b\f\n\r\t' else 6 if code<32 or ascii_only and 127<=code<=65535 else 12 if ascii_only and code>65535 else 1
+                        if size>limit: break
+                    strings[ident]=(item,size)  # Retain identity for temporary date-sizing strings too.
+                # A shared scalar is scanned once, while every expanded use
+                # still contributes to the finite output budget.
+                string_total+=size
+                if string_total>limit: oversized=True
         elif isinstance(item,(dict,list,tuple)):
             ident=id(item)
             if ident in active: raise ValueError('Circular JSON context.')
@@ -182,8 +192,8 @@ def _existing_topic_title(page):
 
 def _validate_packet_paths(packet):
     for item in packet.get('sources',[])+packet.get('catalog',[])+packet.get('current_pages',[]):
-        try: s.safe_path(item['path']); s.clean_text(item['path'],400)
-        except (ValueError,TypeError): raise WikiIntegrityError(BASE+'Index.md',field='path') from None
+        try: item['path'].encode('utf-8'); s.safe_path(item['path']); s.clean_text(item['path'],400)
+        except (ValueError,TypeError,UnicodeError,AttributeError): raise WikiIntegrityError(BASE+'Index.md',field='path') from None
 
 def _validate_packet_context(packet):
     _validate_packet_paths(packet)
@@ -198,6 +208,7 @@ def _validate_packet_context(packet):
     for page in packet.get('catalog',[]):
         _existing_topic_title({'path':page['path'],'meta':page})
     try: _bounded_json(packet,ensure_ascii=False,default=str)
+    except _JSONTooLarge: raise WikiIntegrityError(BASE+'Index.md',field='packet') from None
     except (ValueError,TypeError,RecursionError,UnicodeError):
         page=next((page['path'] for page in packet.get('current_pages',[])),BASE+'Index.md')
         raise WikiIntegrityError(page) from None
@@ -233,7 +244,7 @@ def _worker_summary():
         result['reason']=reason if reason in controlled or isinstance(reason,str) and re.fullmatch('[A-Za-z_][A-Za-z0-9_]{0,63}',reason) else 'inspect private worker diagnostics'
     if isinstance(value.get('batch_id'),str) and re.fullmatch('[a-f0-9]{24}',value['batch_id']): result['batch_id']=value['batch_id']
     if isinstance(value.get('integrity_page'),str) and value['integrity_page'].startswith(BASE): result['integrity_page']=value['integrity_page'][:400]
-    if value.get('integrity_field') in ('title','wiki_claims','source_revision','latest_source_part','frontmatter','wiki_kind','encoding','content','path'): result['integrity_field']=value['integrity_field']
+    if value.get('integrity_field') in ('title','wiki_claims','source_revision','latest_source_part','frontmatter','wiki_kind','encoding','content','path','packet','archive','recovery','serialization'): result['integrity_field']=value['integrity_field']
     if type(value.get('claim_index')) is int and 0<=value['claim_index']<120: result['claim_index']=value['claim_index']
     return result
 
@@ -385,22 +396,54 @@ def _eligible(row,old):
     same_attempt=old.get('attempt_hash')==row['sha256']
     return old.get('processed_hash')!=row['sha256'] and (not same_attempt or old.get('attempts',0)<3) and (not same_attempt or old.get('deferred_until',0)<=time.time())
 
+def _wiki_path_issue(issues,relative):
+    # Never echo an unbounded, unencodable or credential-like filename.
+    locator=s.digest(relative.encode('utf-8',errors='surrogatepass'))
+    try: relative.encode('utf-8'); s.clean_text(relative,400)
+    except (ValueError,UnicodeError): relative=BASE+'Index.md'
+    if issues is not None: issues.append({'page':relative,'issue':'wiki path requires review','field':'path','path_sha256':locator})
+
 def pages(issues=None):
-    found=[]
-    for p in (s.VAULT/BASE).rglob('*.md'):
-        rel=p.relative_to(s.VAULT).as_posix()
-        s.safe_path(rel)
-        is_topic=rel[len(BASE):].split('/')[0] in KINDS; field=None
-        try:
-            raw=p.read_bytes(); m=frontmatter(raw.decode('utf-8-sig'),strict=True)
-        except (OSError,UnicodeError,ValueError):
-            m={}
-            if is_topic: field='frontmatter'
-        if is_topic and field is None and m.get('wiki_kind') not in KINDS: field='wiki_kind'
-        if field is not None:
-            if issues is not None: issues.append({'page':rel,'issue':'wiki metadata missing or invalid','field':field})
-            continue
-        if m.get('wiki_kind') in KINDS: found.append({'path':rel,'sha256':s.digest(raw),'meta':m})
+    found=[]; root=s.VAULT/BASE
+    try: s.safe_path(BASE+'Index.md')
+    except ValueError:
+        _wiki_path_issue(issues,BASE+'Index.md'); return found
+    for folder,directories,files in os.walk(root,followlinks=False):
+        parent=Path(folder); retained=[]
+        for name in directories:
+            target=parent/name; relative=target.relative_to(s.VAULT).as_posix()
+            if target.is_symlink() or os.path.isjunction(target): _wiki_path_issue(issues,relative)
+            elif not name.startswith('.') and not (parent==root and name.casefold()=='log-archives'): retained.append(name)
+        directories[:]=retained
+        for name in files:
+            if Path(name).suffix.casefold()!='.md': continue
+            target=parent/name; relative=target.relative_to(s.VAULT).as_posix()
+            if target.is_symlink() or os.path.isjunction(target):
+                _wiki_path_issue(issues,relative); continue
+            if name.startswith('.'): continue
+            try: s.safe_path(relative); s.clean_text(relative,400)
+            except (ValueError,UnicodeError):
+                _wiki_path_issue(issues,relative); continue
+            if relative.casefold()==(BASE+'Log.md').casefold(): continue  # Dedicated streamed history reader owns this file.
+            parts=relative[len(BASE):].split('/')
+            is_topic=parts[0].casefold() in {kind.casefold() for kind in KINDS}; field=None
+            if is_topic and (len(parts)!=2 or parts[0] not in KINDS or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,75}\.md',parts[1])):
+                _wiki_path_issue(issues,relative); continue
+            try:
+                raw,text=_read_derived(target); metadata=frontmatter(text,strict=True)
+            except WikiIntegrityError as exc:
+                metadata={}
+                if is_topic: field=exc.field
+            except (OSError,UnicodeError,ValueError):
+                metadata={}
+                if is_topic: field='frontmatter'
+            if is_topic and field is None and metadata.get('wiki_kind')!=parts[0]: field='wiki_kind'
+            if field is not None:
+                if issues is not None: issues.append({'page':relative,'issue':'wiki metadata missing or invalid','field':field})
+                continue
+            if metadata.get('wiki_kind') in KINDS:
+                if not is_topic: _wiki_path_issue(issues,relative)
+                else: found.append({'path':relative,'sha256':s.digest(raw),'meta':metadata})
     return found
 
 def _checked_pages():
@@ -450,6 +493,7 @@ def prepare(limit=4):
         while True:
             packet=base_packet if generation==0 else {**base_packet,'retry_generation':generation}
             try: ident=s.digest(_bounded_json(packet,sort_keys=True,default=str).encode())[:24]
+            except _JSONTooLarge: raise WikiIntegrityError(BASE+'Index.md',field='packet') from None
             except (ValueError,TypeError,RecursionError,UnicodeError):
                 raise WikiIntegrityError(relevant[0]['path'] if relevant else BASE+'Index.md') from None
             previous=conn.execute('SELECT status FROM batches WHERE id=?',(ident,)).fetchone()
@@ -707,10 +751,10 @@ def rebuild_source_links():
     cfg.require_maintainer()
     with FileLock(str(cfg.STATE/'writer.lock'),timeout=30):
         links={}
-        for page in pages():
+        for page in _checked_pages():
             for claim in _list(page['meta'].get('wiki_claims')):
                 if _valid_claim(claim): links.setdefault(claim['source'],set()).add(page['path'])
-        receipts=[]
+        receipts=[]; planned=[]
         for target in (s.VAULT/BASE/'Sources').glob('*.md'):
             rel=target.relative_to(s.VAULT).as_posix(); s.safe_path(rel)
             raw,text=_read_derived(target); info=_derived_metadata(target,text)
@@ -727,7 +771,9 @@ def rebuild_source_links():
             if re.search(r'(?m)^## Wiki pages\s*$',body):
                 body=re.sub(r'(?ms)^## Wiki pages\s*\n.*?(?=^## |\Z)',lambda match:section+'\n',body)
             else: body=body.rstrip()+'\n\n'+section
-            receipts.append(s._write(target,s.note_text(info,body),'wiki_source_link_repair',s.digest(raw)))
+            planned.append((target,_serialize_derived(target,info,body),s.digest(raw)))
+        for target,text,before in planned:
+            receipts.append(s._write(target,text,'wiki_source_link_repair',before))
         return {'source_records_updated':len(receipts),'receipts':receipts}
 
 def _read_derived(path):
@@ -742,7 +788,126 @@ def _derived_metadata(path,text):
     try: return frontmatter(text,strict=True)
     except ValueError: raise WikiIntegrityError(path.relative_to(s.VAULT).as_posix(),field='frontmatter') from None
 
-def _current_hash(path): return s.digest(path.read_bytes()) if path.exists() else None
+LOG_LIMIT=1_000_000
+STREAM_BLOCK=65536
+LOG_HEADER='# Wiki compilation log\n\nThis is compilation history; the maintenance service owns daily-note aggregation.\n'
+
+def _stream_file(path,utf8=False,sink=None,keep_limit=0):
+    digest=hashlib.sha256(); size=0; kept=bytearray(); decoder=codecs.getincrementaldecoder('utf-8')('strict') if utf8 else None
+    with path.open('rb') as stream:
+        expected=os.fstat(stream.fileno()).st_size; remaining=expected
+        while remaining:
+            chunk=stream.read(min(STREAM_BLOCK,remaining))
+            if not chunk: raise WikiTransientError('File changed during a bounded streaming read.')
+            remaining-=len(chunk); digest.update(chunk); size+=len(chunk)
+            if decoder is not None: decoder.decode(chunk,final=False)
+            if sink is not None: sink.write(chunk)
+            if keep_limit and len(kept)<=keep_limit:
+                if size<=keep_limit: kept.extend(chunk)
+                else: kept.clear(); keep_limit=0
+        if stream.read(1) or os.fstat(stream.fileno()).st_size!=expected:
+            raise WikiTransientError('File grew during a bounded streaming read.')
+        if decoder is not None: decoder.decode(b'',final=True)
+    return digest.hexdigest(),size,bytes(kept) if keep_limit else None
+
+def _spool_folder(folder):
+    expected=cfg.STATE/'wiki/batches'/folder.name
+    if not re.fullmatch('[a-f0-9]{24}',folder.name) or folder!=expected:
+        raise WikiIntegrityError(BASE+'Log.md',field='archive')
+    for path in (cfg.STATE,cfg.STATE/'wiki',cfg.STATE/'wiki/batches',folder):
+        if path.is_symlink() or os.path.isjunction(path): raise WikiIntegrityError(BASE+'Log.md',field='archive')
+    if not folder.resolve().is_relative_to(cfg.STATE.resolve()): raise WikiIntegrityError(BASE+'Log.md',field='archive')
+    return folder
+
+def _immutable_spool(temp,target,sha,size):
+    _spool_folder(target.parent)
+    if target.is_symlink() or os.path.isjunction(target) or not target.resolve().is_relative_to(target.parent.resolve()):
+        raise WikiIntegrityError(BASE+'Log.md',field='archive')
+    try: os.link(temp,target)
+    except FileExistsError:
+        if _stream_file(target)[:2]!=(sha,size): raise WikiIntegrityError(BASE+'Log.md',field='archive') from None
+
+def _current_hash(path):
+    try: return _stream_file(path)[0]
+    except FileNotFoundError: return None
+
+def _log_snapshot(folder):
+    # Private immutable staging; even a legacy oversized log is never loaded
+    # into one string, plan value or backup buffer.
+    log=s.safe_path(BASE+'Log.md')
+    if not log.exists(): return {'sha256':None,'bytes':0,'raw':LOG_HEADER.encode(),'spool':None}
+    _spool_folder(folder); folder.mkdir(parents=True,exist_ok=True); _spool_folder(folder)
+    fd,name=tempfile.mkstemp(prefix='.log-',suffix='.tmp',dir=folder)
+    try:
+        with os.fdopen(fd,'wb') as stream:
+            try: sha,size,raw=_stream_file(log,utf8=True,sink=stream,keep_limit=LOG_LIMIT)
+            except UnicodeError: raise WikiIntegrityError(BASE+'Log.md',field='encoding') from None
+            stream.flush(); os.fsync(stream.fileno())
+        if _current_hash(log)!=sha: raise WikiTransientError('Compilation log changed while its history was staged.')
+        spool=None
+        if raw is None:
+            spool='log-history-'+sha+'.bin'; target=folder/spool
+            _immutable_spool(name,target,sha,size)
+        return {'sha256':sha,'bytes':size,'raw':raw,'spool':spool}
+    finally:
+        if os.path.exists(name): os.unlink(name)
+
+def _log_entry(now,packet,result):
+    return '\n## ['+now+'] ingest | '+packet['batch_id']+'\n<!-- wiki-batch:'+packet['batch_id']+' -->\n'+'\n'.join('- [['+(BASE+p['category']+'/'+p['slug'])+']]' for p in result['pages'])+'\n'
+
+def _rotated_log(archive,entry):
+    return LOG_HEADER+'\nPrevious complete history: [['+archive[:-3]+']]\n'+entry
+
+def _archive_payload(plan,packet):
+    rotation=plan.get('log_rotation')
+    try:
+        if not isinstance(rotation,dict) or set(rotation)!={'sha256','bytes','spool','path','at'}: raise ValueError()
+        sha=rotation['sha256']; size=rotation['bytes']
+        if not isinstance(sha,str) or not re.fullmatch('[a-f0-9]{64}',sha) or type(size) is not int or size<0: raise ValueError()
+        if rotation['spool']!='log-history-'+sha+'.bin' or rotation['path']!=BASE+'Log-Archives/'+sha+'.md': raise ValueError()
+        if not isinstance(rotation['at'],str) or len(rotation['at'])>80: raise ValueError()
+        datetime.fromisoformat(rotation['at'])
+        folder=_spool_folder(cfg.STATE/'wiki/batches'/packet['batch_id']); spool=folder/rotation['spool']
+        if spool.is_symlink() or os.path.isjunction(spool) or not spool.resolve().is_relative_to(folder.resolve()) or _stream_file(spool,utf8=True)[:2]!=(sha,size): raise ValueError()
+        return spool
+    except (ValueError,TypeError,OSError,UnicodeError): raise WikiIntegrityError(BASE+'Log.md',field='archive') from None
+
+def _publication_target(relative):
+    try: return s.safe_path(relative)
+    except (ValueError,TypeError,UnicodeError): raise WikiIntegrityError(BASE+'Index.md',field='path') from None
+
+def _stream_publish(write,payload=None):
+    # This narrow path handles archive create-only and a bounded active Log
+    # replacement. It retains the normal writer's audit and immediate CAS checks
+    # without reading an oversized before-image into memory.
+    target=_publication_target(write['path']); current=_current_hash(target)
+    if current==write['after']: return {'path':write['path'],'status':'recovered','sha256':current}
+    archive=write['kind']=='wiki_log_archive'
+    if current!=write['before']:
+        if archive: raise WikiIntegrityError(BASE+'Log.md',field='archive')
+        raise WikiTransientError('Compilation log changed before replacement.')
+    target.parent.mkdir(parents=True,exist_ok=True); _publication_target(write['path'])
+    fd,name=tempfile.mkstemp(prefix='.brain-',suffix='.tmp',dir=target.parent)
+    try:
+        with os.fdopen(fd,'wb') as stream:
+            if archive:
+                sha,size,_=_stream_file(payload,utf8=True,sink=stream)
+                if sha!=write['after'] or size!=write['bytes']: raise WikiIntegrityError(BASE+'Log.md',field='archive')
+            else: stream.write(write['text'].encode('utf-8'))
+            stream.flush(); os.fsync(stream.fileno())
+        if _current_hash(target)!=write['before']: raise WikiTransientError('Compilation log/archive changed before replacement.')
+        if archive:
+            # Atomic create-only: never overwrite an independently created file.
+            try: os.link(name,target)
+            except FileExistsError:
+                if _current_hash(target)!=write['after']: raise WikiIntegrityError(BASE+'Log.md',field='archive') from None
+        else: os.replace(name,target)
+    finally:
+        if os.path.exists(name): os.unlink(name)
+    entry={'at':s.stamp(),'action':write['kind'],'path':write['path'],'before':write['before'],'after':write['after']}
+    with (s.STATE/'audit.jsonl').open('a',encoding='utf-8') as stream: stream.write(json.dumps(entry)+'\n')
+    return {'path':write['path'],'status':'saved','sha256':write['after'],'saved_at':entry['at']}
+
 
 def _source_bytes(raw,active=None):
     text=normalized(raw.decode('utf-8-sig'))
@@ -971,6 +1136,12 @@ def _render_topic(page,packet,ident,result_hash,history=None):
     body+='\n\n## Uncertainty and superseded decisions\nConflicting claims are retained above. Check original dated evidence before treating a claim as current.\n'
     return rel,info,s.note_text(info,body),before
 
+def _serialize_derived(path,info,body):
+    try:
+        text=s.note_text(info,body); text.encode('utf-8'); return text
+    except (RecursionError,TypeError,ValueError,UnicodeError):
+        raise WikiIntegrityError(path.relative_to(s.VAULT).as_posix(),field='serialization') from None
+
 def _source_note(row,topic_pages):
     target=s.safe_path(BASE+'Sources/'+s.digest(row['path'].encode())[:16]+'.md')
     if target.exists():
@@ -985,7 +1156,7 @@ def _source_note(row,topic_pages):
                  'wiki_pages':linked,'latest_source_part':max(latest,row.get('part',1)),
                  'source_parts':row.get('parts',1),'source_hashes':{row['path']:row['sha256']},'updated_at':now,'maintained_by':cfg.DEVICE_ID})
     body=f'# {row["title"]}\n\nOriginal: [[{row["path"][:-3]}]]\n\nSource date: {row["date"]}\n\n## Wiki pages\n'+'\n'.join('- [['+path[:-3]+']]' for path in linked)
-    return target,s.note_text(info,body),before
+    return target,_serialize_derived(target,info,body),before
 
 def _publication_plan(packet,result,dispositions):
     ident=packet['batch_id']; result_hash=_json_hash(result); writes=[]
@@ -1008,15 +1179,41 @@ def _publication_plan(packet,result,dispositions):
     info={'date':now[:10],'type':'note','tags':['ai-memory','derived','wiki-index'],'updated_at':now,'maintained_by':cfg.DEVICE_ID,'sources':list(sources),'source_hashes':{k:v['sha256'] for k,v in sources.items()}}
     _plan_write(writes,index,s.note_text(info,content),'wiki_index',index_before)
     log=s.safe_path(BASE+'Log.md'); marker='<!-- wiki-batch:'+ident+' -->'
-    if log.exists(): raw,text=_read_derived(log); before=s.digest(raw)
-    else: text='# Wiki compilation log\n\nThis is compilation history; the maintenance service owns daily-note aggregation.\n'; before=None
-    if marker not in text:
-        text+='\n## ['+now+'] ingest | '+ident+'\n'+marker+'\n'+'\n'.join('- [['+(BASE+p['category']+'/'+p['slug'])+']]' for p in result['pages'])+'\n'
-        _plan_write(writes,log,text,'wiki_log',before)
+    folder=cfg.STATE/'wiki/batches'/ident; snapshot=_log_snapshot(folder)
+    entry=_log_entry(now,packet,result); rotation=None
+    if snapshot['raw'] is None or snapshot['bytes']+len(entry.encode())>LOG_LIMIT:
+        sha=snapshot['sha256']; spool=snapshot['spool']
+        if spool is None:
+            spool='log-history-'+sha+'.bin'; payload=folder/spool
+            if payload.is_symlink(): raise WikiIntegrityError(BASE+'Log.md',field='archive')
+            if payload.exists():
+                if _stream_file(payload)[:2]!=(sha,snapshot['bytes']): raise WikiIntegrityError(BASE+'Log.md',field='archive')
+            else:
+                fd,name=tempfile.mkstemp(prefix='.log-',suffix='.tmp',dir=folder)
+                try:
+                    with os.fdopen(fd,'wb') as stream: stream.write(snapshot['raw']); stream.flush(); os.fsync(stream.fileno())
+                    _immutable_spool(name,payload,sha,snapshot['bytes'])
+                finally:
+                    if os.path.exists(name): os.unlink(name)
+        archive=BASE+'Log-Archives/'+sha+'.md'
+        rotation={'sha256':sha,'bytes':snapshot['bytes'],'spool':spool,'path':archive,'at':now}
+        writes.insert(0,{'path':archive,'kind':'wiki_log_archive','before':None,'after':sha,'bytes':snapshot['bytes']})
+        text=_rotated_log(archive,entry)
+        if len(text.encode())>LOG_LIMIT: raise WikiIntegrityError(BASE+'Log.md',field='content')
+        log_write={'path':BASE+'Log.md','text':text,'kind':'wiki_log','before':sha,'after':s.digest(text.encode())}
+    else:
+        text=normalized(snapshot['raw'].decode('utf-8-sig')); log_write=None
+        if marker not in text:
+            text+=entry
+            log_write={'path':BASE+'Log.md','text':text,'kind':'wiki_log','before':snapshot['sha256'],'after':s.digest(text.encode())}
     entries=_receipt_entries(packet,result,dispositions)
+    if log_write is not None and not rotation: _plan_write(writes,log,log_write['text'],'wiki_log',log_write['before'])
     _plan_write(writes,s.safe_path(BASE+'Receipts/'+ident+'.md'),_receipt_note(ident,entries),'wiki_receipt')
-    return {'version':2,'batch_id':ident,'packet_sha256':_json_hash(packet),'result_sha256':result_hash,
+    if log_write is not None and rotation: _plan_write(writes,log,log_write['text'],'wiki_log',log_write['before'])
+    plan={'version':3 if rotation else 2,'batch_id':ident,'packet_sha256':_json_hash(packet),'result_sha256':result_hash,
             'entries':entries,'writes':writes,'topic_paths':[BASE+p['category']+'/'+p['slug']+'.md' for p in result['pages']]}
+    if rotation: plan['log_rotation']=rotation
+    return plan
 
 def _finish_database(packet,plan,receipts):
     with db() as conn:
@@ -1034,21 +1231,35 @@ def _verify_publication_plan(plan,packet,result):
     index_path=BASE+'Index.md'; log_path=BASE+'Log.md'; receipt_path=BASE+'Receipts/'+packet['batch_id']+'.md'
     allowed={path:'wiki_compile' for path in topic_paths} | {path:'wiki_source' for path in source_paths}
     allowed.update({index_path:'wiki_index',log_path:'wiki_log',receipt_path:'wiki_receipt'})
-    if not isinstance(plan,dict) or plan.get('version')!=2 or plan.get('batch_id')!=packet['batch_id'] or plan.get('packet_sha256')!=_json_hash(packet) or plan.get('result_sha256')!=_json_hash(result):
+    if not isinstance(plan,dict) or type(plan.get('version')) is not int or plan['version'] not in (2,3) or plan.get('batch_id')!=packet['batch_id'] or plan.get('packet_sha256')!=_json_hash(packet) or plan.get('result_sha256')!=_json_hash(result):
         raise WikiOutputError('Saved publication plan identity does not match its verified input/output.')
     if plan.get('topic_paths')!=topic_paths or plan.get('entries')!=_receipt_entries(packet,result,_dispositions(packet,result)):
         raise WikiOutputError('Saved publication plan source-part evidence changed during recovery.')
+    rotation=plan.get('log_rotation')
+    if plan['version']==3:
+        _archive_payload(plan,packet)
+        allowed[rotation['path']]='wiki_log_archive'
+    elif rotation is not None: raise WikiOutputError('Legacy publication plans cannot authorize archives.')
     writes=plan.get('writes'); seen=set(); snapshots=_topic_snapshots(packet)
     if not isinstance(writes,list): raise WikiOutputError('Saved publication plan has no valid write list.')
     for write in writes:
         if not isinstance(write,dict) or not isinstance(write.get('path'),str) or write['path'] in seen or allowed.get(write['path'])!=write.get('kind'):
             raise WikiOutputError('Saved publication plan targets an unexpected or repeated note.')
-        seen.add(write['path']); s.safe_path(write['path'])
+        seen.add(write['path']); _publication_target(write['path'])
+        if write['kind']=='wiki_log_archive':
+            if set(write)!={'path','kind','before','after','bytes'} or write['before'] is not None or write['after']!=rotation['sha256'] or type(write['bytes']) is not int or write['bytes']!=rotation['bytes']:
+                raise WikiOutputError('Saved archive operation differs from its verified payload.')
+            continue
         text=write.get('text'); before=write.get('before')
         if write['kind']=='wiki_compile' and before!=snapshots.get(write['path']):
             raise WikiOutputError('Saved topic before image differs from its supplied snapshot.')
         if not isinstance(text,str) or s.digest(text.encode())!=write.get('after') or (before is not None and (not isinstance(before,str) or not re.fullmatch('[a-f0-9]{64}',before))):
             raise WikiOutputError('Saved publication plan text/hash integrity check failed.')
+    if plan['version']==3:
+        logs=[write for write in writes if write['path']==log_path]
+        expected=_rotated_log(rotation['path'],_log_entry(rotation['at'],packet,result))
+        if len(logs)!=1 or logs[0]['before']!=rotation['sha256'] or logs[0]['text']!=expected or len(expected.encode())>LOG_LIMIT or writes[0]['kind']!='wiki_log_archive' or writes[-1]['path']!=log_path:
+            raise WikiOutputError('Saved archive/log replacement does not match its history snapshot.')
     if not (set(topic_paths)|source_paths|{index_path,receipt_path})<=seen:
         raise WikiOutputError('Saved publication plan is missing a required derived note.')
 
@@ -1056,7 +1267,7 @@ def _publication_started(plan):
     # A durable private plan alone is still unused work. Recovery after an
     # owner exclusion is justified only by an actual changed derived note at
     # its verified planned hash, including replace-before-journal crashes.
-    return any(write['before']!=write['after'] and _current_hash(s.safe_path(write['path']))==write['after'] for write in plan['writes'])
+    return any(write['kind']!='wiki_log_archive' and write['before']!=write['after'] and _current_hash(_publication_target(write['path']))==write['after'] for write in plan['writes'])
 
 def _saved_publication_started(packet,publication):
     if not publication.exists(): return False
@@ -1076,9 +1287,17 @@ def apply(packet,result):
     ident=packet['batch_id']
     if not re.fullmatch('[a-f0-9]{24}',ident): raise ValueError('Invalid batch identity.')
     publication=cfg.STATE/'wiki/batches'/ident/'publication.json'
-    _validate(packet,result,screen_paths=not _saved_publication_started(packet,publication)); dispositions=_dispositions(packet,result)
+    repairing=_saved_publication_started(packet,publication)
+    if publication.exists() and not repairing:
+        try:
+            for page in result['pages']:
+                s.clean_text(BASE+page['category']+'/'+page['slug']+'.md',400)
+                for link in page['related']: s.safe_path(link); s.clean_text(link,400)
+        except (ValueError,TypeError,UnicodeError): raise WikiIntegrityError(BASE+'Index.md',field='path') from None
+    _validate(packet,result,screen_paths=not repairing); dispositions=_dispositions(packet,result)
     folder=cfg.STATE/'wiki/batches'/ident; journal=folder/'journal.json'; publication=folder/'publication.json'
     with FileLock(str(cfg.STATE/'writer.lock'),timeout=30):
+        already_planned=publication.exists()
         _assert_source_policy(packet,allow_durable=_saved_publication_started(packet,publication))
         with db() as conn: previous=conn.execute('SELECT * FROM batches WHERE id=?',(ident,)).fetchone()
         if previous and previous['status']=='complete':
@@ -1103,24 +1322,39 @@ def apply(packet,result):
             _atomic_json(folder/'input.json',packet); _atomic_json(folder/'output.json',result)
             _atomic_json(publication,plan)
         _verify_publication_plan(plan,packet,result)
+        log_changes=[write for write in plan['writes'] if write['kind']=='wiki_log' and _current_hash(_publication_target(write['path'])) not in (write['before'],write['after'])]
+        if log_changes and already_planned and not _publication_started(plan):
+            if any(write['kind'] not in ('wiki_log','wiki_log_archive') and _current_hash(_publication_target(write['path'])) not in (write['before'],write['after']) for write in plan['writes']):
+                raise WikiTransientError('Wiki page changed during publication; rebuild the batch.')
+            _assert_source_policy(packet)
+            _atomic_json(folder/('publication-obsolete-'+_current_hash(publication)[:24]+'.json'),plan)
+            plan=_publication_plan(packet,result,dispositions)
+            _assert_source_policy(packet)
+            _atomic_json(publication,plan)
+            _verify_publication_plan(plan,packet,result)
         _assert_source_policy(packet,allow_durable=_publication_started(plan))
         for row in packet['sources']:
             if _current_hash(s.safe_path(row['path']))!=row['sha256']: raise WikiTransientError('Source changed during publication planning; rebuild the batch.')
         # The whole plan is durable before the first note write. A process killed
         # after os.replace and before journaling is recovered by the planned hash.
         for write in plan['writes']:
-            current=_current_hash(s.safe_path(write['path']))
-            if current not in (write['before'],write['after']): raise WikiTransientError('Wiki page changed during publication; rebuild the batch.')
+            current=_current_hash(_publication_target(write['path']))
+            if current not in (write['before'],write['after']):
+                if write['kind']=='wiki_log_archive': raise WikiIntegrityError(BASE+'Log.md',field='archive')
+                if write['kind']=='wiki_log' and not _publication_started(plan): raise _WikiLogChanged('Compilation log changed before initial publication; reuse saved output on retry.')
+                raise WikiTransientError('Wiki page changed during publication; rebuild the batch.')
         receipts=[]; progress=[]
         _atomic_json(journal,{'version':2,'state':'applying','packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress})
         for write in plan['writes']:
             _assert_source_policy(packet,allow_durable=_publication_started(plan))
-            target=s.safe_path(write['path'])
+            target=_publication_target(write['path'])
             if _current_hash(target)==write['after']:
                 receipt={'path':write['path'],'status':'recovered','sha256':write['after']}
             else:
                 if _current_hash(target)!=write['before']: raise WikiTransientError('Wiki page changed during publication; rebuild the batch.')
-                receipt=s._write(target,write['text'],write['kind'],write['before'])
+                if write['kind']=='wiki_log_archive': receipt=_stream_publish(write,_archive_payload(plan,packet))
+                elif plan['version']==3 and write['kind']=='wiki_log': receipt=_stream_publish(write)
+                else: receipt=s._write(target,write['text'],write['kind'],write['before'])
                 if receipt.get('sha256')!=write['after'] or _current_hash(target)!=write['after']:
                     raise OSError('Published note does not match the durable planned hash.')
             if write['path'] in plan['topic_paths']: receipts.append(receipt)
@@ -1158,10 +1392,10 @@ def lint():
         source_hashes=p['meta'].get('source_hashes',{})
         if not isinstance(source_hashes,dict):
             issues.append({'page':p['path'],'issue':'malformed source hash metadata'}); source_hashes={}
-        for src,h in source_hashes.items():
-            try: s.safe_path(src)
-            except (ValueError,TypeError):
-                issues.append({'page':p['path'],'issue':'malformed source path metadata'}); continue
+        for source_index,(src,h) in enumerate(source_hashes.items()):
+            try: s.safe_path(src); src.encode('utf-8'); s.clean_text(src,400)
+            except (ValueError,TypeError,UnicodeError,AttributeError):
+                issues.append({'page':p['path'],'issue':'malformed source path metadata','field':'source_hashes','source_index':source_index}); continue
             if not isinstance(h,str) or not re.fullmatch('[a-f0-9]{64}',h):
                 issues.append({'page':p['path'],'issue':'malformed source hash metadata','source':src}); continue
             proof=history.source(src,h)
@@ -1178,9 +1412,10 @@ def lint():
         related_paths=p['meta'].get('related',[])
         if not isinstance(related_paths,list):
             issues.append({'page':p['path'],'issue':'malformed related link metadata'}); related_paths=[]
-        for related in related_paths:
-            if not isinstance(related,str):
-                issues.append({'page':p['path'],'issue':'malformed related link metadata'}); continue
+        for related_index,related in enumerate(related_paths):
+            try: s.safe_path(related); related.encode('utf-8'); s.clean_text(related,400)
+            except (ValueError,TypeError,UnicodeError,AttributeError):
+                issues.append({'page':p['path'],'issue':'malformed related link metadata','field':'related','related_index':related_index}); continue
             if related not in known: issues.append({'page':p['path'],'issue':'broken related link','target':related})
         for index,claim in enumerate(claims):
             try: _validate_existing_claim(p['path'],claim,index)
@@ -1215,13 +1450,15 @@ def cleanup(days=30):
     base=(cfg.STATE/'wiki/batches').resolve()
     for row in completed:
         if datetime.fromisoformat(row['updated']).timestamp()>=cutoff: continue
-        folder=(base/row['id']).resolve()
-        if not folder.is_relative_to(base): raise ValueError('Unsafe batch cleanup path.')
+        if not isinstance(row['id'],str) or not re.fullmatch('[a-f0-9]{24}',row['id']): raise ValueError('Unsafe batch cleanup path.')
+        folder=_spool_folder(cfg.STATE/'wiki/batches'/row['id'])
+        if not folder.resolve().is_relative_to(base): raise ValueError('Unsafe batch cleanup path.')
         journal=folder/'journal.json'
         try:
             if json.loads(journal.read_text(encoding='utf-8')).get('state')!='complete': continue
         except (OSError,ValueError): continue
-        for name in ('input.json','output.json','runner.log','schema.json','publication.json'):
+        spool_names=[path.name for path in folder.iterdir() if re.fullmatch(r'(?:log-history-[a-f0-9]{64}\.bin|publication-obsolete-[a-f0-9]{24}\.json)',path.name)]
+        for name in ('input.json','output.json','runner.log','schema.json','publication.json',*spool_names):
             path=folder/name
             if path.is_file() and not path.is_symlink(): path.unlink(); removed+=1
     return removed
@@ -1256,7 +1493,7 @@ def _full_catalog_snapshot(packet):
 def _resume_packet(policy=None):
     policy=source_policy() if policy is None else policy
     with db() as conn:
-        batches=list(conn.execute("SELECT * FROM batches WHERE status IN ('pending','retryable','applying','published','complete') ORDER BY updated,id"))
+        batches=list(conn.execute("SELECT * FROM batches WHERE status IN ('pending','retryable','applying','published','complete','stale') ORDER BY updated,id"))
     eligibility=None; current_catalog=None
     for batch in batches:
         folder=cfg.STATE/'wiki/batches'/batch['id']; journal=folder/'journal.json'; input_path=folder/'input.json'
@@ -1279,6 +1516,21 @@ def _resume_packet(policy=None):
             continue
         packet=json.loads(input_path.read_text(encoding='utf-8'))
         if packet.get('batch_id')!=batch['id']: raise ValueError('Saved wiki batch identity mismatch.')
+        if publication.exists():
+            # Invalid durable recovery input stays visible even if a portable
+            # source receipt already covers its parts. It grants no authority.
+            try:
+                output=json.loads((folder/'output.json').read_text(encoding='utf-8'))
+                plan=json.loads(publication.read_text(encoding='utf-8'))
+                _validate(packet,output,screen_paths=False); _verify_publication_plan(plan,packet,output)
+            except WikiIntegrityError: raise
+            except (OSError,ValueError,TypeError,KeyError): raise WikiIntegrityError(BASE+'Index.md',field='recovery') from None
+        if batch['status']=='stale' and not _saved_publication_started(packet,publication): continue
+        if batch['status']!='complete' and not _saved_publication_started(packet,publication):
+            try: _validate_packet_paths({'sources':packet['sources']})
+            except WikiIntegrityError:
+                with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('superseded',s.stamp(),batch['id']))
+                continue
         if batch['status']!='complete' and any(_policy_excluded(row['path'],policy) for row in packet['sources']) and not _saved_publication_started(packet,publication):
             with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('superseded',s.stamp(),batch['id']))
             continue
@@ -1332,13 +1584,27 @@ def run(limit=4,timeout=480):
             return {'status':'attention','reason':saved.get('reason'),'batch_id':saved.get('batch_id'),
                     'consecutive_failures':saved.get('consecutive_failures',0),'manual_retry_required':True,
                     'pending_parts':saved.get('pending_parts',[])}
-        packet=_resume_packet(policy)
+        try: packet=_resume_packet(policy)
+        except WikiIntegrityError as exc:
+            attention={'status':'attention','at':s.stamp(),'reason':'WikiIntegrityError','retry_after':0,'backoff_seconds':0,
+                       'consecutive_failures':saved.get('consecutive_failures',0),'attention_required':True,
+                       'integrity_page':exc.page,'integrity_field':exc.field,'claim_index':exc.claim_index,'manual_retry_required':True}
+            _atomic_json(worker_state,attention)
+            raise
+        except (WikiTransientError,OSError) as exc:
+            receipt={'status':'retryable','at':s.stamp(),'reason':type(exc).__name__,'retry_after':time.time()+60,
+                     'backoff_seconds':60,'consecutive_failures':saved.get('consecutive_failures',0),'attention_required':False,'model_called':False}
+            _atomic_json(worker_state,receipt)
+            return receipt
         resumed=packet is not None
         saved_output=resumed and (cfg.STATE/'wiki/batches'/packet['batch_id']/'output.json').exists()
         # Durable output can finish publication without spending another model
         # request, so its recovery bypasses model backoff. Pure lock contention
         # does not exhaust the attention budget; persistent processing errors do.
-        if saved.get('retry_after',0)>time.time() and not (saved.get('status')=='retryable' and saved_output):
+        with db() as conn:
+            previous=conn.execute('SELECT status FROM batches WHERE id=?',(saved.get('batch_id'),)).fetchone()
+        superseded=previous and previous['status']=='superseded'
+        if saved.get('retry_after',0)>time.time() and not superseded and not (saved.get('status')=='retryable' and saved_output):
             return {'status':'blocked','reason':saved.get('reason'),'retry_after':saved['retry_after']}
         try:
             if packet is None: packet=prepare(limit)
@@ -1349,6 +1615,7 @@ def run(limit=4,timeout=480):
                     _validate_packet_paths(packet)
                     if resumed: _checked_pages()
                     _validate_packet_context(packet)
+                    if not publication.exists(): _log_snapshot(cfg.STATE/'wiki/batches'/packet['batch_id'])
         except WikiPolicyError as exc: return _policy_attention(exc)
         except WikiIntegrityError as exc:
             attention={'status':'attention','at':s.stamp(),'reason':'WikiIntegrityError','retry_after':0,'backoff_seconds':0,
@@ -1356,6 +1623,13 @@ def run(limit=4,timeout=480):
                        'integrity_page':exc.page,'integrity_field':exc.field,'claim_index':exc.claim_index,'manual_retry_required':True}
             _atomic_json(worker_state,attention)
             return attention
+        except (WikiTransientError,OSError) as exc:
+            receipt={'status':'retryable','at':s.stamp(),'reason':type(exc).__name__,'retry_after':time.time()+60,
+                     'backoff_seconds':60,'consecutive_failures':saved.get('consecutive_failures',0),'attention_required':False,
+                     'model_called':False}
+            if packet: receipt['batch_id']=packet['batch_id']
+            _atomic_json(worker_state,receipt)
+            return receipt
         if not packet: return {'status':'idle',**status()}
         folder=cfg.STATE/'wiki'/'batches'/packet['batch_id']; output=folder/'output.json'; schema=folder/'schema.json'
         short_sources=[row for row in packet['sources'] if _short_part(row)]
@@ -1453,7 +1727,7 @@ def run(limit=4,timeout=480):
                 for row in packet['sources'] if isinstance(exc,WikiOutputError) and exc.source else []:
                     if row['path']!=exc.source: continue
                     conn.execute('INSERT INTO sources(path,error,attempts,attempt_hash) VALUES(?,?,1,?) ON CONFLICT(path) DO UPDATE SET error=excluded.error,attempts=CASE WHEN attempt_hash=excluded.attempt_hash THEN attempts+1 ELSE 1 END,attempt_hash=excluded.attempt_hash',(row['job_key'],type(exc).__name__,row['sha256']))
-                state='stale' if isinstance(exc,WikiTransientError) else 'retryable' if transient else 'error'
+                state='stale' if isinstance(exc,WikiTransientError) and not isinstance(exc,_WikiLogChanged) else 'retryable' if transient else 'error'
                 # A final journal-write failure must not turn an already committed
                 # publication back into an unfinished source batch.
                 conn.execute("UPDATE batches SET status=?,updated=? WHERE id=? AND status!='complete'",(state,s.stamp(),packet['batch_id']))

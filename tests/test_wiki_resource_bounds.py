@@ -80,7 +80,7 @@ def test_saved_packet_total_context_is_bounded_before_model_input_allocation(bra
     before=note_snapshot(); sizes=measure_json(monkeypatch); calls=fake_model(monkeypatch,explicit(packet,result))
     report=w.run(); assert report['status']=='attention' and report['consecutive_failures']==0 and len(calls)==0
     assert max(sizes,default=0)<=2_000_000 and note_snapshot()==before
-    assert report['integrity_page']==topic.relative_to(s.VAULT).as_posix()
+    assert report['integrity_page']==w.BASE+'Index.md' and report['integrity_field']=='packet'
 
 
 def test_small_benign_alias_context_preserves_publication_claims_and_receipts(brain,monkeypatch):

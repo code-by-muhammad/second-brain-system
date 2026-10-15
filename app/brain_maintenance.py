@@ -6,6 +6,7 @@ from filelock import FileLock
 import brain_store as s
 import brain_settings as cfg
 from brain_wiki import meta as parse_meta
+from brain_markdown import frontmatter
 
 def save_status(status):
     path=s.STATE/'maintenance-status.json'
@@ -118,7 +119,7 @@ def maintenance(sync=True):
             else: body=body[:end].rstrip()+'\n'+entry+'\n'+body[end:]
             s._write(target,body,'daily_capture_link'); status['captures_linked']+=1
         for p in (s.VAULT/'02-Areas/AI-Memory').rglob('*.md'):
-            try: raw=p.read_text(encoding='utf-8'); meta=parse_meta(raw)
+            try: raw=p.read_text(encoding='utf-8'); meta=frontmatter(raw,strict=True)
             except (OSError,UnicodeError,ValueError):
                 add_review(status,p,['derived metadata could not be read; original preserved']); continue
             if not isinstance(meta,dict) or not meta: continue

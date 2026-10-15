@@ -508,7 +508,7 @@ def test_saved_recovery_plan_cannot_modify_originals_or_bypass_planned_evidence(
     assert not any(row['attempts'] for row in source_rows().values())
 
 
-def test_stale_non_catalog_target_gets_new_attempt_and_preserves_owner_log(brain,monkeypatch):
+def test_unused_log_race_reuses_saved_output_and_preserves_owner_history(brain,monkeypatch):
     _,packet,result=fixture(brain); calls=fake_model(monkeypatch,explicit(packet,result))
     original=w._atomic_json; edited=False; log=s.VAULT/w.BASE/'Log.md'
     def edit_after_plan(path,value):
@@ -521,12 +521,10 @@ def test_stale_non_catalog_target_gets_new_attempt_and_preserves_owner_log(brain
     monkeypatch.setattr(w,'_atomic_json',edit_after_plan)
     with pytest.raises(w.WikiTransientError): w.run()
     assert len(calls)==1 and w.status()['pending_source_parts']==1
-    retry=w.prepare(); assert retry['batch_id']!=packet['batch_id']
     saved=json.loads((cfg.STATE/'wiki-worker-status.json').read_text())
-    assert saved['backoff_seconds']==3600 and w.run()['status']=='blocked' and len(calls)==1
-    later=saved['retry_after']+1; monkeypatch.setattr(w.time,'time',lambda:later)
+    assert saved['backoff_seconds']==3600
     completed=w.run()
-    assert completed['status']=='complete' and completed['batch_id']==retry['batch_id'] and len(calls)==2
+    assert completed['status']=='complete' and completed['batch_id']==packet['batch_id'] and len(calls)==1
     assert 'Owner review evidence must survive retry.' in log.read_text()
     assert w.status()['pending_source_parts']==0
     assert (cfg.STATE/'wiki/batches'/packet['batch_id']/'publication.json').exists()
@@ -564,11 +562,13 @@ def test_repeated_worker_failures_stop_after_three_without_source_blame(brain,mo
         def fail_render(*args): raise RuntimeError('synthetic persistent rendering failure')
         monkeypatch.setattr(w,'_source_note',fail_render)
     if mode=='persistent-stale':
+        revisions=[]
         def edit_log_after_plan(path,value):
             original_atomic(path,value)
             if path.name=='publication.json':
                 log=s.VAULT/w.BASE/'Log.md'; log.parent.mkdir(parents=True,exist_ok=True)
-                log.write_text(f'# Owner log revision {len(calls)}\n',encoding='utf-8')
+                revisions.append(1)
+                log.write_text(f'# Owner log revision {len(revisions)}\n',encoding='utf-8')
         monkeypatch.setattr(w,'_atomic_json',edit_log_after_plan)
     clock=[w.time.time()]; monkeypatch.setattr(w.time,'time',lambda:clock[0])
     for attempt in range(3):
@@ -577,7 +577,7 @@ def test_repeated_worker_failures_stop_after_three_without_source_blame(brain,mo
         clock[0]=max(clock[0]+1,saved.get('retry_after',0)+1)
     try: fourth=w.run()
     except Exception: fourth={'status':'unhandled'}
-    assert fourth['status']=='attention' and len(calls)==3
+    assert fourth['status']=='attention' and len(calls)==(1 if mode=='persistent-stale' else 3)
     assert not any(row['attempts'] for row in source_rows().values())
     assert w.status()['pending_source_parts']==1 and source.exists()
     saved=json.loads((cfg.STATE/'wiki-worker-status.json').read_text())

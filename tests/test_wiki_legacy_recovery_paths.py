@@ -96,7 +96,9 @@ def test_legacy_path_policy_only_exempts_fully_verified_actual_publication(brain
     monkeypatch.setattr(s,'clean_text',clean);monkeypatch.setattr(s,'_write',write)
     assert w._saved_publication_started(packet,folder/'publication.json') is started
     if started:assert w.run()['status']=='complete'
-    elif location=='source':assert w.run()['status']=='attention'
+    elif location=='source':
+        assert w.run()['status']=='idle'
+        with w.db() as conn:assert conn.execute('SELECT status FROM batches WHERE id=?',(packet['batch_id'],)).fetchone()[0]=='superseded'
     else:
         with pytest.raises(ValueError):w.run()
     assert len(calls)==1 and source.read_bytes()==original and all((folder/name).read_bytes()==raw for name,raw in saved.items())
