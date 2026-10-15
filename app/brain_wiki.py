@@ -571,8 +571,11 @@ def prepare(limit=4):
             if not already_published and not stale_plan and not shared_only: break
             generation+=1
     packet['batch_id']=ident
-    # The durable selection must fit the same budget as its saved reader.
-    try: _bounded_json(packet,sort_keys=True,default=str)
+    # Shared YAML containers expand in JSON. Check the complete decoded form
+    # against the saved reader's budget before creating durable recovery input.
+    try:
+        serialized=_bounded_json(packet,sort_keys=True,default=str)
+        _bounded_json(json.loads(serialized),sort_keys=True,default=str)
     except (_JSONTooLarge,_JSONStructureTooLarge): raise WikiIntegrityError(BASE+'Index.md',field='packet') from None
     folder=cfg.STATE/'wiki'/'batches'/ident; folder.mkdir(parents=True,exist_ok=True)
     packet_path=folder/'input.json'
