@@ -198,6 +198,12 @@ def _validate_packet_paths(packet):
 
 def _validate_packet_context(packet):
     _validate_packet_paths(packet)
+    for row in packet.get('sources',[]):
+        try:
+            for key in ('text','title','date'):
+                s.clean_text(row[key],2_000_000); row[key].encode('utf-8')
+        except (ValueError,UnicodeError,TypeError,KeyError,AttributeError):
+            raise WikiIntegrityError(BASE+'Index.md',field='content') from None
     # Saved packets predate new safeguards too. Screen their actual selected
     # metadata before a request, without changing their durable source evidence.
     for page in packet.get('current_pages',[]):
@@ -534,7 +540,7 @@ def prepare(limit=4):
                 raise WikiIntegrityError(relevant[0]['path'] if relevant else BASE+'Index.md') from None
             previous=conn.execute('SELECT status FROM batches WHERE id=?',(ident,)).fetchone()
             already_published=previous and previous['status'] in ('complete','superseded','legacy_unverified')
-            stale_plan=previous and previous['status']=='stale' and (cfg.STATE/'wiki/batches'/ident/'publication.json').exists()
+            stale_plan=previous and previous['status']=='stale'
             shared_only=previous is None and s.safe_path(BASE+'Receipts/'+ident+'.md').exists()
             if not already_published and not stale_plan and not shared_only: break
             generation+=1
@@ -1546,6 +1552,12 @@ def _full_catalog_snapshot(packet):
         snapshot[page['path']]=page['sha256']
     return snapshot
 
+def _recovery_integrity(batch_id,field='recovery'):
+    error=WikiIntegrityError(BASE+'Index.md',field=field)
+    if isinstance(batch_id,str) and re.fullmatch('[a-f0-9]{24}',batch_id): error.batch_id=batch_id
+    return error
+
+
 def _read_saved_packet(path,batch_id):
     """Decode bounded durable input before any resume decision or model request."""
     try:
@@ -1562,19 +1574,25 @@ def _read_saved_packet(path,batch_id):
             if not re.fullmatch('[a-f0-9]{64}',row['sha256']): raise ValueError('Invalid saved source hash.')
             if type(row.get('part')) is not int or type(row.get('parts')) is not int or not 1<=row['part']<=row['parts']<=87: raise ValueError('Invalid saved source part.')
             if row['job_key']!=row['path']+'::part'+str(row['part']): raise ValueError('Invalid saved source key.')
+        if len({row['path'] for row in packet['sources']})!=len(packet['sources']) or len({row['job_key'] for row in packet['sources']})!=len(packet['sources']): raise ValueError('Duplicate saved source identity.')
         for row in packet['catalog']+packet['current_pages']:
             if not isinstance(row.get('path'),str): raise ValueError('Invalid saved page.')
+        catalog_hashes={}
         for row in packet['catalog']:
             if not isinstance(row.get('title'),str): raise ValueError('Invalid catalog title.')
+            if 'sha256' in row and (not isinstance(row['sha256'],str) or not re.fullmatch('[a-f0-9]{64}',row['sha256'])): raise ValueError('Invalid saved catalog hash.')
+            if 'sha256' in row:
+                if row['path'] in catalog_hashes and catalog_hashes[row['path']]!=row['sha256']: raise ValueError('Conflicting saved catalog identity.')
+                catalog_hashes[row['path']]=row['sha256']
         for row in packet['current_pages']:
             if not isinstance(row.get('meta'),dict): raise ValueError('Invalid saved page metadata.')
             if not isinstance(row.get('sha256'),str) or not re.fullmatch('[a-f0-9]{64}',row['sha256']): raise ValueError('Invalid saved current-page hash.')
         _bounded_json(packet)
         return packet
     except _JSONTooLarge:
-        raise WikiIntegrityError(BASE+'Index.md',field='packet') from None
+        raise _recovery_integrity(batch_id,'packet') from None
     except (FileNotFoundError,ValueError,TypeError,KeyError,RecursionError):
-        raise WikiIntegrityError(BASE+'Index.md',field='recovery') from None
+        raise _recovery_integrity(batch_id) from None
 
 
 def _resume_packet(policy=None):
@@ -1583,8 +1601,10 @@ def _resume_packet(policy=None):
         batches=list(conn.execute("SELECT * FROM batches WHERE status IN ('pending','retryable','applying','published','complete','stale','error') ORDER BY updated,id"))
     eligibility=None; current_catalog=None
     for batch in batches:
+        if not isinstance(batch['id'],str) or not re.fullmatch('[a-f0-9]{24}',batch['id']): raise _recovery_integrity(None)
         folder=cfg.STATE/'wiki/batches'/batch['id']; journal=folder/'journal.json'; input_path=folder/'input.json'
         publication=folder/'publication.json'
+        if batch['status']=='stale' and not publication.exists(): continue
         # An error may still own a valid durable plan (for example an archive
         # collision awaiting owner repair). Only those errors may replay output;
         # a generic failed model result without a plan must run fresh validation.
@@ -1610,11 +1630,13 @@ def _resume_packet(policy=None):
                 output=json.loads((folder/'output.json').read_text(encoding='utf-8'))
                 plan=json.loads(publication.read_text(encoding='utf-8'))
                 _validate(packet,output,screen_paths=False); _verify_publication_plan(plan,packet,output)
-            except WikiIntegrityError: raise
-            except (OSError,ValueError,TypeError,KeyError): raise WikiIntegrityError(BASE+'Index.md',field='recovery') from None
+            except WikiIntegrityError as exc:
+                exc.batch_id=batch['id']; raise
+            except (OSError,ValueError,TypeError,KeyError): raise _recovery_integrity(batch['id']) from None
             if batch['status']!='complete' and not _publication_started(plan):
                 try: _screen_saved_output_paths(output)
-                except WikiIntegrityError:
+                except WikiIntegrityError as exc:
+                    exc.batch_id=batch['id']
                     # Preserve immutable input/output/plan/spools for inspection.
                     # A new generation can request a clean replacement exactly
                     # once; never mix that result with this old publication hash.
@@ -1686,6 +1708,8 @@ def run(limit=4,timeout=480):
             attention={'status':'attention','at':s.stamp(),'reason':'WikiIntegrityError','retry_after':0,'backoff_seconds':0,
                        'consecutive_failures':saved.get('consecutive_failures',0),'attention_required':True,
                        'integrity_page':exc.page,'integrity_field':exc.field,'claim_index':exc.claim_index,'manual_retry_required':True}
+            batch_id=getattr(exc,'batch_id',None)
+            if isinstance(batch_id,str) and re.fullmatch('[a-f0-9]{24}',batch_id): attention['batch_id']=batch_id
             _atomic_json(worker_state,attention)
             if exc.field=='packet': return attention
             raise
@@ -1719,6 +1743,8 @@ def run(limit=4,timeout=480):
             attention={'status':'attention','at':s.stamp(),'reason':'WikiIntegrityError','retry_after':0,'backoff_seconds':0,
                        'consecutive_failures':saved.get('consecutive_failures',0),'attention_required':True,
                        'integrity_page':exc.page,'integrity_field':exc.field,'claim_index':exc.claim_index,'manual_retry_required':True}
+            batch_id=packet.get('batch_id') if isinstance(packet,dict) else None
+            if isinstance(batch_id,str) and re.fullmatch('[a-f0-9]{24}',batch_id): attention['batch_id']=batch_id
             _atomic_json(worker_state,attention)
             return attention
         except (WikiTransientError,OSError) as exc:
