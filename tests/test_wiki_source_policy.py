@@ -212,11 +212,15 @@ def test_exclusion_during_planning_prevents_plan_commit_and_first_note_write(bra
     assert not (s.VAULT/w.BASE/'Projects/example.md').exists()
 
 
-def test_durable_plan_recovery_can_finish_excluded_source_without_another_model_call(brain,monkeypatch):
+def test_partial_publication_recovery_can_finish_excluded_source_without_another_model_call(brain,monkeypatch):
     source,packet,result=fixture(brain); calls=fake_model(monkeypatch,explicit(packet,result))
     original=s._write
-    def stop_before_first_note(*args,**kwargs): raise OSError('Injected post-plan interruption')
-    monkeypatch.setattr(s,'_write',stop_before_first_note)
+    def stop_after_first_note(*args,**kwargs):
+        receipt=original(*args,**kwargs)
+        if (args[2] if len(args)>2 else kwargs.get('kind'))=='wiki_compile':
+            raise OSError('Injected replace-before-journal interruption')
+        return receipt
+    monkeypatch.setattr(s,'_write',stop_after_first_note)
     with pytest.raises(OSError): w.run()
     assert (cfg.STATE/'wiki/batches'/packet['batch_id']/'publication.json').exists() and len(calls)==1
     write_policy([source.relative_to(s.VAULT).as_posix()]); monkeypatch.setattr(s,'_write',original)
@@ -227,3 +231,82 @@ def test_durable_plan_recovery_can_finish_excluded_source_without_another_model_
     assert status['excluded_verified_source_parts']==status['portable_receipt_parts']==1
     assert status['excluded_pending_source_parts']==0
     assert not report['lint']['issues']
+
+
+def test_unused_durable_plan_is_superseded_after_exclusion_without_new_model(brain,monkeypatch):
+    source,packet,result=fixture(brain); calls=fake_model(monkeypatch,explicit(packet,result))
+    original=s._write
+    monkeypatch.setattr(s,'_write',lambda *args,**kwargs:(_ for _ in ()).throw(OSError('Injected interruption before note writes')))
+    with pytest.raises(OSError): w.run()
+    folder=cfg.STATE/'wiki/batches'/packet['batch_id']
+    assert (folder/'publication.json').exists() and len(calls)==1
+    write_policy([source.relative_to(s.VAULT).as_posix()]); monkeypatch.setattr(s,'_write',original)
+    assert w.run()['status']!='complete' and len(calls)==1
+    assert not (s.VAULT/w.BASE/'Projects/example.md').exists()
+    with w.db() as conn:
+        assert conn.execute('SELECT status FROM batches WHERE id=?',(packet['batch_id'],)).fetchone()[0]=='superseded'
+        assert conn.execute('SELECT count(*) FROM sources').fetchone()[0]==0
+    assert (folder/'publication.json').exists() and (folder/'output.json').exists()
+
+
+@pytest.mark.parametrize('stage',['input.json','output.json','publication.json','journal.json'])
+def test_owner_exclusion_during_fresh_persistence_cannot_gain_recovery_exemption(brain,monkeypatch,stage):
+    source,packet,result=fixture(brain); original_source=source.read_bytes()
+    original=w._atomic_json; changed=[]
+    def owner_edit(path,value):
+        if path.name==stage and not changed:
+            changed.append(stage); write_policy([source.relative_to(s.VAULT).as_posix()])
+        return original(path,value)
+    monkeypatch.setattr(w,'_atomic_json',owner_edit)
+    with pytest.raises(w.WikiPolicyChanged): w.apply(packet,result)
+    assert changed and source.read_bytes()==original_source
+    assert not (s.VAULT/w.BASE/'Projects/example.md').exists()
+    calls=fake_model(monkeypatch,explicit(packet,result))
+    assert w.run()['status']!='complete' and len(calls)==0
+    assert not (s.VAULT/w.BASE/'Projects/example.md').exists()
+    with w.db() as conn:
+        assert conn.execute('SELECT status FROM batches WHERE id=?',(packet['batch_id'],)).fetchone()[0]=='superseded'
+        assert conn.execute('SELECT count(*) FROM sources').fetchone()[0]==0
+
+
+def test_partial_publication_stops_on_invalid_policy_and_repairs_without_new_call(brain,monkeypatch):
+    source,packet,result=fixture(brain); calls=fake_model(monkeypatch,explicit(packet,result))
+    original=s._write; changed=[]
+    def owner_invalidates(path,text,kind,*args,**kwargs):
+        receipt=original(path,text,kind,*args,**kwargs)
+        if kind=='wiki_compile' and not changed:
+            changed.append(True); write_policy(raw='```json\n{bad}\n```')
+        return receipt
+    monkeypatch.setattr(s,'_write',owner_invalidates)
+    assert w.run()['status']=='attention' and len(calls)==1
+    assert (s.VAULT/w.BASE/'Projects/example.md').exists()
+    assert not (s.VAULT/w.BASE/'Index.md').exists()
+    with w.db() as conn: assert conn.execute('SELECT count(*) FROM sources').fetchone()[0]==0
+    write_policy([source.relative_to(s.VAULT).as_posix()])
+    report=w.run()
+    assert report['status']=='complete' and report['recovered_excluded_source_parts']==1 and len(calls)==1
+    assert not report['lint']['issues']
+
+
+def test_unchanged_planned_notes_do_not_prove_partial_publication(brain,monkeypatch):
+    source,packet,_=fixture(brain)
+    monkeypatch.setattr(s,'stamp',lambda:'2026-10-15T10:00:00+05:00')
+    row=packet['sources'][0]
+    result={'pages':[],'dispositions':[{'source':row['path'],'part':row['part'],'status':'deferred',
+             'reason':'The source needs a later focused evidence review.','quote':'A prototype was demonstrated.'}]}
+    w.apply(packet,result)
+    now=w.time.time(); monkeypatch.setattr(w.time,'time',lambda:now+86401)
+    retry=w.prepare(); assert retry and retry['batch_id']!=packet['batch_id']
+    original=s._write
+    def interrupted(*args,**kwargs): raise OSError('Interrupted before any changed note')
+    monkeypatch.setattr(s,'_write',interrupted)
+    with pytest.raises(OSError): w.apply(retry,result)
+    publication=cfg.STATE/'wiki/batches'/retry['batch_id']/'publication.json'
+    plan=json.loads(publication.read_text())
+    assert any(write['before']==write['after'] for write in plan['writes'])
+    assert not w._saved_publication_started(retry,publication)
+    write_policy([source.relative_to(s.VAULT).as_posix()]); monkeypatch.setattr(s,'_write',original)
+    monkeypatch.setattr(w.shutil,'which',lambda *_:pytest.fail('Unused excluded plan cannot call model'))
+    assert w.run()['status']=='idle'
+    assert '<!-- wiki-batch:'+retry['batch_id'] not in (s.VAULT/w.BASE/'Log.md').read_text()
+    with w.db() as conn: assert conn.execute('SELECT status FROM batches WHERE id=?',(retry['batch_id'],)).fetchone()[0]=='superseded'

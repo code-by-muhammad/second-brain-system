@@ -13,3 +13,5 @@ The release remains gated on regression tests, independent Codex/Claude reviews,
 The shared `02-Areas/AI-Memory/Wiki-Source-Policy.md` allows explicit source paths or directory prefixes to be excluded from future compilation. The owner's temporary session handoff/research import remains intact and searchable; exclusion is reported separately from completed work. Existing historical claims and receipts remain preserved. Invalid policy blocks new compilation with an actionable error. Meaningful progress uses concise deduplicated captures linked into daily notes by the existing service.
 
 The existing hourly compiler handles eligible new ingestion. Physical-device and client-specific onboarding still require their actual documented checks.
+
+A review-discovered direct-editor policy race is repaired: unused plans cannot gain an exclusion exemption by being saved during the edit. Actual partial publication may recover from validated planned hashes without another model call; unused work is superseded with its artifacts preserved.

@@ -849,6 +849,21 @@ def _verify_publication_plan(plan,packet,result):
     if not (set(topic_paths)|source_paths|{index_path,receipt_path})<=seen:
         raise WikiOutputError('Saved publication plan is missing a required derived note.')
 
+def _publication_started(plan):
+    # A durable private plan alone is still unused work. Recovery after an
+    # owner exclusion is justified only by an actual changed derived note at
+    # its verified planned hash, including replace-before-journal crashes.
+    return any(write['before']!=write['after'] and _current_hash(s.safe_path(write['path']))==write['after'] for write in plan['writes'])
+
+def _saved_publication_started(packet,publication):
+    if not publication.exists(): return False
+    try:
+        result=json.loads((publication.parent/'output.json').read_text(encoding='utf-8'))
+        plan=json.loads(publication.read_text(encoding='utf-8'))
+        _validate(packet,result); _verify_publication_plan(plan,packet,result)
+        return _publication_started(plan)
+    except (OSError,ValueError,KeyError,TypeError): return False
+
 def apply(packet,result):
     cfg.require_maintainer()
     _validate_shape(result)
@@ -860,7 +875,7 @@ def apply(packet,result):
     if not re.fullmatch('[a-f0-9]{24}',ident): raise ValueError('Invalid batch identity.')
     folder=cfg.STATE/'wiki/batches'/ident; journal=folder/'journal.json'; publication=folder/'publication.json'
     with FileLock(str(cfg.STATE/'writer.lock'),timeout=30):
-        _assert_source_policy(packet,allow_durable=publication.exists())
+        _assert_source_policy(packet,allow_durable=_saved_publication_started(packet,publication))
         with db() as conn: previous=conn.execute('SELECT * FROM batches WHERE id=?',(ident,)).fetchone()
         if previous and previous['status']=='complete':
             receipts=json.loads(previous['receipt'])
@@ -878,12 +893,13 @@ def apply(packet,result):
         else:
             plan=_publication_plan(packet,result,dispositions)
             # Owner decisions can arrive while bounded planning is running.
-            # Before a plan is durable, newly excluded work must not publish.
+            # Unused plans remain subject to new owner exclusions even after
+            # private persistence; only actual partial publication may recover.
             _assert_source_policy(packet)
             _atomic_json(folder/'input.json',packet); _atomic_json(folder/'output.json',result)
             _atomic_json(publication,plan)
         _verify_publication_plan(plan,packet,result)
-        _assert_source_policy(packet,allow_durable=True)
+        _assert_source_policy(packet,allow_durable=_publication_started(plan))
         for row in packet['sources']:
             if _current_hash(s.safe_path(row['path']))!=row['sha256']: raise WikiTransientError('Source changed during publication planning; rebuild the batch.')
         # The whole plan is durable before the first note write. A process killed
@@ -894,6 +910,7 @@ def apply(packet,result):
         receipts=[]; progress=[]
         _atomic_json(journal,{'version':2,'state':'applying','packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress})
         for write in plan['writes']:
+            _assert_source_policy(packet,allow_durable=_publication_started(plan))
             target=s.safe_path(write['path'])
             if _current_hash(target)==write['after']:
                 receipt={'path':write['path'],'status':'recovered','sha256':write['after']}
@@ -1045,7 +1062,7 @@ def _resume_packet(policy=None):
             continue
         packet=json.loads(input_path.read_text(encoding='utf-8'))
         if packet.get('batch_id')!=batch['id']: raise ValueError('Saved wiki batch identity mismatch.')
-        if batch['status']!='complete' and not publication.exists() and any(_policy_excluded(row['path'],policy) for row in packet['sources']):
+        if batch['status']!='complete' and any(_policy_excluded(row['path'],policy) for row in packet['sources']) and not _saved_publication_started(packet,publication):
             with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('superseded',s.stamp(),batch['id']))
             continue
         if batch['status']!='complete' and any(_current_hash(s.safe_path(row['path']))!=row['sha256'] for row in packet['sources']):
@@ -1120,10 +1137,11 @@ def run(limit=4,timeout=480):
         proc=None
         try:
             model_ran=bool(substantive_sources) and not (resumed and output.exists())
-            # Even a saved excluded plan may only replay its existing output;
-            # it cannot spend another model request after the owner exclusion.
-            current_policy=_assert_source_policy(packet,allow_durable=not model_ran and (folder/'publication.json').exists())
-            recovered_excluded=sum(_policy_excluded(row['path'],current_policy) for row in packet['sources']) if (folder/'publication.json').exists() else 0
+            # Excluded work may only repair actual partial publication from
+            # verified saved output; an unused durable plan cannot exempt it.
+            repairing=not model_ran and _saved_publication_started(packet,folder/'publication.json')
+            current_policy=_assert_source_policy(packet,allow_durable=repairing)
+            recovered_excluded=sum(_policy_excluded(row['path'],current_policy) for row in packet['sources']) if repairing else 0
             if model_ran:
                 if not binary: raise RuntimeError('Install official Codex CLI and sign in before running the wiki worker.')
                 if output.exists(): output.unlink()
