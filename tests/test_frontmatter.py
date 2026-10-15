@@ -54,4 +54,4 @@ def test_lint_reports_invalid_topic_instead_of_silently_omitting_it(brain):
     topic.parent.mkdir(parents=True)
     topic.write_text('---\nwiki_kind: [broken\n---\n# Topic', encoding='utf-8')
     assert w.lint()['issues'] == [{'page': w.BASE + 'Concepts/broken.md',
-                                  'issue': 'wiki metadata missing or invalid'}]
+                                  'issue': 'wiki metadata missing or invalid', 'field': 'frontmatter'}]

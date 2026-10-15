@@ -84,6 +84,34 @@ def _valid_claim(claim):
 def _valid_source_revision(revision):
     return isinstance(revision,dict) and all(isinstance(revision.get(key),str) and re.fullmatch('[a-f0-9]{64}',revision[key]) for key in ('sha256','text_sha256')) and ('date' not in revision or isinstance(revision['date'],str))
 
+def _screen_decoded_context(value):
+    # JSON escaping changes the established detector's input. Inspect decoded
+    # scalars and key/value associations too, with bounded, cycle-safe traversal.
+    stack=[(value,0,False)]; active=set(); seen=set(); nodes=0; chars=0
+    while stack:
+        item,depth,leaving=stack.pop()
+        if leaving:
+            active.remove(id(item)); seen.add(id(item)); continue
+        nodes+=1
+        if nodes>20000 or depth>64: raise ValueError('Derived context exceeds structural bounds.')
+        if isinstance(item,str):
+            chars+=len(item)
+            if chars>2_000_000: raise ValueError('Derived context exceeds text bounds.')
+            s.clean_text(item,2_000_000)
+        elif isinstance(item,(dict,list,tuple)):
+            ident=id(item)
+            if ident in active: raise ValueError('Circular derived context.')
+            if ident in seen: continue
+            active.add(ident); stack.append((item,depth,True))
+            if isinstance(item,dict):
+                for key,child in item.items():
+                    if isinstance(key,str) and (isinstance(child,str) or type(child) in (int,float,bool) or child is None):
+                        scalar=child if isinstance(child,str) else json.dumps(child,allow_nan=False)
+                        if len(key)+len(scalar)>2_000_000: raise ValueError('Derived context exceeds text bounds.')
+                        s.clean_text(key+': '+scalar,2_000_000)
+                    stack.append((key,depth+1,False)); stack.append((child,depth+1,False))
+            else: stack.extend((child,depth+1,False) for child in item)
+
 def _validate_existing_claim(page,claim,index):
     if not _valid_claim(claim): raise WikiIntegrityError(page,index)
     if 'source_revision' in claim and not _valid_source_revision(claim['source_revision']):
@@ -93,7 +121,7 @@ def _validate_existing_claim(page,claim,index):
         # packets require JSON-compatible values and real UTF-8, without coercion.
         s.safe_path(claim['source'])
         context=json.dumps(claim,sort_keys=True,ensure_ascii=False,allow_nan=False)
-        context.encode('utf-8'); s.clean_text(context,2_000_000)
+        context.encode('utf-8'); s.clean_text(context,2_000_000); _screen_decoded_context(claim)
     except (ValueError,TypeError,RecursionError,UnicodeError): raise WikiIntegrityError(page,index) from None
 
 def _validate_existing_claims(page,claims):
@@ -148,7 +176,7 @@ def _worker_summary():
         result['reason']=reason if reason in controlled or isinstance(reason,str) and re.fullmatch('[A-Za-z_][A-Za-z0-9_]{0,63}',reason) else 'inspect private worker diagnostics'
     if isinstance(value.get('batch_id'),str) and re.fullmatch('[a-f0-9]{24}',value['batch_id']): result['batch_id']=value['batch_id']
     if isinstance(value.get('integrity_page'),str) and value['integrity_page'].startswith(BASE): result['integrity_page']=value['integrity_page'][:400]
-    if value.get('integrity_field') in ('title','wiki_claims','source_revision','latest_source_part'): result['integrity_field']=value['integrity_field']
+    if value.get('integrity_field') in ('title','wiki_claims','source_revision','latest_source_part','frontmatter','wiki_kind'): result['integrity_field']=value['integrity_field']
     if type(value.get('claim_index')) is int and 0<=value['claim_index']<120: result['claim_index']=value['claim_index']
     return result
 
@@ -305,15 +333,23 @@ def pages(issues=None):
     for p in (s.VAULT/BASE).rglob('*.md'):
         rel=p.relative_to(s.VAULT).as_posix()
         s.safe_path(rel)
-        raw=p.read_bytes()
-        try: m=frontmatter(raw.decode('utf-8-sig'),strict=True)
-        except ValueError:
+        is_topic=rel[len(BASE):].split('/')[0] in KINDS; field=None
+        try:
+            raw=p.read_bytes(); m=frontmatter(raw.decode('utf-8-sig'),strict=True)
+        except (OSError,UnicodeError,ValueError):
             m={}
-        is_topic=rel[len(BASE):].split('/')[0] in KINDS
-        if is_topic and m.get('wiki_kind') not in KINDS and issues is not None:
-            issues.append({'page':rel,'issue':'wiki metadata missing or invalid'})
+            if is_topic: field='frontmatter'
+        if is_topic and field is None and m.get('wiki_kind') not in KINDS: field='wiki_kind'
+        if field is not None:
+            if issues is not None: issues.append({'page':rel,'issue':'wiki metadata missing or invalid','field':field})
+            continue
         if m.get('wiki_kind') in KINDS: found.append({'path':rel,'sha256':s.digest(raw),'meta':m})
     return found
+
+def _checked_pages():
+    issues=[]; current=pages(issues)
+    if issues: raise WikiIntegrityError(issues[0]['page'],field=issues[0]['field'])
+    return current
 
 def prepare(limit=4):
     cfg.require_maintainer()
@@ -327,8 +363,8 @@ def prepare(limit=4):
         if len(chosen)>=max(1,min(limit,8)): break
         if size+len(row['text'])>65000 or any(x['path']==row['path'] for x in chosen): continue
         chosen.append(row); size+=len(row['text'])
+    current=_checked_pages()
     if not chosen: return None
-    current=pages()
     # Reuse relevant topic pages; pass the whole title catalog to avoid duplicate entities.
     terms=set(re.findall(r'[a-z0-9]{4,}', ' '.join(x['title'] for x in chosen).lower()))
     relevant=[]; context_size=0
@@ -867,7 +903,7 @@ def _source_note(row,topic_pages):
 def _publication_plan(packet,result,dispositions):
     ident=packet['batch_id']; result_hash=_json_hash(result); writes=[]
     history=_EvidenceHistory()
-    topic_pages={page['path']:page for page in pages()}
+    topic_pages={page['path']:page for page in _checked_pages()}
     for page in result['pages']:
         rel,info,text=_render_topic(page,packet,ident,result_hash,history)
         _plan_write(writes,s.safe_path(rel),text,'wiki_compile')
@@ -1215,7 +1251,10 @@ def run(limit=4,timeout=480):
             return {'status':'blocked','reason':saved.get('reason'),'retry_after':saved['retry_after']}
         try:
             if packet is None: packet=prepare(limit)
-            if packet: _validate_packet_context(packet)
+            if packet:
+                publication=cfg.STATE/'wiki/batches'/packet['batch_id']/'publication.json'
+                if resumed and not _saved_publication_started(packet,publication): _checked_pages()
+                _validate_packet_context(packet)
         except WikiPolicyError as exc: return _policy_attention(exc)
         except WikiIntegrityError as exc:
             attention={'status':'attention','at':s.stamp(),'reason':'WikiIntegrityError','retry_after':0,'backoff_seconds':0,
