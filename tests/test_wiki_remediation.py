@@ -56,7 +56,11 @@ def test_scalar_capture_tag_is_recognized(brain):
 
 
 def two_sources(brain):
-    source,_,result=fixture(brain)
+    source,initial,result=fixture(brain)
+    # This helper intentionally discards its preliminary one-source prepare.
+    # Retire that synthetic packet so worker tests receive the two-source
+    # contract their fake model output is built for, independent of timestamps.
+    with w.db() as conn: conn.execute("UPDATE batches SET status='stale' WHERE id=? AND status='pending'",(initial['batch_id'],))
     second=source.with_name('Unrelated.md')
     second.write_text('# Unrelated Project\nA separate historical requirement needs review.',encoding='utf-8')
     return source,second,w.prepare(),result
@@ -515,6 +519,9 @@ def test_stale_non_catalog_target_gets_new_attempt_and_preserves_owner_log(brain
     with pytest.raises(w.WikiTransientError): w.run()
     assert len(calls)==1 and w.status()['pending_source_parts']==1
     retry=w.prepare(); assert retry['batch_id']!=packet['batch_id']
+    saved=json.loads((cfg.STATE/'wiki-worker-status.json').read_text())
+    assert saved['backoff_seconds']==3600 and w.run()['status']=='blocked' and len(calls)==1
+    later=saved['retry_after']+1; monkeypatch.setattr(w.time,'time',lambda:later)
     completed=w.run()
     assert completed['status']=='complete' and completed['batch_id']==retry['batch_id'] and len(calls)==2
     assert 'Owner review evidence must survive retry.' in log.read_text()
@@ -531,3 +538,194 @@ def test_published_disposition_metadata_is_guarded_before_any_publication(brain,
     assert not (s.VAULT/w.BASE/'Projects').exists()
     assert not (s.VAULT/w.BASE/'Receipts').exists()
     assert source.read_bytes()==original and w.status()['pending_source_parts']==1
+
+
+@pytest.mark.parametrize('mode',['nonzero','no-output','timeout','persistent-stale','render-error','invalid-schema'])
+def test_repeated_worker_failures_stop_after_three_without_source_blame(brain,monkeypatch,mode):
+    source,packet,result=fixture(brain); result=explicit(packet,result); calls=[]
+    original_note=w._source_note; original_atomic=w._atomic_json
+    monkeypatch.setattr(w.shutil,'which',lambda name:'synthetic-codex')
+    monkeypatch.setattr(w.subprocess,'run',lambda *args,**kwargs:None)
+    if hasattr(w.os,'killpg'): monkeypatch.setattr(w.os,'killpg',lambda *args:None)
+    class Process:
+        pid=123456789
+        def __init__(self,command,**kwargs):
+            calls.append(command); self.output=Path(command[command.index('-o')+1]); self.returncode=1 if mode=='nonzero' else 0
+        def communicate(self,model_input,timeout):
+            if mode=='timeout': raise w.subprocess.TimeoutExpired('synthetic-codex',timeout)
+            if mode not in ('nonzero','no-output'):
+                self.output.write_text(json.dumps({'pages':None} if mode=='invalid-schema' else result),encoding='utf-8')
+        def wait(self,timeout): return 1
+    monkeypatch.setattr(w.subprocess,'Popen',Process)
+    if mode=='render-error':
+        def fail_render(*args): raise RuntimeError('synthetic persistent rendering failure')
+        monkeypatch.setattr(w,'_source_note',fail_render)
+    if mode=='persistent-stale':
+        def edit_log_after_plan(path,value):
+            original_atomic(path,value)
+            if path.name=='publication.json':
+                log=s.VAULT/w.BASE/'Log.md'; log.parent.mkdir(parents=True,exist_ok=True)
+                log.write_text(f'# Owner log revision {len(calls)}\n',encoding='utf-8')
+        monkeypatch.setattr(w,'_atomic_json',edit_log_after_plan)
+    clock=[w.time.time()]; monkeypatch.setattr(w.time,'time',lambda:clock[0])
+    for attempt in range(3):
+        with pytest.raises(Exception): w.run()
+        saved=json.loads((cfg.STATE/'wiki-worker-status.json').read_text())
+        clock[0]=max(clock[0]+1,saved.get('retry_after',0)+1)
+    try: fourth=w.run()
+    except Exception: fourth={'status':'unhandled'}
+    assert fourth['status']=='attention' and len(calls)==3
+    assert not any(row['attempts'] for row in source_rows().values())
+    assert w.status()['pending_source_parts']==1 and source.exists()
+    saved=json.loads((cfg.STATE/'wiki-worker-status.json').read_text())
+    assert saved['consecutive_failures']==3 and saved['attention_required'] is True
+    w.reset_retries(); monkeypatch.setattr(w,'_source_note',original_note); monkeypatch.setattr(w,'_atomic_json',original_atomic)
+    fake_model(monkeypatch,result)
+    assert w.run()['status']=='complete' and w.status()['pending_source_parts']==0
+
+
+def test_missing_input_migration_cannot_infer_adjacent_overlap_part(brain):
+    source,_,result=fixture(brain); quote='The overlap contains a reusable historical statement.'
+    source.write_text('a'*23000+quote+'b'*2000,encoding='utf-8')
+    packet=w.prepare(); first=packet['sources'][0]; assert first['parts']==2
+    result['pages'][0]['claims'][0]['quote']=quote
+    receipts=w.apply(packet,result); folder=make_legacy(packet,receipts); (folder/'input.json').unlink()
+    second=next(row for row in w.inventory() if row['part']==2)
+    with w.db() as conn: conn.execute('INSERT INTO sources(path,processed_hash) VALUES(?,?)',(second['job_key'],second['sha256']))
+    report=w.migrate_legacy_receipts(dry_run=True)
+    assert report['verified_parts']==0
+    assert {entry['job_key'] for entry in report['unverified_parts']}=={first['job_key'],second['job_key']}
+
+
+@pytest.mark.parametrize('malformed',['scalar-entry','null-collection','mapping-collection'])
+def test_unrelated_run_reports_malformed_legacy_claim_without_crashing(brain,monkeypatch,malformed):
+    source,packet,result=fixture(brain); receipt=w.apply(packet,result)[0]
+    topic=s.safe_path(receipt['path']); info=w.meta(topic.read_text())
+    if malformed=='scalar-entry': info['wiki_claims'].append('preserve malformed legacy evidence')
+    else: info['wiki_claims']=None if malformed=='null-collection' else {'owner':'preserve malformed legacy evidence'}
+    topic.write_text(s.note_text(info,'# Existing derived page\n\nPreserve owner history.'),encoding='utf-8'); before=topic.read_bytes()
+    other=source.with_name('Other.md'); other.write_text('# Separate subject\nA separate historical requirement was discussed.',encoding='utf-8')
+    packet=w.prepare(); result['pages'][0]['slug']='other'; result['pages'][0]['claims']=[{
+        'text':'A separate requirement was documented.','source':'01-Projects/Other.md',
+        'quote':'A separate historical requirement was discussed.','status':'historical'}]
+    fake_model(monkeypatch,explicit(packet,result)); completed=w.run()
+    assert completed['status']=='complete' and w.status()['pending_source_parts']==0
+    assert topic.read_bytes()==before
+    assert any(issue['page']==receipt['path'] and issue['issue']=='malformed claim metadata' for issue in completed['lint']['issues'])
+
+
+def test_same_topic_with_malformed_claim_stops_for_integrity_attention(brain,monkeypatch):
+    source,packet,result=fixture(brain); receipt=w.apply(packet,result)[0]
+    target=s.safe_path(receipt['path']); info=w.meta(target.read_text()); info['wiki_claims'].append('preserve malformed legacy evidence')
+    target.write_text(s.note_text(info,'# Existing derived page\n\nPreserve owner history.'),encoding='utf-8'); before=target.read_bytes()
+    source.write_text(source.read_text()+'\nA later historical review remains pending.',encoding='utf-8')
+    packet=w.prepare(); fake_model(monkeypatch,explicit(packet,result))
+    with pytest.raises(Exception): w.run()
+    saved=json.loads((cfg.STATE/'wiki-worker-status.json').read_text())
+    assert saved['attention_required'] is True and saved['integrity_page']==receipt['path']
+    assert target.read_bytes()==before and w.status()['pending_source_parts']==1
+    assert any(issue['issue']=='malformed claim metadata' for issue in w.lint()['issues'])
+
+
+def test_attributed_part_failures_retire_only_that_part_and_peers_proceed(brain,monkeypatch):
+    _,_,packet,result=two_sources(brain); result=explicit(packet,result)
+    result['pages'][0]['claims'][0]['quote']='An invalid model quotation absent from the selected source.'
+    calls=fake_model(monkeypatch,result)
+    for attempt in range(3):
+        with pytest.raises(w.WikiOutputError): w.run()
+    assert len(calls)==3 and not w.status()['worker']['attention_required']
+    packet=w.prepare(); assert len(packet['sources'])==1 and packet['sources'][0]['path'].endswith('Unrelated.md')
+    row=packet['sources'][0]
+    result={'pages':[{'category':'Projects','slug':'unrelated','title':'Unrelated','related':[],
+        'claims':[{'text':'A separate requirement was documented.','source':row['path'],
+                   'quote':'A separate historical requirement needs review.','status':'historical'}]}]}
+    fake_model(monkeypatch,explicit(packet,result))
+    assert w.run()['status']=='complete'
+    assert w.status()['pending_source_parts']==1 and w.status()['failed_source_parts']==1
+
+
+def test_repeated_writer_contention_does_not_exhaust_attention_or_repeat_model(brain,monkeypatch):
+    _,packet,result=fixture(brain); calls=fake_model(monkeypatch,explicit(packet,result)); original=w.FileLock
+    class Blocked:
+        def __enter__(self): raise Timeout('synthetic writer contention')
+        def __exit__(self,*args): pass
+    monkeypatch.setattr(w,'FileLock',lambda path,**kwargs:Blocked() if path.endswith('writer.lock') else original(path,**kwargs))
+    for attempt in range(4):
+        with pytest.raises(Timeout): w.run()
+    assert len(calls)==1
+    assert w.status()['worker']['consecutive_failures']==0 and not w.status()['worker']['attention_required']
+    monkeypatch.setattr(w,'FileLock',original)
+    assert w.run()['status']=='complete' and len(calls)==1
+
+
+def test_legacy_exact_packet_output_proves_overlap_only_for_selected_part(brain):
+    source,_,result=fixture(brain); quote='The overlap contains a reusable historical statement.'
+    source.write_text('a'*23000+quote+'b'*2000,encoding='utf-8'); packet=w.prepare()
+    result['pages'][0]['claims'][0]['quote']=quote
+    receipts=w.apply(packet,result); folder=cfg.STATE/'wiki/batches'/packet['batch_id']
+    (folder/'journal.json').write_text(json.dumps({'state':'complete','receipts':receipts}),encoding='utf-8')
+    for path in (s.VAULT/w.BASE/'Receipts').glob('*.md'): path.unlink()
+    second=next(row for row in w.inventory() if row['part']==2)
+    with w.db() as conn: conn.execute('INSERT INTO sources(path,processed_hash) VALUES(?,?)',(second['job_key'],second['sha256']))
+    report=w.migrate_legacy_receipts(dry_run=True)
+    assert report['verified_parts']==1 and report['verified_source_parts'][0]['part']==1
+    assert report['verified_source_parts'][0]['proof_mode']=='exact-packet-and-output'
+    assert [row['part'] for row in report['unverified_parts']]==[2]
+
+
+@pytest.mark.parametrize('state',[None,[],{'status':'error','retry_after':'later'},'invalid json'])
+def test_worker_status_is_compact_controlled_and_malformed_state_never_calls_model(brain,monkeypatch,state):
+    fixture(brain)
+    if state is not None:
+        (cfg.STATE/'wiki-worker-status.json').write_text(state if isinstance(state,str) else json.dumps(state),encoding='utf-8')
+    summary=w.status()['worker']
+    assert set(summary)<={'status','attention_required','consecutive_failures','retry_after','reason','batch_id','integrity_page'}
+    if state is None:
+        assert summary=={'status':'idle','attention_required':False,'consecutive_failures':0,'retry_after':0}
+    else:
+        assert summary['attention_required'] is True
+        def forbidden(*args,**kwargs): raise AssertionError('Malformed worker state requires explicit operator action.')
+        monkeypatch.setattr(w.subprocess,'Popen',forbidden)
+        assert w.run()['status']=='attention'
+
+
+def test_legacy_committed_unfinished_journal_is_quarantined_without_fabricating_proof(brain,monkeypatch):
+    source,packet,result=fixture(brain); receipts=w.apply(packet,result); folder=make_legacy(packet,receipts)
+    (folder/'publication.json').unlink()
+    journal=folder/'journal.json'; journal.write_text(json.dumps({'state':'applying','targets':[w.BASE+'Projects/example.md']}),encoding='utf-8'); unfinished=journal.read_bytes()
+    with w.db() as conn: conn.execute('UPDATE batches SET updated=? WHERE id=?',('2000-01-01T00:00:00+00:00',packet['batch_id']))
+    other=source.with_name('Other.md'); quote='A separate historical requirement needs review.'
+    other.write_text('# Other\n'+quote,encoding='utf-8'); fresh=w.prepare()
+    result['pages'][0].update(slug='other',title='Other'); result['pages'][0]['claims'][0].update(source='01-Projects/Other.md',quote=quote)
+    calls=fake_model(monkeypatch,explicit(fresh,result)); completed=w.run()
+    assert completed['batch_id']==fresh['batch_id'] and len(calls)==1 and w.run()['status']=='idle'
+    assert journal.read_bytes()==unfinished
+    with w.db() as conn: assert conn.execute('SELECT status FROM batches WHERE id=?',(packet['batch_id'],)).fetchone()[0]=='legacy_unverified'
+    assert w.status()['recovery_issue_count']==1
+    migration=w.migrate_legacy_receipts(dry_run=True)
+    assert any(item['batch_id']==packet['batch_id'] for item in migration['rejected_batches'])
+    assert any(item['path']=='01-Projects/Example.md' for item in migration['unverified_parts'])
+
+
+@pytest.mark.parametrize('disposition',['published','deferred'])
+def test_obsolete_no_plan_packet_honors_new_verified_completion_or_deferral(brain,monkeypatch,disposition):
+    source,old,result=fixture(brain)
+    with w.db() as conn: conn.execute('UPDATE batches SET updated=? WHERE id=?',('2000-01-01T00:00:00+00:00',old['batch_id']))
+    other=source.with_name('Other.md'); quote='A separate historical requirement needs review.'
+    other.write_text('# Other\n'+quote,encoding='utf-8'); newer=w.prepare()
+    second=copy.deepcopy(result['pages'][0]); second.update(slug='other',title='Other'); second['claims'][0].update(source='01-Projects/Other.md',quote=quote)
+    combined={'pages':result['pages']+[second] if disposition=='published' else [second]}
+    w.apply(newer,explicit(newer,combined))
+    # Preserve an old, unused output as evidence; superseding cannot delete it.
+    abandoned=cfg.STATE/'wiki/batches'/old['batch_id']/'output.json'; abandoned.write_text('unused historical model output',encoding='utf-8')
+    if disposition=='published':
+        third=source.with_name('Third.md'); third_quote='A third source has a historical requirement.'
+        third.write_text('# Third\n'+third_quote,encoding='utf-8'); fresh=w.prepare()
+        result['pages'][0].update(slug='third',title='Third'); result['pages'][0]['claims'][0].update(source='01-Projects/Third.md',quote=third_quote)
+        calls=fake_model(monkeypatch,explicit(fresh,result)); assert w.run()['batch_id']==fresh['batch_id'] and len(calls)==1
+    else:
+        def forbidden(*args,**kwargs): raise AssertionError('An abandoned packet cannot bypass a later explicit defer.')
+        monkeypatch.setattr(w.subprocess,'Popen',forbidden)
+        assert w.run()['status']=='idle' and w.status()['deferred_source_parts']==1
+    with w.db() as conn: assert conn.execute('SELECT status FROM batches WHERE id=?',(old['batch_id'],)).fetchone()[0]=='superseded'
+    assert abandoned.read_text()=='unused historical model output'

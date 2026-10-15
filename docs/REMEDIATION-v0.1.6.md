@@ -31,6 +31,10 @@ Additional hardening protects compiler-owned wiki/control pages from the general
 
 Review-driven regressions also cover Windows mixed-case wiki paths, URI-reserved characters in local SQLite paths, explicit deferred-part retry generations, malformed model JSON receiving bounded backoff, LF/CRLF/CR/BOM source-page repair, deterministic short-part skips and publication-plan integrity during replay. Existing Git tests use isolated runtime locks so concurrent review/test processes cannot interfere with one another.
 
+The first full Claude follow-up found four further concrete defects: Windows non-UTF-8 subprocess JSON, unlimited repeated worker failures, ambiguous overlapping-quote fallback migration and malformed legacy claims crashing source-link derivation. Each is reproduced in disposable fixtures and must pass its fix, independent review and final release gates. UTF-8 regressions use real piped child processes; retry tests exercise actual `run()` calls, including a fourth attempted invocation. Legacy completion must remain unverified when preserved evidence cannot distinguish adjacent overlapping parts. A real Codex invocation in a synthetic-only vault also verifies strict disposition-schema acceptance, publication and portable proof; it is separate from live-vault acceptance.
+
+Follow-up queue probes also reproduce a reachable v0.1.5 database/journal crash window and obsolete no-plan packets bypassing current completion/defer/attempt limits. Recovery preserves unproved legacy journals for explicit migration review, supersedes obsolete work without erasing inputs, and retains genuine durable-plan replay. A specifically attributed bad source must reach its own retry limit without blocking eligible peers through the global worker budget.
+
 ## Verification and review gates
 
 1. Reproduce the old behavior in disposable fixtures, then keep a regression for the accepted fix. Never run synthetic Git experiments in the real notes repository.

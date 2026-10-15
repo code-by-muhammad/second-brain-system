@@ -1,5 +1,5 @@
 """Common commands on Windows, macOS and Linux."""
-import argparse, asyncio, json, os
+import argparse, asyncio, json, os, sys
 import brain_settings as cfg
 
 async def mcp_call(name,args):
@@ -10,6 +10,9 @@ async def mcp_call(name,args):
     async with Client(transport,timeout=120) as client: return (await client.call_tool(name,args)).data
 
 def main():
+    # JSON is a UTF-8 wire response even when a Windows pipe defaults to ANSI.
+    # Embedded callers may replace stdout with a text-only stream such as StringIO.
+    if hasattr(sys.stdout,'reconfigure'): sys.stdout.reconfigure(encoding='utf-8')
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command',choices=['health','search','read','wiki','service'])
     parser.add_argument('action',nargs='?',default='status'); parser.add_argument('--limit',type=int,default=4)

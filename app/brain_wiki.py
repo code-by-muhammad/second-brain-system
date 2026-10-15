@@ -1,6 +1,6 @@
 """Incremental wiki compiler: bounded model input, exact evidence, durable replay-safe jobs."""
 from __future__ import annotations
-import hashlib, json, os, re, shutil, sqlite3, subprocess, tempfile, time
+import hashlib, json, math, os, re, shutil, sqlite3, subprocess, tempfile, time
 from pathlib import Path
 from datetime import datetime
 from contextlib import contextmanager
@@ -38,6 +38,11 @@ class WikiOutputError(ValueError):
         super().__init__(message)
         self.source=source
 
+class WikiIntegrityError(WikiOutputError):
+    def __init__(self,page,claim_index=None):
+        super().__init__('Existing derived wiki metadata requires owner review before merging this topic.')
+        self.page=page; self.claim_index=claim_index
+
 def _validate_shape(result,schema=None):
     from jsonschema import validate,ValidationError
     try: validate(result,SCHEMA if schema is None else schema)
@@ -60,11 +65,41 @@ def _claim_hash(claim):
     # Status may become uncertain/superseded while the original evidence survives.
     if not isinstance(claim,dict) or any(not isinstance(claim.get(key),str) for key in ('text','source','quote')): return None
     return _json_hash({k:normalized(claim[k]) for k in ('text','source','quote')})
+
+def _valid_claim(claim):
+    return _claim_hash(claim) is not None and claim.get('status') in ('historical','uncertain','superseded') and bool(claim['text'].strip()) and len(claim['quote'].strip())>=12 and bool(claim['source'])
 def _list(value): return value if isinstance(value,list) else []
 def _tags(value): return [value] if isinstance(value,str) else _list(value)
 def _short_part(row): return len(normalized(row['text']).strip())<12
 def _short_disposition(row):
     return {'source':row['path'],'part':row['part'],'status':'skipped','reason':SHORT_PART_REASON,'quote':''}
+
+def _read_worker_state():
+    path=cfg.STATE/'wiki-worker-status.json'
+    default={'status':'idle','attention_required':False,'consecutive_failures':0,'retry_after':0}
+    if not path.exists(): return default
+    try:
+        value=json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(value,dict): raise ValueError('Invalid worker state.')
+        value={**default,**value}
+        if value['status'] not in ('idle','complete','error','blocked','retryable','retry requested','output_backoff','worker_backoff','attention'): raise ValueError('Invalid worker status.')
+        if not isinstance(value['attention_required'],bool) or type(value['consecutive_failures']) is not int or not 0<=value['consecutive_failures']<=3: raise ValueError('Invalid worker failure state.')
+        retry=value['retry_after']
+        if type(retry) not in (int,float) or not math.isfinite(retry) or retry<0: raise ValueError('Invalid worker backoff.')
+        return value
+    except (OSError,ValueError,TypeError):
+        return {**default,'status':'attention','attention_required':True,'reason':'malformed private worker state; inspect it or reset with wiki retry'}
+
+def _worker_summary():
+    value=_read_worker_state()
+    result={key:value[key] for key in ('status','attention_required','consecutive_failures','retry_after')}
+    reason=value.get('reason')
+    if reason is not None:
+        controlled=('model authentication/quota requires attention','malformed private worker state; inspect it or reset with wiki retry')
+        result['reason']=reason if reason in controlled or isinstance(reason,str) and re.fullmatch('[A-Za-z_][A-Za-z0-9_]{0,63}',reason) else 'inspect private worker diagnostics'
+    if isinstance(value.get('batch_id'),str) and re.fullmatch('[a-f0-9]{24}',value['batch_id']): result['batch_id']=value['batch_id']
+    if isinstance(value.get('integrity_page'),str) and value['integrity_page'].startswith(BASE): result['integrity_page']=value['integrity_page'][:400]
+    return result
 
 def meta(text):
     return frontmatter(text)
@@ -112,6 +147,9 @@ def status():
     with db() as conn:
         processed={r['path']:dict(r) for r in conn.execute('SELECT * FROM sources')}
         states={r['status']:r['n'] for r in conn.execute('SELECT status,count(*) n FROM batches GROUP BY status')}
+        recovery_count=conn.execute("SELECT count(*) FROM batches WHERE status='legacy_unverified'").fetchone()[0]
+        recovery=[{'batch_id':row['id'],'issue':'Legacy committed batch has no verified final journal; explicit migration/review required.'}
+                  for row in conn.execute("SELECT id FROM batches WHERE status='legacy_unverified' ORDER BY updated,id LIMIT 20")]
     pending=[x for x in sources if processed.get(x['job_key'],{}).get('processed_hash')!=x['sha256']]
     eligible=[x for x in pending if _eligible(x,processed.get(x['job_key'],{}))]
     return {'eligible_sources':len({x['path'] for x in sources}),'eligible_source_parts':len(sources),
@@ -119,6 +157,8 @@ def status():
             'ready_source_parts':len(eligible),'deferred_source_parts':sum(processed.get(x['job_key'],{}).get('deferred_until',0)>time.time() for x in pending),
             'batches':states,'failed_source_parts':sum(bool(processed.get(x['job_key'],{}).get('error')) and processed.get(x['job_key'],{}).get('attempt_hash')==x['sha256'] for x in pending),
             'portable_receipt_parts':portable['verified_parts'],'receipt_issue_count':len(portable['issues']),'receipt_issues':portable['issues'][:20],
+            'worker':_worker_summary(),
+            'recovery_issue_count':recovery_count,'recovery_issues':recovery,
             'role':cfg.ROLE,'oversize_policy':'notes up to 2 MB split into overlapping bounded parts; credential-like sources excluded'}
 
 def _eligible(row,old):
@@ -158,15 +198,15 @@ def prepare(limit=4):
     for p in current:
         if not any(t in p['meta'].get('title',p['path']).lower() for t in terms): continue
         compact={**p,'meta':{key:p['meta'].get(key) for key in ('title','wiki_kind')}}
-        compact['claim_count']=len(p['meta'].get('wiki_claims',[]))
-        compact['meta']['wiki_claims']=p['meta'].get('wiki_claims',[])[-12:]
+        compact['claim_count']=len(_list(p['meta'].get('wiki_claims')))
+        compact['meta']['wiki_claims']=_list(p['meta'].get('wiki_claims'))[-12:]
         size=len(json.dumps(compact,default=str))
         if context_size+size>40000: continue
         relevant.append(compact); context_size+=size
         if len(relevant)>=8: break
     base_packet={'version':2,'sources':chosen,'current_pages':relevant,
             'catalog':[{'path':p['path'],'title':p['meta'].get('title',p['path']),
-                        'sha256':p['sha256'],'claim_count':len(p['meta'].get('wiki_claims',[]))} for p in current]}
+                        'sha256':p['sha256'],'claim_count':len(_list(p['meta'].get('wiki_claims')))} for p in current]}
     # An interrupted attempt keeps its identity. A completed deferred attempt is
     # history: a newly eligible retry must receive another immutable receipt ID.
     generation=0
@@ -175,7 +215,7 @@ def prepare(limit=4):
             packet=base_packet if generation==0 else {**base_packet,'retry_generation':generation}
             ident=s.digest(json.dumps(packet,sort_keys=True,default=str).encode())[:24]
             previous=conn.execute('SELECT status FROM batches WHERE id=?',(ident,)).fetchone()
-            already_published=previous and previous['status']=='complete'
+            already_published=previous and previous['status'] in ('complete','superseded','legacy_unverified')
             stale_plan=previous and previous['status']=='stale' and (cfg.STATE/'wiki/batches'/ident/'publication.json').exists()
             shared_only=previous is None and s.safe_path(BASE+'Receipts/'+ident+'.md').exists()
             if not already_published and not stale_plan and not shared_only: break
@@ -286,7 +326,7 @@ def _verified_entries(payload,rows,claim_cache):
     return verified
 
 def _claim_cache():
-    return {page['path']:{fingerprint:c for c in _list(page['meta'].get('wiki_claims')) if (fingerprint:=_claim_hash(c))} for page in pages()}
+    return {page['path']:{_claim_hash(c):c for c in _list(page['meta'].get('wiki_claims')) if _valid_claim(c)} for page in pages()}
 
 def _hydrate_receipts(sources):
     """SQLite is local: import only independently verifiable shared per-part proof."""
@@ -326,10 +366,13 @@ def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
         rows={row['job_key']:row for row in inventory()}; cache=_claim_cache()
         with db() as conn:
             local={row['path']:dict(row) for row in conn.execute('SELECT * FROM sources')}
-            batches=[dict(row) for row in conn.execute("SELECT * FROM batches WHERE status='complete'")]
+            batches=[dict(row) for row in conn.execute("SELECT * FROM batches WHERE status IN ('complete','legacy_unverified')")]
         candidates={key:row for key,row in rows.items() if local.get(key,{}).get('processed_hash')==row['sha256']}
         groups={}; covered=set(); rejected=[]; verified_batches=[]
         for batch in batches:
+            if batch['status']=='legacy_unverified':
+                rejected.append({'batch_id':batch['id'],'reason':'Legacy database completion has no verified final journal; historical proof preserved for explicit review.'})
+                continue
             folder=cfg.STATE/'wiki/batches'/batch['id']; journal=folder/'journal.json'
             try:
                 raw=journal.read_bytes(); saved=json.loads(raw.decode('utf-8'))
@@ -338,6 +381,8 @@ def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
                 verified_batches.append((batch,saved,receipt,s.digest(raw)))
             except (OSError,ValueError,TypeError):
                 rejected.append({'batch_id':batch['id'],'reason':'complete local journal/database receipt unavailable or mismatched'})
+        source_parts={}
+        for row in rows.values(): source_parts.setdefault(row['path'],[]).append(row)
         for batch,saved,receipt,journal_hash in verified_batches:
             allowed_pages={item['path'] for item in receipt if isinstance(item,dict) and item.get('path') in cache}
             # New receipts already retain explicit dispositions, including
@@ -349,28 +394,46 @@ def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
                 groups.setdefault(batch['id'],[]).append(proven); covered.add(entry['job_key'])
             # Prefer the saved packet to bind a part to this particular batch.
             packet_path=cfg.STATE/'wiki/batches'/batch['id']/'input.json'
+            exact_packet=False
             try:
                 packet=json.loads(packet_path.read_text(encoding='utf-8'))
                 selected=[]
                 for original in packet['sources']:
                     row=candidates.get(original.get('job_key'))
                     if row and _source_identity(original)==_source_identity(row): selected.append(row)
+                exact_packet=True
             except (OSError,ValueError,KeyError,TypeError):
                 # This fallback still needs local per-part completion plus an
                 # actual preserved claim from a receipt-verified topic page.
                 selected=list(candidates.values())
+            # Only an actual saved model output bound to its exact selected
+            # packet can attribute an overlap quote to that part. When either
+            # artifact is gone, a quote must identify exactly one source part.
+            output_proofs=None
+            if exact_packet:
+                try:
+                    output=json.loads((packet_path.parent/'output.json').read_text(encoding='utf-8'))
+                    _validate_shape(output)
+                    output_proofs={BASE+page['category']+'/'+page['slug']+'.md':{_claim_hash(claim) for claim in page['claims']} for page in output['pages']}
+                except (OSError,ValueError,TypeError,KeyError): pass
             for row in selected:
                 if row['job_key'] in covered: continue
                 proofs=[]
                 for path in sorted(allowed_pages):
-                    hashes=[fingerprint for fingerprint,claim in cache[path].items()
-                            if claim.get('source')==row['path'] and len(claim.get('quote','').strip())>=12
-                            and normalized(claim['quote']) in normalized(row['text'])]
+                    hashes=[]
+                    for fingerprint,claim in cache[path].items():
+                        if claim.get('source')!=row['path'] or len(claim.get('quote','').strip())<12 or normalized(claim['quote']) not in normalized(row['text']): continue
+                        if output_proofs is not None:
+                            if fingerprint not in output_proofs.get(path,set()): continue
+                        else:
+                            matching={part['job_key'] for part in source_parts[row['path']] if normalized(claim['quote']) in normalized(part['text'])}
+                            if matching!={row['job_key']}: continue
+                        hashes.append(fingerprint)
                     if hashes: proofs.append({'page':path,'claims':hashes})
                 if not proofs: continue
                 entry=_source_identity(row) | {'status':'published','reason':'','quote':'','proofs':proofs,
                     'legacy_batch_id':batch['id'],'legacy_journal_sha256':journal_hash,
-                    'legacy_receipt_sha256':_json_hash(receipt)}
+                    'legacy_receipt_sha256':_json_hash(receipt),'proof_mode':'exact-packet-and-output' if output_proofs is not None else 'unambiguous-current-part-claim'}
                 groups.setdefault(batch['id'],[]).append(entry); covered.add(row['job_key'])
         written=[]
         for batch_id,entries in sorted(groups.items()):
@@ -399,7 +462,7 @@ def rebuild_source_links():
         links={}
         for page in pages():
             for claim in _list(page['meta'].get('wiki_claims')):
-                if isinstance(claim,dict) and isinstance(claim.get('source'),str): links.setdefault(claim['source'],set()).add(page['path'])
+                if _valid_claim(claim): links.setdefault(claim['source'],set()).add(page['path'])
         receipts=[]
         for target in (s.VAULT/BASE/'Sources').glob('*.md'):
             rel=target.relative_to(s.VAULT).as_posix(); s.safe_path(rel)
@@ -433,7 +496,11 @@ def _render_topic(page,packet,ident,result_hash):
     old=snapshots.get(rel)
     if target.exists() and not old: raise WikiTransientError('Existing target was not supplied; re-prepare with that page.')
     if old and _current_hash(target)!=old['sha256']: raise WikiTransientError('Wiki page changed since prepare.')
-    claims=(_list(meta(target.read_text(encoding='utf-8')).get('wiki_claims')) if old else [])+page['claims']
+    previous_claims=meta(target.read_text(encoding='utf-8')).get('wiki_claims',[]) if old else []
+    if not isinstance(previous_claims,list): raise WikiIntegrityError(rel)
+    for index,claim in enumerate(previous_claims):
+        if not _valid_claim(claim): raise WikiIntegrityError(rel,index)
+    claims=previous_claims+page['claims']
     unique={}
     for claim in claims:
         claim={**claim,'quote':normalized(claim['quote'])}
@@ -463,7 +530,7 @@ def _render_topic(page,packet,ident,result_hash):
 def _source_note(row,topic_pages):
     target=s.safe_path(BASE+'Sources/'+s.digest(row['path'].encode())[:16]+'.md')
     info=meta(target.read_text(encoding='utf-8')) if target.exists() else {}
-    linked=sorted(p['path'] for p in topic_pages if any(c.get('source')==row['path'] for c in _list(p['meta'].get('wiki_claims'))))
+    linked=sorted(p['path'] for p in topic_pages if any(_valid_claim(c) and c['source']==row['path'] for c in _list(p['meta'].get('wiki_claims'))))
     now=s.stamp()
     info.update({'date':now[:10],'type':'note','tags':['ai-memory','derived','wiki-source'],'sources':[row['path']],
                  'wiki_pages':linked,'latest_source_part':max(int(info.get('latest_source_part') or 0),row.get('part',1)),
@@ -605,13 +672,30 @@ def _index_and_log(ident,receipts,sources):
 def lint():
     issues=[]; allpages=pages(issues); known={p['path'] for p in allpages}
     for p in allpages:
-        for src,h in p['meta'].get('source_hashes',{}).items():
-            target=s.safe_path(src)
+        source_hashes=p['meta'].get('source_hashes',{})
+        if not isinstance(source_hashes,dict):
+            issues.append({'page':p['path'],'issue':'malformed source hash metadata'}); source_hashes={}
+        for src,h in source_hashes.items():
+            try: target=s.safe_path(src)
+            except (ValueError,TypeError):
+                issues.append({'page':p['path'],'issue':'malformed source path metadata'}); continue
             if not target.exists() or s.digest(target.read_bytes())!=h: issues.append({'page':p['path'],'issue':'source missing or changed','source':src})
-        for related in p['meta'].get('related',[]):
+        related_paths=p['meta'].get('related',[])
+        if not isinstance(related_paths,list):
+            issues.append({'page':p['path'],'issue':'malformed related link metadata'}); related_paths=[]
+        for related in related_paths:
+            if not isinstance(related,str):
+                issues.append({'page':p['path'],'issue':'malformed related link metadata'}); continue
             if related not in known: issues.append({'page':p['path'],'issue':'broken related link','target':related})
-        for c in p['meta'].get('wiki_claims',[]):
-            target=s.safe_path(c['source'])
+        claims=p['meta'].get('wiki_claims',[])
+        if not isinstance(claims,list):
+            issues.append({'page':p['path'],'issue':'malformed claim metadata'}); claims=[]
+        for index,c in enumerate(claims):
+            if not _valid_claim(c):
+                issues.append({'page':p['path'],'issue':'malformed claim metadata','claim_index':index}); continue
+            try: target=s.safe_path(c['source'])
+            except ValueError:
+                issues.append({'page':p['path'],'issue':'malformed claim metadata','claim_index':index}); continue
             if not target.exists() or normalized(c['quote']) not in target.read_text(encoding='utf-8-sig'): issues.append({'page':p['path'],'issue':'evidence quote missing','source':c['source']})
     report={'at':s.stamp(),'pages':len(allpages),'issues':issues,'semantic_review':'model preserves competing evidence; deterministic lint does not prove factual entailment'}
     (cfg.STATE/'wiki-lint.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
@@ -655,10 +739,23 @@ def output_schema(packet,strict=False):
 def _resume_packet():
     with db() as conn:
         batches=list(conn.execute("SELECT * FROM batches WHERE status IN ('pending','retryable','applying','published','complete') ORDER BY updated,id"))
+    eligibility=None
     for batch in batches:
         folder=cfg.STATE/'wiki/batches'/batch['id']; journal=folder/'journal.json'; input_path=folder/'input.json'
+        publication=folder/'publication.json'
         if batch['status']=='complete':
-            if not journal.exists() or json.loads(journal.read_text(encoding='utf-8')).get('state')=='complete': continue
+            try:
+                value=json.loads(journal.read_text(encoding='utf-8'))
+                finalized=isinstance(value,dict) and value.get('state')=='complete'
+            except (OSError,ValueError): finalized=False
+            if finalized: continue
+            if not publication.exists():
+                # v0.1.5 could commit SQLite before its final journal write.
+                # Do not fabricate the second historical proof from the first.
+                # Quarantine only its resume path and let explicit migration
+                # report/requeue any parts that still lack verifiable coverage.
+                with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('legacy_unverified',s.stamp(),batch['id']))
+                continue
         if not input_path.exists():
             if batch['status']!='complete': raise RuntimeError('Unfinished wiki batch has no saved input; inspect its local journal before retrying.')
             continue
@@ -667,6 +764,16 @@ def _resume_packet():
         if batch['status']!='complete' and any(_current_hash(s.safe_path(row['path']))!=row['sha256'] for row in packet['sources']):
             with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('stale',s.stamp(),batch['id']))
             continue
+        if batch['status']!='complete' and not publication.exists():
+            if eligibility is None:
+                _hydrate_receipts(inventory())
+                with db() as conn: eligibility={row['path']:dict(row) for row in conn.execute('SELECT * FROM sources')}
+            if any(not _eligible(row,eligibility.get(row['job_key'],{})) for row in packet['sources']):
+                # A later receipt/defer/retirement takes precedence over an old
+                # unused prepare. Keep its input/output, and re-prepare only the
+                # currently eligible parts. Durable publication plans are exempt.
+                with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('superseded',s.stamp(),batch['id']))
+                continue
         return packet
     return None
 
@@ -677,17 +784,26 @@ def reset_retries():
         with db() as conn:
             conn.execute('UPDATE sources SET error=NULL,attempts=0,attempt_hash=NULL,deferred_until=0')
             conn.execute('UPDATE batches SET attempts=0')
-        _atomic_json(cfg.STATE/'wiki-worker-status.json',{'status':'retry requested','at':s.stamp(),'retry_after':0})
+        _atomic_json(cfg.STATE/'wiki-worker-status.json',{'status':'retry requested','at':s.stamp(),'retry_after':0,'consecutive_failures':0,'attention_required':False})
     return {'status':'retry queue and worker backoff reset; pending work preserved'}
 
 def run(limit=4,timeout=480):
     cfg.require_maintainer()
     with FileLock(str(cfg.STATE/'wiki-worker.lock'),timeout=1):
         worker_state=cfg.STATE/'wiki-worker-status.json'
-        saved=json.loads(worker_state.read_text(encoding='utf-8')) if worker_state.exists() else {}
-        if saved.get('retry_after',0)>time.time(): return {'status':'blocked','reason':saved.get('reason'),'retry_after':saved['retry_after']}
+        saved=_read_worker_state()
+        if saved.get('attention_required'):
+            return {'status':'attention','reason':saved.get('reason'),'batch_id':saved.get('batch_id'),
+                    'consecutive_failures':saved.get('consecutive_failures',0),'manual_retry_required':True,
+                    'pending_parts':saved.get('pending_parts',[])}
         packet=_resume_packet()
         resumed=packet is not None
+        saved_output=resumed and (cfg.STATE/'wiki/batches'/packet['batch_id']/'output.json').exists()
+        # Durable output can finish publication without spending another model
+        # request, so its recovery bypasses model backoff. Pure lock contention
+        # does not exhaust the attention budget; persistent processing errors do.
+        if saved.get('retry_after',0)>time.time() and not (saved.get('status')=='retryable' and saved_output):
+            return {'status':'blocked','reason':saved.get('reason'),'retry_after':saved['retry_after']}
         if packet is None: packet=prepare(limit)
         if not packet: return {'status':'idle',**status()}
         folder=cfg.STATE/'wiki'/'batches'/packet['batch_id']; output=folder/'output.json'; schema=folder/'schema.json'
@@ -746,7 +862,7 @@ def run(limit=4,timeout=480):
                 result['dispositions'] += [_short_disposition(row) for row in short_sources if (row['path'],row['part']) not in present]
             _atomic_json(output,result)
             receipts=apply(packet,result)
-            _atomic_json(worker_state,{'status':'complete','at':s.stamp(),'batch_id':packet['batch_id']})
+            _atomic_json(worker_state,{'status':'complete','at':s.stamp(),'batch_id':packet['batch_id'],'consecutive_failures':0,'attention_required':False})
             return {'status':'complete','batch_id':packet['batch_id'],'receipts':receipts,'lint':lint()}
         except Exception as exc:
             from jsonschema.exceptions import ValidationError
@@ -755,12 +871,18 @@ def run(limit=4,timeout=480):
             transient=isinstance(exc,(WikiTransientError,LockTimeout,OSError)) or ((folder/'publication.json').exists() and not isinstance(exc,(WikiOutputError,ValidationError,json.JSONDecodeError)))
             unattributed_output=isinstance(exc,(WikiOutputError,ValueError,ValidationError)) and not isinstance(exc,WikiTransientError) and not getattr(exc,'source',None)
             reason='model authentication/quota requires attention' if global_failure else type(exc).__name__
-            backoff=0
+            failures=int(saved.get('consecutive_failures',0)); backoff=0
+            attributed=isinstance(exc,WikiOutputError) and bool(exc.source)
+            if attributed: failures=0
+            counted=not global_failure and not attributed and not isinstance(exc,LockTimeout) and (proc is not None or saved_output)
+            if counted: failures+=1
+            integrity=isinstance(exc,WikiIntegrityError)
+            no_cli=proc is None and not saved_output and isinstance(exc,(RuntimeError,FileNotFoundError))
+            attention=failures>=3 or integrity or no_cli
+            if counted and not attention: backoff=3600*(2**(failures-1))
             with db() as conn:
-                if unattributed_output and not transient and not global_failure:
+                if counted:
                     conn.execute('UPDATE batches SET attempts=attempts+1 WHERE id=?',(packet['batch_id'],))
-                    attempts=conn.execute('SELECT attempts FROM batches WHERE id=?',(packet['batch_id'],)).fetchone()[0]
-                    backoff=min(86400,3600*(2**min(attempts-1,5)))
                 # A model/service/global/race failure is not evidence that every
                 # untouched source is bad. Charge only a specifically identified
                 # invalid-evidence source, and reset that count when its hash changes.
@@ -771,7 +893,10 @@ def run(limit=4,timeout=480):
                 # A final journal-write failure must not turn an already committed
                 # publication back into an unfinished source batch.
                 conn.execute("UPDATE batches SET status=?,updated=? WHERE id=? AND status!='complete'",(state,s.stamp(),packet['batch_id']))
-            _atomic_json(worker_state,{'status':'retryable' if transient else 'output_backoff' if backoff else 'error','at':s.stamp(),
+            worker_receipt={'status':'attention' if attention else 'retryable' if transient else 'output_backoff' if unattributed_output and backoff else 'worker_backoff' if backoff else 'error','at':s.stamp(),
                          'batch_id':packet['batch_id'],'reason':reason,'retry_after':time.time()+10800 if global_failure else time.time()+backoff if backoff else 0,
-                         'backoff_seconds':backoff})
+                         'backoff_seconds':backoff,'consecutive_failures':failures,'attention_required':attention,
+                         'pending_parts':[{'job_key':row['job_key'],'sha256':row['sha256']} for row in packet['sources']]}
+            if integrity: worker_receipt.update(integrity_page=exc.page,claim_index=exc.claim_index)
+            _atomic_json(worker_state,worker_receipt)
             raise

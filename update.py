@@ -65,11 +65,17 @@ def verify(checkout):
         if hashlib.sha256(target.read_bytes()).hexdigest()!=expected: raise ValueError('Release integrity mismatch: '+relative)
     return manifest
 
+def cli_environment():
+    """Match the UTF-8 JSON pipe decoder, including when using a rollback CLI."""
+    env=os.environ.copy()
+    env['PYTHONIOENCODING']='utf-8'
+    return env
+
 def wait_health(python,root,version,timeout=120):
     deadline=time.monotonic()+timeout
     while time.monotonic()<deadline:
         try:
-            result=subprocess.run([str(python),str(root/'app/brain_cli.py'),'health'],capture_output=True,text=True,encoding='utf-8',timeout=30)
+            result=subprocess.run([str(python),str(root/'app/brain_cli.py'),'health'],env=cli_environment(),capture_output=True,text=True,encoding='utf-8',timeout=30)
             if result.returncode==0:
                 data=json.loads(result.stdout)
                 if data.get('status')=='running' and data.get('version')==version: return data
@@ -79,7 +85,7 @@ def wait_health(python,root,version,timeout=120):
 
 def wiki_command(python,root,vault,action,*flags):
     """Explicit local receipt maintenance; no compiler/model call is made here."""
-    env=os.environ.copy()
+    env=cli_environment()
     env.update(BRAIN_SYSTEM_ROOT=str(root),BRAIN_STATE=str(root/'state'),BRAIN_VAULT=str(vault))
     result=subprocess.run([str(python),str(root/'app/brain_cli.py'),'wiki',action,*flags],
                           env=env,capture_output=True,text=True,encoding='utf-8',timeout=600,check=True)

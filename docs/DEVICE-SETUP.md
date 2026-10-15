@@ -101,7 +101,9 @@ Never replace a healthy runtime by copying folders or running `git pull` inside 
 - Tools missing: inspect that client's generated second-brain entry, restart it and check a new session. Test the adapter and authenticated local health before changing settings.
 - Service unavailable: check the per-user startup entry and local service logs. Keep log/source excerpts private; never dump auth files.
 - Search not ready: check local index progress and model download. Do not copy another OS's SQLite/WAL while it is live.
+- Index bootstrap needs attention: have the agent diagnose the private bootstrap log and fix the cause first. With the registered service stopped, it can reset the local `state/index-bootstrap-status.json` marker and start the service to retry. Preserve the actual retrieval database and model cache, then verify indexing and known-source retrieval again.
 - Sync paused: preserve all files and staged changes; inspect the conflict. The service must remain the only sync owner.
 - Wiki compilation: the designated Windows maintainer owns it. Do not run `wiki run`, `wiki retry` or create a schedule on a capture device.
+- Wiki worker needs attention: the maintainer inspects `wiki status` and the controlled private failure receipt, repairs the cause and explicitly runs `wiki retry`. Pending sources and historical publication proofs remain preserved. Transport/timeouts and invalid model output must not cause unlimited scheduled model calls or blame unrelated sources.
 
 Reference: [v0.1.6 source and installer](https://github.com/code-by-muhammad/second-brain-system/tree/v0.1.6), [operating README](../README.md), and the shared vault's `Maps/AI-Context.md` and `02-Areas/AI-Memory/Wiki/Control.md`.
