@@ -320,8 +320,10 @@ def test_source_raw_sha_large_original_is_streamed(brain, monkeypatch, changed):
         requests = _streaming_source_spy(guard, source)
         stale = maintenance.review_sources(page, info)
     assert requests and max(requests) <= 65536
-    # Include the one-byte EOF/growth probe, without reading beyond the initial file size.
-    assert sum(requests) == len(raw) + 1
+    # Raw SHA is the fast path. A mismatch gets one separately bounded pass
+    # for the compiler's equivalent LF/CRLF/CR and optional-BOM digests.
+    # Each pass includes a one-byte EOF/growth probe.
+    assert sum(requests) == (len(raw) + 1) * (2 if changed else 1)
     expected = ['source changed: 01-Projects/Owner source.md'] if changed else []
     assert stale == expected
     assert source.read_bytes() == raw and page.read_bytes() == before_page

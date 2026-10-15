@@ -8,6 +8,7 @@ from filelock import FileLock, Timeout as LockTimeout
 from brain_markdown import frontmatter
 import brain_store as s
 import brain_settings as cfg
+import brain_git
 _GIT_POPEN=subprocess.Popen  # Keep read-only evidence processes separate from the model runner.
 
 BASE='02-Areas/AI-Memory/Wiki/'
@@ -244,8 +245,9 @@ def _worker_summary():
         result['reason']=reason if reason in controlled or isinstance(reason,str) and re.fullmatch('[A-Za-z_][A-Za-z0-9_]{0,63}',reason) else 'inspect private worker diagnostics'
     if isinstance(value.get('batch_id'),str) and re.fullmatch('[a-f0-9]{24}',value['batch_id']): result['batch_id']=value['batch_id']
     if isinstance(value.get('integrity_page'),str) and value['integrity_page'].startswith(BASE): result['integrity_page']=value['integrity_page'][:400]
-    if value.get('integrity_field') in ('title','wiki_claims','source_revision','latest_source_part','frontmatter','wiki_kind','encoding','content','path','packet','archive','recovery','serialization'): result['integrity_field']=value['integrity_field']
+    if value.get('integrity_field') in ('title','wiki_claims','source_revision','latest_source_part','frontmatter','wiki_kind','encoding','content','path','packet','archive','archive_capacity','recovery','serialization','publication_cas'): result['integrity_field']=value['integrity_field']
     if type(value.get('claim_index')) is int and 0<=value['claim_index']<120: result['claim_index']=value['claim_index']
+    if value.get('recovery_action')=='resolve_saved_publication_cas_then_retry': result['recovery_action']=value['recovery_action']
     return result
 
 def meta(text):
@@ -792,10 +794,11 @@ LOG_LIMIT=1_000_000
 STREAM_BLOCK=65536
 LOG_HEADER='# Wiki compilation log\n\nThis is compilation history; the maintenance service owns daily-note aggregation.\n'
 
-def _stream_file(path,utf8=False,sink=None,keep_limit=0):
+def _stream_file(path,utf8=False,sink=None,keep_limit=0,max_bytes=None):
     digest=hashlib.sha256(); size=0; kept=bytearray(); decoder=codecs.getincrementaldecoder('utf-8')('strict') if utf8 else None
     with path.open('rb') as stream:
         expected=os.fstat(stream.fileno()).st_size; remaining=expected
+        if max_bytes is not None and expected>max_bytes: raise WikiIntegrityError(BASE+'Log.md',field='archive_capacity')
         while remaining:
             chunk=stream.read(min(STREAM_BLOCK,remaining))
             if not chunk: raise WikiTransientError('File changed during a bounded streaming read.')
@@ -836,14 +839,17 @@ def _log_snapshot(folder):
     # into one string, plan value or backup buffer.
     log=s.safe_path(BASE+'Log.md')
     if not log.exists(): return {'sha256':None,'bytes':0,'raw':LOG_HEADER.encode(),'spool':None}
+    # Refuse unsupported legacy history before reading/spooling or a paid call.
+    # Git uses this same capacity; publishing an unsyncable archive is invalid.
+    if log.stat().st_size>brain_git.ARCHIVE_BYTES_LIMIT: raise WikiIntegrityError(BASE+'Log.md',field='archive_capacity')
     _spool_folder(folder); folder.mkdir(parents=True,exist_ok=True); _spool_folder(folder)
     fd,name=tempfile.mkstemp(prefix='.log-',suffix='.tmp',dir=folder)
     try:
         with os.fdopen(fd,'wb') as stream:
-            try: sha,size,raw=_stream_file(log,utf8=True,sink=stream,keep_limit=LOG_LIMIT)
+            try: sha,size,raw=_stream_file(log,utf8=True,sink=stream,keep_limit=LOG_LIMIT,max_bytes=brain_git.ARCHIVE_BYTES_LIMIT)
             except UnicodeError: raise WikiIntegrityError(BASE+'Log.md',field='encoding') from None
             stream.flush(); os.fsync(stream.fileno())
-        if _current_hash(log)!=sha: raise WikiTransientError('Compilation log changed while its history was staged.')
+        if _stream_file(log,max_bytes=brain_git.ARCHIVE_BYTES_LIMIT)[0]!=sha: raise WikiTransientError('Compilation log changed while its history was staged.')
         spool=None
         if raw is None:
             spool='log-history-'+sha+'.bin'; target=folder/spool
@@ -863,18 +869,37 @@ def _archive_payload(plan,packet):
     try:
         if not isinstance(rotation,dict) or set(rotation)!={'sha256','bytes','spool','path','at'}: raise ValueError()
         sha=rotation['sha256']; size=rotation['bytes']
-        if not isinstance(sha,str) or not re.fullmatch('[a-f0-9]{64}',sha) or type(size) is not int or size<0: raise ValueError()
+        if not isinstance(sha,str) or not re.fullmatch('[a-f0-9]{64}',sha) or type(size) is not int or not 0<=size<=brain_git.ARCHIVE_BYTES_LIMIT: raise ValueError()
         if rotation['spool']!='log-history-'+sha+'.bin' or rotation['path']!=BASE+'Log-Archives/'+sha+'.md': raise ValueError()
         if not isinstance(rotation['at'],str) or len(rotation['at'])>80: raise ValueError()
         datetime.fromisoformat(rotation['at'])
         folder=_spool_folder(cfg.STATE/'wiki/batches'/packet['batch_id']); spool=folder/rotation['spool']
-        if spool.is_symlink() or os.path.isjunction(spool) or not spool.resolve().is_relative_to(folder.resolve()) or _stream_file(spool,utf8=True)[:2]!=(sha,size): raise ValueError()
+        if spool.is_symlink() or os.path.isjunction(spool) or not spool.resolve().is_relative_to(folder.resolve()) or _stream_file(spool,utf8=True,max_bytes=brain_git.ARCHIVE_BYTES_LIMIT)[:2]!=(sha,size): raise ValueError()
         return spool
     except (ValueError,TypeError,OSError,UnicodeError): raise WikiIntegrityError(BASE+'Log.md',field='archive') from None
 
 def _publication_target(relative):
     try: return s.safe_path(relative)
     except (ValueError,TypeError,UnicodeError): raise WikiIntegrityError(BASE+'Index.md',field='path') from None
+
+def _publication_conflict(relative):
+    # Conflict locators are public diagnostics: never echo unsafe legacy names.
+    try:
+        if not isinstance(relative,str) or not relative.startswith(BASE): raise ValueError()
+        s.safe_path(relative); s.clean_text(relative,400)
+    except (ValueError,TypeError,UnicodeError): relative=BASE+'Index.md'
+    error=WikiTransientError('A planned derived page changed; preserve owner bytes and resolve its saved before/after image before retrying.')
+    error.page=relative; error.field='publication_cas'
+    return error
+
+
+def _screen_saved_output_paths(result):
+    try:
+        for page in result['pages']:
+            s.clean_text(BASE+page['category']+'/'+page['slug']+'.md',400)
+            for link in page['related']: s.safe_path(link); s.clean_text(link,400)
+    except (ValueError,TypeError,UnicodeError): raise WikiIntegrityError(BASE+'Index.md',field='path') from None
+
 
 def _stream_publish(write,payload=None):
     # This narrow path handles archive create-only and a bounded active Log
@@ -885,7 +910,7 @@ def _stream_publish(write,payload=None):
     archive=write['kind']=='wiki_log_archive'
     if current!=write['before']:
         if archive: raise WikiIntegrityError(BASE+'Log.md',field='archive')
-        raise WikiTransientError('Compilation log changed before replacement.')
+        raise _publication_conflict(write['path'])
     target.parent.mkdir(parents=True,exist_ok=True); _publication_target(write['path'])
     fd,name=tempfile.mkstemp(prefix='.brain-',suffix='.tmp',dir=target.parent)
     try:
@@ -895,7 +920,7 @@ def _stream_publish(write,payload=None):
                 if sha!=write['after'] or size!=write['bytes']: raise WikiIntegrityError(BASE+'Log.md',field='archive')
             else: stream.write(write['text'].encode('utf-8'))
             stream.flush(); os.fsync(stream.fileno())
-        if _current_hash(target)!=write['before']: raise WikiTransientError('Compilation log/archive changed before replacement.')
+        if _current_hash(target)!=write['before']: raise _publication_conflict(write['path'])
         if archive:
             # Atomic create-only: never overwrite an independently created file.
             try: os.link(name,target)
@@ -1288,12 +1313,7 @@ def apply(packet,result):
     if not re.fullmatch('[a-f0-9]{24}',ident): raise ValueError('Invalid batch identity.')
     publication=cfg.STATE/'wiki/batches'/ident/'publication.json'
     repairing=_saved_publication_started(packet,publication)
-    if publication.exists() and not repairing:
-        try:
-            for page in result['pages']:
-                s.clean_text(BASE+page['category']+'/'+page['slug']+'.md',400)
-                for link in page['related']: s.safe_path(link); s.clean_text(link,400)
-        except (ValueError,TypeError,UnicodeError): raise WikiIntegrityError(BASE+'Index.md',field='path') from None
+    if publication.exists() and not repairing: _screen_saved_output_paths(result)
     _validate(packet,result,screen_paths=not repairing); dispositions=_dispositions(packet,result)
     folder=cfg.STATE/'wiki/batches'/ident; journal=folder/'journal.json'; publication=folder/'publication.json'
     with FileLock(str(cfg.STATE/'writer.lock'),timeout=30):
@@ -1324,8 +1344,8 @@ def apply(packet,result):
         _verify_publication_plan(plan,packet,result)
         log_changes=[write for write in plan['writes'] if write['kind']=='wiki_log' and _current_hash(_publication_target(write['path'])) not in (write['before'],write['after'])]
         if log_changes and already_planned and not _publication_started(plan):
-            if any(write['kind'] not in ('wiki_log','wiki_log_archive') and _current_hash(_publication_target(write['path'])) not in (write['before'],write['after']) for write in plan['writes']):
-                raise WikiTransientError('Wiki page changed during publication; rebuild the batch.')
+            conflicts=[write for write in plan['writes'] if write['kind'] not in ('wiki_log','wiki_log_archive') and _current_hash(_publication_target(write['path'])) not in (write['before'],write['after'])]
+            if conflicts: raise _publication_conflict(conflicts[0]['path'])
             _assert_source_policy(packet)
             _atomic_json(folder/('publication-obsolete-'+_current_hash(publication)[:24]+'.json'),plan)
             plan=_publication_plan(packet,result,dispositions)
@@ -1342,7 +1362,7 @@ def apply(packet,result):
             if current not in (write['before'],write['after']):
                 if write['kind']=='wiki_log_archive': raise WikiIntegrityError(BASE+'Log.md',field='archive')
                 if write['kind']=='wiki_log' and not _publication_started(plan): raise _WikiLogChanged('Compilation log changed before initial publication; reuse saved output on retry.')
-                raise WikiTransientError('Wiki page changed during publication; rebuild the batch.')
+                raise _publication_conflict(write['path'])
         receipts=[]; progress=[]
         _atomic_json(journal,{'version':2,'state':'applying','packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress})
         for write in plan['writes']:
@@ -1351,7 +1371,7 @@ def apply(packet,result):
             if _current_hash(target)==write['after']:
                 receipt={'path':write['path'],'status':'recovered','sha256':write['after']}
             else:
-                if _current_hash(target)!=write['before']: raise WikiTransientError('Wiki page changed during publication; rebuild the batch.')
+                if _current_hash(target)!=write['before']: raise _publication_conflict(write['path'])
                 if write['kind']=='wiki_log_archive': receipt=_stream_publish(write,_archive_payload(plan,packet))
                 elif plan['version']==3 and write['kind']=='wiki_log': receipt=_stream_publish(write)
                 else: receipt=s._write(target,write['text'],write['kind'],write['before'])
@@ -1493,11 +1513,15 @@ def _full_catalog_snapshot(packet):
 def _resume_packet(policy=None):
     policy=source_policy() if policy is None else policy
     with db() as conn:
-        batches=list(conn.execute("SELECT * FROM batches WHERE status IN ('pending','retryable','applying','published','complete','stale') ORDER BY updated,id"))
+        batches=list(conn.execute("SELECT * FROM batches WHERE status IN ('pending','retryable','applying','published','complete','stale','error') ORDER BY updated,id"))
     eligibility=None; current_catalog=None
     for batch in batches:
         folder=cfg.STATE/'wiki/batches'/batch['id']; journal=folder/'journal.json'; input_path=folder/'input.json'
         publication=folder/'publication.json'
+        # An error may still own a valid durable plan (for example an archive
+        # collision awaiting owner repair). Only those errors may replay output;
+        # a generic failed model result without a plan must run fresh validation.
+        if batch['status']=='error' and not publication.exists(): continue
         if batch['status']=='complete':
             try:
                 value=json.loads(journal.read_text(encoding='utf-8'))
@@ -1525,6 +1549,14 @@ def _resume_packet(policy=None):
                 _validate(packet,output,screen_paths=False); _verify_publication_plan(plan,packet,output)
             except WikiIntegrityError: raise
             except (OSError,ValueError,TypeError,KeyError): raise WikiIntegrityError(BASE+'Index.md',field='recovery') from None
+            if batch['status']!='complete' and not _publication_started(plan):
+                try: _screen_saved_output_paths(output)
+                except WikiIntegrityError:
+                    # Preserve immutable input/output/plan/spools for inspection.
+                    # A new generation can request a clean replacement exactly
+                    # once; never mix that result with this old publication hash.
+                    with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('superseded',s.stamp(),batch['id']))
+                    raise
         if batch['status']=='stale' and not _saved_publication_started(packet,publication): continue
         if batch['status']!='complete' and not _saved_publication_started(packet,publication):
             try: _validate_packet_paths({'sources':packet['sources']})
@@ -1583,7 +1615,8 @@ def run(limit=4,timeout=480):
         if saved.get('attention_required'):
             return {'status':'attention','reason':saved.get('reason'),'batch_id':saved.get('batch_id'),
                     'consecutive_failures':saved.get('consecutive_failures',0),'manual_retry_required':True,
-                    'pending_parts':saved.get('pending_parts',[])}
+                    'pending_parts':saved.get('pending_parts',[]),
+                    **{key:value for key,value in _worker_summary().items() if key in ('integrity_page','integrity_field','recovery_action')}}
         try: packet=_resume_packet(policy)
         except WikiIntegrityError as exc:
             attention={'status':'attention','at':s.stamp(),'reason':'WikiIntegrityError','retry_after':0,'backoff_seconds':0,
@@ -1736,5 +1769,7 @@ def run(limit=4,timeout=480):
                          'backoff_seconds':backoff,'consecutive_failures':failures,'attention_required':attention,
                          'pending_parts':[{'job_key':row['job_key'],'sha256':row['sha256']} for row in packet['sources']]}
             if integrity: worker_receipt.update(integrity_page=exc.page,integrity_field=exc.field,claim_index=exc.claim_index)
+            if isinstance(exc,WikiTransientError) and getattr(exc,'field',None)=='publication_cas':
+                worker_receipt.update(integrity_page=exc.page,integrity_field=exc.field,recovery_action='resolve_saved_publication_cas_then_retry')
             _atomic_json(worker_state,worker_receipt)
             raise

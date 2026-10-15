@@ -46,3 +46,15 @@ Archive hash/UTF-8/descriptor integrity is checked when creating or recovering a
 Catalog discovery also uses bounded derived reads and skips case-renamed Log/archive history without loading it. Normal raw topic hashes and strict parser checks remain unchanged; oversized topics receive controlled content attention.
 
 Maintenance also skips compiler Log/archive history before reading it, bounds other derived-header inspection, and streams exact original source hashes. Malformed/oversized metadata and source growth/read failures remain review flags while capture linking and Git synchronization continue. The worker’s archive guarantees and original source bytes are preserved.
+
+Maintenance public diagnostics now screen source/page names and fresh Git errors before formatting. Health re-screens legacy caches read-only, omits unchecked extra attributes and retains safe operational fields/counts. Withheld page names use a generic locator plus opaque path SHA; original notes and private evidence remain unchanged. Safe ordinary paths and API-key setup guidance are preserved.
+
+Explicit malformed typed timestamp mappings also receive controlled parser handling, including constructor TypeError; valid explicit tags retain their established behavior.
+
+Verified saved publication plans can recover from error state after archive-collision repair without a new model request. Unsafe unused legacy targets are superseded with all old artifacts preserved, then a clean generation can request a replacement. Actual partial owner-CAS conflicts retain the queue hold and now identify the safe affected page and repair action; no automatic owner overwrite or partial-plan discard is introduced.
+
+The existing Git service now streams exact SHA-named compiler archives up to 64 MiB and independently checks the pinned staged object. The compiler enforces that same capacity before content reads, spooling or paid calls. Normal note limits are unchanged. Local history bytes stay exact; Git can normalize EOL on another checkout, and only exact raw or calculated CRLF-to-LF staged bytes are accepted. See the device guide for capacity and saved-plan repair.
+
+Daily aggregation isolates missing/invalid templates, bounded-read failures and failed writes into per-capture review flags, preserving originals and attempting the remaining maintenance/Git phases. Git's own invalid-note safeguards still apply. Display fields are escaped to prevent marker/heading injection; exact marker-plus-capture-link identity preserves genuine and legacy idempotency. Daily owner edits are checked against the consumed raw before image and remain untouched on conflict, within the existing cooperative writer limits.
+
+Maintenance review now recognizes the compiler's LF/CRLF/CR and optional-BOM source representations through bounded streaming after a raw-hash mismatch. Real content changes remain flagged, source files stay unchanged and publication CAS remains raw.
