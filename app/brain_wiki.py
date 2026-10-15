@@ -1568,6 +1568,7 @@ def _read_saved_packet(path,batch_id):
             if not isinstance(row.get('title'),str): raise ValueError('Invalid catalog title.')
         for row in packet['current_pages']:
             if not isinstance(row.get('meta'),dict): raise ValueError('Invalid saved page metadata.')
+            if not isinstance(row.get('sha256'),str) or not re.fullmatch('[a-f0-9]{64}',row['sha256']): raise ValueError('Invalid saved current-page hash.')
         _bounded_json(packet)
         return packet
     except _JSONTooLarge:

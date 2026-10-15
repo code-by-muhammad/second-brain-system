@@ -58,6 +58,7 @@ The v0.1.6 audit fixes passed independent Codex and Claude reviews, four-platfor
 | R70 | A raw Unicode filename followed by a credential-shaped marker passes through JSON escaping before screening, obscuring the marker boundary | Screen every path-bearing Git diagnostic before escaping. Withhold sensitive paths behind their exact opaque SHA without newly filtering otherwise valid source filenames. |
 | R71 | Withheld maintenance diagnostics point to a private status file containing the same withheld message | Point to a working local name-only path-SHA lookup. Retain legacy cached locator hashes read-only and exclude unchecked cache extras. |
 | R72 | Unfinished batch input is missing, invalid JSON, scalar or has the wrong identity; resume raises an uncontrolled exception and leaves stale retry status | Bound and validate durable input before resume/model calls; report recovery attention without strikes, preserve artifacts and keep ordinary I/O retry and packet-size classification. |
+| R73 | A genuine unused saved packet loses a current-page SHA or has null SHA; resume requests a model and then fails with a systemic strike and one-hour backoff | Require a lowercase 64-hex SHA for every saved current-page snapshot before model work. Preserve ordinary owner-change refresh, legacy optional catalog hashes and actual partial replay. |
 
 
 
@@ -233,3 +234,11 @@ Raw Git path diagnostics are screened before JSON escaping can obscure a credent
 - [Git attributes](https://git-scm.com/docs/gitattributes): existing text conversion can alter line endings, so pinned staged-byte verification remains separate from local raw file identity.
 
 Focused repair results are separate from final combined OS tests, independent reviews, hosted CI and deployment approval. Existing platform gates remain unchanged.
+
+## R73 saved current-page identity
+
+Fresh Codex R15 found a remaining essential-shape gap on frozen ffeec749 after its own 817-test regression run. Root independently executed the five-case contract against that exact commit, preserving all 92 tracked hashes: missing/null current-page hashes spent one model call and then incurred a systemic strike and one-hour backoff; integer/malformed hashes instead retired the unused packet and requested fresh generation. The valid control completed. All four corrupt shapes should stop before a request, but only the missing/null cases are attributed the exception/backoff failure.
+
+The durable reader now requires each current-page SHA to be a lowercase 64-hex string before resume or model work. Invalid identities receive recovery attention with no strikes and no note/private-artifact changes. Legacy catalog entries may still omit their optional hash. A well-formed current-page hash differing from an actual owner edit still triggers legitimate fresh preparation; actual verified partial publication still replays without another model request. Eleven new cases cover these boundaries, alongside the existing recovery suite.
+
+Root also reran all 21 R67–72 contracts successfully on ffeec749 after correcting a private Windows fixture's LF-versus-write_text-CRLF byte assertion. The earlier four fixture failures and the unchanged original before proof remain preserved; no product change was made for that fixture error. Final combined tests and independent reviews must validate the R73 commit separately; previous ffeec749 Windows/Linux passes are historical support only.
