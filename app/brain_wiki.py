@@ -153,7 +153,7 @@ def _screen_decoded_context(value):
         if isinstance(item,str):
             chars+=len(item)
             if chars>2_000_000: raise ValueError('Derived context exceeds text bounds.')
-            s.clean_text(item,2_000_000)
+            item.encode('utf-8'); s.clean_text(item,2_000_000)
         elif isinstance(item,(dict,list,tuple)):
             ident=id(item)
             if ident in active: raise ValueError('Circular derived context.')
@@ -191,15 +191,23 @@ def _existing_topic_title(page):
     except (ValueError,UnicodeError): raise WikiIntegrityError(page['path'],field='title') from None
     return title
 
-def _validate_packet_paths(packet):
+def _validate_packet_paths(packet,screen_credentials=True):
     for item in packet.get('sources',[])+packet.get('catalog',[])+packet.get('current_pages',[]):
-        try: item['path'].encode('utf-8'); s.safe_path(item['path']); s.clean_text(item['path'],400)
+        try:
+            item['path'].encode('utf-8'); s.safe_path(item['path'])
+            if screen_credentials: s.clean_text(item['path'],400)
         except (ValueError,TypeError,UnicodeError,AttributeError): raise WikiIntegrityError(BASE+'Index.md',field='path') from None
 
 def _validate_source_context(packet):
     for row in packet.get('sources',[]):
         try:
-            for key in ('text','title','date'):
+            # Inventory screens the complete source before chunking; resume also
+            # verifies this exact part against that canonical source. A slice can
+            # turn an ordinary word suffix into a false credential boundary.
+            text=row['text']
+            if not isinstance(text,str) or len(text)>2_000_000 or '\x00' in text: raise ValueError('Invalid source text.')
+            text.encode('utf-8')
+            for key in ('title','date'):
                 s.clean_text(row[key],2_000_000); row[key].encode('utf-8')
         except (ValueError,UnicodeError,TypeError,KeyError,AttributeError):
             raise WikiIntegrityError(BASE+'Index.md',field='content') from None
@@ -223,6 +231,14 @@ def _validate_packet_context(packet):
     except (ValueError,TypeError,RecursionError,UnicodeError):
         page=next((page['path'] for page in packet.get('current_pages',[])),BASE+'Index.md')
         raise WikiIntegrityError(page) from None
+    try:
+        # Unknown legacy fields and object keys are forwarded too. Inspect every
+        # decoded string/association except the already authenticated source
+        # slices; serializing their JSON would recreate the boundary regression.
+        context={**packet,'sources':[{key:value for key,value in row.items() if key!='text'} for row in packet['sources']]}
+        _screen_decoded_context(context)
+    except (ValueError,TypeError,RecursionError,UnicodeError):
+        raise WikiIntegrityError(BASE+'Index.md',field='content') from None
 
 def _list(value): return value if isinstance(value,list) else []
 def _tags(value): return [value] if isinstance(value,str) else _list(value)
@@ -1347,7 +1363,7 @@ def _saved_publication_started(packet,publication):
         plan=json.loads(publication.read_text(encoding='utf-8'))
         _validate(packet,result,screen_paths=False); _verify_publication_plan(plan,packet,result)
         return _publication_started(plan)
-    except (OSError,ValueError,KeyError,TypeError): return False
+    except (OSError,ValueError,KeyError,TypeError,RecursionError): return False
 
 def apply(packet,result):
     cfg.require_maintainer()
@@ -1521,8 +1537,9 @@ def cleanup(days=30):
         if not folder.resolve().is_relative_to(base): raise ValueError('Unsafe batch cleanup path.')
         journal=folder/'journal.json'
         try:
-            if json.loads(journal.read_text(encoding='utf-8')).get('state')!='complete': continue
-        except (OSError,ValueError): continue
+            saved=json.loads(journal.read_text(encoding='utf-8'))
+            if not isinstance(saved,dict) or saved.get('state')!='complete': continue
+        except (OSError,ValueError,RecursionError): continue
         spool_names=[path.name for path in folder.iterdir() if re.fullmatch(r'(?:log-history-[a-f0-9]{64}\.bin|publication-obsolete-[a-f0-9]{24}\.json)',path.name)]
         for name in ('input.json','output.json','runner.log','schema.json','publication.json',*spool_names):
             path=folder/name
@@ -1617,6 +1634,7 @@ def _resume_packet(policy=None):
             try:
                 value=json.loads(journal.read_text(encoding='utf-8'))
                 finalized=isinstance(value,dict) and value.get('state')=='complete'
+            except RecursionError: raise _recovery_integrity(batch['id']) from None
             except (OSError,ValueError): finalized=False
             if finalized: continue
             if not publication.exists():
@@ -1636,7 +1654,7 @@ def _resume_packet(policy=None):
                 _validate(packet,output,screen_paths=False); _verify_publication_plan(plan,packet,output)
             except WikiIntegrityError as exc:
                 exc.batch_id=batch['id']; raise
-            except (OSError,ValueError,TypeError,KeyError): raise _recovery_integrity(batch['id']) from None
+            except (OSError,ValueError,TypeError,KeyError,RecursionError): raise _recovery_integrity(batch['id']) from None
             if batch['status']!='complete' and not _publication_started(plan):
                 try: _screen_saved_output_paths(output)
                 except WikiIntegrityError as exc:
@@ -1652,6 +1670,12 @@ def _resume_packet(policy=None):
             except WikiIntegrityError:
                 with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('superseded',s.stamp(),batch['id']))
                 continue
+        # All subsequent owner-hash comparisons require filesystem-safe paths.
+        # Credential-like legacy paths may repair only a verified actual partial
+        # publication; their existing narrower exemption remains unchanged.
+        try: _validate_packet_paths(packet,screen_credentials=False)
+        except WikiIntegrityError as exc:
+            exc.batch_id=batch['id']; raise
         if batch['status']!='complete' and any(_policy_excluded(row['path'],policy) for row in packet['sources']) and not _saved_publication_started(packet,publication):
             with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('superseded',s.stamp(),batch['id']))
             continue

@@ -67,8 +67,12 @@ Owner-edited ordinary archives now synchronize under the normal 2,000,000-charac
 
 Saved current-page snapshots also require valid SHA identities before requesting the model. Missing or malformed hashes receive recovery attention; optional legacy catalog hashes, genuine owner-change refresh and verified partial replay retain their existing behavior.
 
-Supplied catalog hashes must also be valid and non-conflicting, while absent legacy hashes remain supported. Saved selections cannot repeat a source path. Decoded saved source text/title/date pass the existing credential/NUL and UTF-8 checks before new model requests; independently verified partial publication still finishes without new model input.
+Supplied catalog hashes must also be valid and non-conflicting, while absent legacy hashes remain supported. Saved selections cannot repeat a source path. Whole-source credential screening and canonical selected-part identity protect source text without inventing word boundaries at chunk edges. All other decoded model-bound strings and keys receive credential/NUL and UTF-8 checks before subprocess work; independently verified partial publication still finishes without new model input.
 
 Recovery attention identifies its safe database batch ID. Stale batches without a publication plan no longer block new work because of irrelevant corrupt input, and retired stale identities receive a fresh generation rather than overwriting old artifacts. Actual partial and complete-but-unfinalized transactions retain their verified-recovery hold.
 
 Known catalog hashes remain binding in duplicate or partial legacy catalogs. Unused saved parts must match actual canonical inventory before requesting a model. An original-source edit cannot release the hold of an unfinished verified publication or allow a new batch to overwrite its owner conflict; explicit source-revision recovery is required.
+
+Malformed durable output/plan JSON and unsafe saved resume paths now stop with safe batch-located recovery diagnostics rather than stale worker status. Original evidence and pending publication remain preserved; explicit owner reconciliation is documented in the device guide.
+
+Private-artifact cleanup preserves malformed completed journals and continues ordinary upkeep. Valid completed artifacts still expire, while source notes, receipts and pending artifacts remain intact.
