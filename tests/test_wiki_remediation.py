@@ -367,7 +367,10 @@ def test_short_parts_are_deterministically_skipped_without_model_call(brain,monk
 
 
 def test_mixed_short_and_substantive_batch_keeps_short_parts_out_of_model(brain,monkeypatch):
-    source,_,result=fixture(brain); empty=source.with_name('Blank.md'); empty.write_bytes(b'')
+    source,initial,result=fixture(brain); empty=source.with_name('Blank.md'); empty.write_bytes(b'')
+    # This test models the mixed prepare, not the fixture's unused earlier
+    # one-source packet. Retire that synthetic packet deterministically.
+    with w.db() as conn: conn.execute("UPDATE batches SET status='stale' WHERE id=? AND status='pending'",(initial['batch_id'],))
     packet=w.prepare(); modeled={**packet,'sources':[row for row in packet['sources'] if row['path']!=empty.relative_to(s.VAULT).as_posix()]}
     calls=fake_model(monkeypatch,explicit(modeled,result))
     completed=w.run()

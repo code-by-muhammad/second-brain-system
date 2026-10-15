@@ -79,6 +79,9 @@ def _claim_hash(claim):
 
 def _valid_claim(claim):
     return _claim_hash(claim) is not None and claim.get('status') in ('historical','uncertain','superseded') and bool(claim['text'].strip()) and len(claim['quote'].strip())>=12 and bool(claim['source'])
+
+def _valid_source_revision(revision):
+    return isinstance(revision,dict) and all(isinstance(revision.get(key),str) and re.fullmatch('[a-f0-9]{64}',revision[key]) for key in ('sha256','text_sha256')) and ('date' not in revision or isinstance(revision['date'],str))
 def _list(value): return value if isinstance(value,list) else []
 def _tags(value): return [value] if isinstance(value,str) else _list(value)
 def _short_part(row): return len(normalized(row['text']).strip())<12
@@ -605,8 +608,9 @@ class _EvidenceHistory:
     """Read-only, bounded Git evidence. No filters, network, or receipt attestation.
 
     At most 64 commits per path, 256 Git commands and 16 MB of blob bytes.
-    A cooperative 15-second budget is checked between bounded Git, parsing and
-    indexing operations; an in-flight Python operation is not preempted.
+    A cooperative 15-second history budget is checked between bounded historical
+    Git, parsing and indexing operations; an in-flight operation is not preempted.
+    Current-source verification remains independent of that optional budget.
     Caches exist only for this invocation.
     """
     def __init__(self):
@@ -667,13 +671,11 @@ class _EvidenceHistory:
         if source in self.current:
             value=self.current.pop(source); self.current[source]=value
             return value[0]
-        if not self._active(): return None
         info=None; size=0
         try:
             target=s.safe_path(source)
             if target.is_file() and target.stat().st_size<=2_000_000:
-                raw=target.read_bytes(); size=len(raw); info=_source_bytes(raw,self._active)
-                if not self._active(): info=None
+                raw=target.read_bytes(); size=len(raw); info=_source_bytes(raw)
         except (OSError,ValueError,UnicodeError): pass
         while self.current and (len(self.current)>=256 or self.current_bytes+size>16_000_000):
             oldest=next(iter(self.current)); self.current_bytes-=self.current.pop(oldest)[1]
@@ -714,9 +716,9 @@ class _EvidenceHistory:
             if not self._active(): return None
             fingerprint=_claim_hash(previous)
             if fingerprint is None: continue
-            revision=previous.get('source_revision')
-            if revision is not None and (not isinstance(revision,dict) or not isinstance(revision.get('text_sha256'),str) or not re.fullmatch('[a-f0-9]{64}',revision['text_sha256'])): continue
-            candidate=revision if revision is not None else {'sha256':hashes.get(previous['source'])}
+            explicit='source_revision' in previous; revision=previous.get('source_revision')
+            if explicit and not _valid_source_revision(revision): continue
+            candidate=revision if explicit else {'sha256':hashes.get(previous['source'])}
             origins.setdefault(fingerprint,[]).append(candidate)
         if not self._active(): return None
         self.revision_origins[key]=origins
@@ -724,8 +726,8 @@ class _EvidenceHistory:
 
     def claim(self,page,claim):
         revision=claim.get('source_revision')
-        if revision is not None:
-            if not isinstance(revision,dict) or not isinstance(revision.get('text_sha256'),str) or not re.fullmatch('[a-f0-9]{64}',revision['text_sha256']): return None
+        if 'source_revision' in claim:
+            if not _valid_source_revision(revision): return None
             proof=self.source(claim['source'],revision.get('sha256'),claim['quote'],revision['text_sha256'])
             if proof and 'date' in revision and revision['date']!=proof['date']: return None
             return proof
@@ -764,6 +766,7 @@ def _render_topic(page,packet,ident,result_hash,history=None):
     if not isinstance(previous_claims,list): raise WikiIntegrityError(rel)
     for index,claim in enumerate(previous_claims):
         if not _valid_claim(claim): raise WikiIntegrityError(rel,index)
+        if 'source_revision' in claim and not _valid_source_revision(claim['source_revision']): raise WikiIntegrityError(rel,index)
     history=history or _EvidenceHistory()
     claims=previous_claims+page['claims']
     unique={}
@@ -1011,6 +1014,8 @@ def lint():
             try: s.safe_path(claim['source'])
             except ValueError:
                 issues.append({'page':p['path'],'issue':'malformed claim metadata','claim_index':index}); continue
+            if 'source_revision' in claim and not _valid_source_revision(claim['source_revision']):
+                issues.append({'page':p['path'],'issue':'malformed source revision metadata','source':claim['source'],'claim_index':index}); continue
             proof=history.claim(p,claim)
             if not proof:
                 current=history._current(claim['source'])
@@ -1224,7 +1229,7 @@ def run(limit=4,timeout=480):
             failures=int(saved.get('consecutive_failures',0)); backoff=0
             attributed=isinstance(exc,WikiOutputError) and bool(exc.source)
             if attributed: failures=0
-            counted=not global_failure and not attributed and not isinstance(exc,LockTimeout) and (proc is not None or saved_output)
+            counted=not global_failure and not attributed and not isinstance(exc,(LockTimeout,WikiIntegrityError)) and (proc is not None or saved_output)
             if counted: failures+=1
             integrity=isinstance(exc,WikiIntegrityError)
             no_cli=proc is None and not saved_output and isinstance(exc,(RuntimeError,FileNotFoundError))

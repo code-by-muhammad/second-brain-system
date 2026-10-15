@@ -128,7 +128,8 @@ def test_tampered_explicit_origin_is_an_issue_even_when_git_contains_quote(brain
     info['wiki_claims'][0]['source_revision'][field]=value
     replace_meta(topic,info)
     report=w.lint()
-    assert any(issue['issue']=='evidence quote missing' for issue in report['issues'])
+    expected='malformed source revision metadata' if value==[] else 'evidence quote missing'
+    assert any(issue['issue']==expected for issue in report['issues'])
     assert report['historical_evidence_count']==0
 
 

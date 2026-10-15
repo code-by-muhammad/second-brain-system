@@ -17,3 +17,5 @@ The existing hourly compiler handles eligible new ingestion. Physical-device and
 A review-discovered direct-editor policy race is repaired: unused plans cannot gain an exclusion exemption by being saved during the edit. Actual partial publication may recover from validated planned hashes without another model call; unused work is superseded with its artifacts preserved.
 
 Historical metadata is parsed once per fetched revision and origin lookups are cached per blob. The cooperative time budget is checked before further parsing, indexing and history traversal, including cached history; verified cached proofs remain reusable. Public proof fields exclude private parsed headers and claim content.
+
+Current-file proofs remain available independently of the optional history budget; new claim origins and unchanged-note lint stay correct after history expiry. Explicit malformed origins produce controlled integrity attention without silent rebinding or retry strikes, while legacy missing origins remain supported.
