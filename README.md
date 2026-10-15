@@ -78,7 +78,7 @@ Shared knowledge: notes, immutable captures, wiki topic/source pages, index, com
 
 An optional `02-Areas/AI-Memory/Wiki-Source-Policy.md` selects exact source paths or directory prefixes to exclude from future wiki compilation. Excluded originals stay searchable and existing historical publications remain intact. Status reports exclusions separately from eligible completion; malformed policy stops new compilation. Follow [the device guide](docs/DEVICE-SETUP.md) for the strict format. Meaningful progress uses concise captures linked into daily notes by the existing service.
 
-Git sync runs every 15 minutes on each installed device, with one local maintenance owner. It merges independent offline edits only after a conflict-free preflight. Same-note conflicts, staged user changes, unknown files and source deletions pause sync for review. It never force-pushes. Automatic same-note conflict resolution would risk losing meaning.
+Git sync runs every 15 minutes on each installed device, with one local maintenance owner. It merges independent offline edits only after a conflict-free preflight. Same-note conflicts, staged user changes, unknown files, source deletions and case-only differences between tracked and actual paths pause sync for review. It never force-pushes. Automatic same-note conflict resolution would risk losing meaning.
 
 Keep one live sync transport. Syncthing is not enabled by this release. GitHub currently provides store-and-forward when devices are not online together.
 

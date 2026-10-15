@@ -410,7 +410,10 @@ def inventory(include_excluded=False,policy=None):
     for root in SOURCE_ROOTS:
         for p in (s.VAULT/root).rglob('*.md'):
             rel=p.relative_to(s.VAULT).as_posix()
-            if rel.casefold().startswith('02-areas/ai-memory/'): continue
+            folded=rel.casefold()
+            # Reserved generated summaries are never original source evidence,
+            # even when owner-policy exclusions are included for queue accounting.
+            if folded.startswith('02-areas/ai-memory/') or (folded.startswith('01-projects/') and folded.endswith('/ai-memory.md')): continue
             if not include_excluded and _policy_excluded(rel,policy): continue
             try:
                 if p.stat().st_size>2_000_000: continue
@@ -568,6 +571,9 @@ def prepare(limit=4):
             if not already_published and not stale_plan and not shared_only: break
             generation+=1
     packet['batch_id']=ident
+    # The durable selection must fit the same budget as its saved reader.
+    try: _bounded_json(packet,sort_keys=True,default=str)
+    except (_JSONTooLarge,_JSONStructureTooLarge): raise WikiIntegrityError(BASE+'Index.md',field='packet') from None
     folder=cfg.STATE/'wiki'/'batches'/ident; folder.mkdir(parents=True,exist_ok=True)
     packet_path=folder/'input.json'
     _atomic_json(packet_path,packet)
