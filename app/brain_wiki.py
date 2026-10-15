@@ -196,14 +196,18 @@ def _validate_packet_paths(packet):
         try: item['path'].encode('utf-8'); s.safe_path(item['path']); s.clean_text(item['path'],400)
         except (ValueError,TypeError,UnicodeError,AttributeError): raise WikiIntegrityError(BASE+'Index.md',field='path') from None
 
-def _validate_packet_context(packet):
-    _validate_packet_paths(packet)
+def _validate_source_context(packet):
     for row in packet.get('sources',[]):
         try:
             for key in ('text','title','date'):
                 s.clean_text(row[key],2_000_000); row[key].encode('utf-8')
         except (ValueError,UnicodeError,TypeError,KeyError,AttributeError):
             raise WikiIntegrityError(BASE+'Index.md',field='content') from None
+
+
+def _validate_packet_context(packet):
+    _validate_packet_paths(packet)
+    _validate_source_context(packet)
     # Saved packets predate new safeguards too. Screen their actual selected
     # metadata before a request, without changing their durable source evidence.
     for page in packet.get('current_pages',[]):
@@ -287,7 +291,7 @@ def _worker_summary():
         if 'path_sha256' in locator: result['integrity_page_sha256']=locator['path_sha256']
     if value.get('integrity_field') in ('title','wiki_claims','source_revision','latest_source_part','frontmatter','wiki_kind','encoding','content','path','packet','archive','archive_capacity','recovery','serialization','publication_cas','unused_publication_cas'): result['integrity_field']=value['integrity_field']
     if type(value.get('claim_index')) is int and 0<=value['claim_index']<120: result['claim_index']=value['claim_index']
-    if value.get('recovery_action') in ('resolve_saved_publication_cas_then_retry','retry_fresh_generation_preserving_owner_edits'): result['recovery_action']=value['recovery_action']
+    if value.get('recovery_action') in ('resolve_saved_publication_cas_then_retry','retry_fresh_generation_preserving_owner_edits','resolve_saved_source_revision_then_retry'): result['recovery_action']=value['recovery_action']
     return result
 
 def meta(text):
@@ -1547,7 +1551,7 @@ def _full_catalog_snapshot(packet):
     if not isinstance(catalog,list): return None
     snapshot={}
     for page in catalog:
-        if not isinstance(page,dict) or not isinstance(page.get('path'),str) or not isinstance(page.get('sha256'),str) or not re.fullmatch('[a-f0-9]{64}',page['sha256']) or page['path'] in snapshot:
+        if not isinstance(page,dict) or not isinstance(page.get('path'),str) or not isinstance(page.get('sha256'),str) or not re.fullmatch('[a-f0-9]{64}',page['sha256']) or page['path'] in snapshot and snapshot[page['path']]!=page['sha256']:
             return None
         snapshot[page['path']]=page['sha256']
     return snapshot
@@ -1599,7 +1603,7 @@ def _resume_packet(policy=None):
     policy=source_policy() if policy is None else policy
     with db() as conn:
         batches=list(conn.execute("SELECT * FROM batches WHERE status IN ('pending','retryable','applying','published','complete','stale','error') ORDER BY updated,id"))
-    eligibility=None; current_catalog=None
+    eligibility=None; current_catalog=None; canonical=None
     for batch in batches:
         if not isinstance(batch['id'],str) or not re.fullmatch('[a-f0-9]{24}',batch['id']): raise _recovery_integrity(None)
         folder=cfg.STATE/'wiki/batches'/batch['id']; journal=folder/'journal.json'; input_path=folder/'input.json'
@@ -1651,7 +1655,11 @@ def _resume_packet(policy=None):
         if batch['status']!='complete' and any(_policy_excluded(row['path'],policy) for row in packet['sources']) and not _saved_publication_started(packet,publication):
             with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('superseded',s.stamp(),batch['id']))
             continue
-        if batch['status']!='complete' and any(_current_hash(s.safe_path(row['path']))!=row['sha256'] for row in packet['sources']):
+        if any(_current_hash(s.safe_path(row['path']))!=row['sha256'] for row in packet['sources']):
+            if batch['status']=='complete' or _saved_publication_started(packet,publication):
+                error=_recovery_integrity(batch['id'],'source_revision')
+                error.recovery_action='resolve_saved_source_revision_then_retry'
+                raise error
             with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('stale',s.stamp(),batch['id']))
             continue
         if batch['status']!='complete':
@@ -1661,15 +1669,32 @@ def _resume_packet(policy=None):
             changed=expected is not None and expected!=current_catalog
             # Older packets may not carry a full catalog hash map. Their
             # explicitly supplied current-page snapshots still remain binding.
-            changed=changed or any(page.get('sha256') and _current_hash(s.safe_path(page['path']))!=page['sha256'] for page in packet.get('current_pages',[]))
+            changed=changed or any(page.get('sha256') and _current_hash(s.safe_path(page['path']))!=page['sha256'] for page in packet['catalog']+packet.get('current_pages',[]))
             if changed and not _saved_publication_started(packet,publication):
                 # Do not spend quota on known stale unused context. Keep its
                 # artifacts, then let fresh preparation validate owner repairs.
                 with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('superseded',s.stamp(),batch['id']))
                 continue
+        if batch['status']!='complete' and not _saved_publication_started(packet,publication):
+            try: _validate_source_context(packet)
+            except WikiIntegrityError as exc:
+                exc.batch_id=batch['id']; raise
+            if canonical is None:
+                canonical={row['job_key']:row for row in inventory(include_excluded=True,policy=policy)}
+            # Inventory may observe an owner edit after the earlier raw-hash check.
+            # Treat that as stale input, not a malformed immutable saved part.
+            if any(_current_hash(s.safe_path(row['path']))!=row['sha256'] or
+                   any(actual['path']==row['path'] and actual['sha256']!=row['sha256'] for actual in canonical.values())
+                   for row in packet['sources']):
+                with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('stale',s.stamp(),batch['id']))
+                continue
+            for row in packet['sources']:
+                actual=canonical.get(row['job_key'])
+                if actual is None or _source_identity(actual)!=_source_identity(row):
+                    raise _recovery_integrity(batch['id'])
         if batch['status']!='complete' and not publication.exists():
             if eligibility is None:
-                _hydrate_receipts(inventory(include_excluded=True,policy=policy))
+                _hydrate_receipts(list(canonical.values()))
                 with db() as conn: eligibility={row['path']:dict(row) for row in conn.execute('SELECT * FROM sources')}
             if any(not _eligible(row,eligibility.get(row['job_key'],{})) for row in packet['sources']):
                 # A later receipt/defer/retirement takes precedence over an old
@@ -1710,8 +1735,9 @@ def run(limit=4,timeout=480):
                        'integrity_page':exc.page,'integrity_field':exc.field,'claim_index':exc.claim_index,'manual_retry_required':True}
             batch_id=getattr(exc,'batch_id',None)
             if isinstance(batch_id,str) and re.fullmatch('[a-f0-9]{24}',batch_id): attention['batch_id']=batch_id
+            if getattr(exc,'recovery_action',None)=='resolve_saved_source_revision_then_retry': attention['recovery_action']=exc.recovery_action
             _atomic_json(worker_state,attention)
-            if exc.field=='packet': return attention
+            if exc.field in ('packet','content'): return attention
             raise
         except (WikiTransientError,OSError) as exc:
             receipt={'status':'retryable','at':s.stamp(),'reason':type(exc).__name__,'retry_after':time.time()+60,

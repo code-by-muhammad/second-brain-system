@@ -49,6 +49,10 @@ def test_saved_source_identity_and_model_strings_are_preflighted(brain,monkeypat
 def test_distinct_selected_source_paths_compile_together(brain,monkeypatch):
     source,first,result=fixture(brain)
     second=source.with_name('Second.md');second.write_bytes(source.read_bytes())
+    # Retire this fixture's earlier unused one-source prepare deliberately.
+    # Otherwise equal timestamps sort by platform-dependent batch hash, and
+    # run() may correctly resume that older packet instead of this two-source one.
+    with w.db() as conn: conn.execute("UPDATE batches SET status='superseded' WHERE id=?",(first['batch_id'],))
     packet=w.prepare(2);assert len(packet['sources'])==2
     claim=copy.deepcopy(result['pages'][0]['claims'][0]);claim['source']=second.relative_to(s.VAULT).as_posix();result['pages'][0]['claims'].append(claim)
     calls=fake_model(monkeypatch,explicit(packet,result));report=w.run(2)
@@ -56,7 +60,15 @@ def test_distinct_selected_source_paths_compile_together(brain,monkeypatch):
 
 @pytest.mark.parametrize('field',['text','title','date'])
 def test_source_context_accepts_ordinary_api_key_discussion(brain,monkeypatch,field):
-    _,packet,result=fixture(brain);packet['sources'][0][field]+=' API key rotation is discussed without storing a credential.'
+    source,packet,result=fixture(brain)
+    discussion=' API key rotation is discussed without storing a credential.'
+    if field=='text':
+        # The content control must be a genuine canonical source part, rather
+        # than a harmless but incorrect edit to immutable saved part evidence.
+        source.write_bytes(source.read_bytes()+discussion.encode('utf-8')+b'\n')
+        with w.db() as conn: conn.execute("UPDATE batches SET status='superseded' WHERE id=?",(packet['batch_id'],))
+        packet=w.prepare()
+    else: packet['sources'][0][field]+=discussion
     path=cfg.STATE/'wiki/batches'/packet['batch_id']/'input.json';w._atomic_json(path,packet)
     calls=fake_model(monkeypatch,explicit(packet,result));assert w.run()['status']=='complete' and len(calls)==1
 

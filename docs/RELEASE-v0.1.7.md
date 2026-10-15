@@ -70,3 +70,5 @@ Saved current-page snapshots also require valid SHA identities before requesting
 Supplied catalog hashes must also be valid and non-conflicting, while absent legacy hashes remain supported. Saved selections cannot repeat a source path. Decoded saved source text/title/date pass the existing credential/NUL and UTF-8 checks before new model requests; independently verified partial publication still finishes without new model input.
 
 Recovery attention identifies its safe database batch ID. Stale batches without a publication plan no longer block new work because of irrelevant corrupt input, and retired stale identities receive a fresh generation rather than overwriting old artifacts. Actual partial and complete-but-unfinalized transactions retain their verified-recovery hold.
+
+Known catalog hashes remain binding in duplicate or partial legacy catalogs. Unused saved parts must match actual canonical inventory before requesting a model. An original-source edit cannot release the hold of an unfinished verified publication or allow a new batch to overwrite its owner conflict; explicit source-revision recovery is required.
