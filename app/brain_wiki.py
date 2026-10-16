@@ -201,6 +201,56 @@ def _validate_packet_paths(packet,screen_credentials=True):
             if any(item is row for row in packet.get('sources',[])): raise _source_integrity_error(item,'path') from None
             raise WikiIntegrityError(BASE+'Index.md',field='path') from None
 
+def _screen_source_metadata(value,*,max_nodes=100000,max_depth=128):
+    # SafeLoader already constructs !!set and !!binary. Inspect those known
+    # values too; do not decode arbitrary strings or change the generic JSON
+    # context guard. Binary uses ASCII token boundaries and preserves opaque
+    # non-UTF-8 octets, with the same NUL, text and graph bounds.
+    binary_secret=re.compile(s.SECRET.pattern.encode('ascii'),s.SECRET.flags & ~re.UNICODE)
+    stack=[(value,0,False)]; active=set(); seen=set(); nodes=0; chars=0
+    def binary_text(item):
+        if len(item)>2_000_000 or b'\x00' in item or binary_secret.search(item):
+            raise ValueError('Unsafe source metadata.')
+    def association(key,child):
+        if isinstance(key,(str,bytes)) and (isinstance(child,(str,bytes)) or type(child) in (int,float,bool) or child is None):
+            scalar=child if isinstance(child,(str,bytes)) else json.dumps(child,allow_nan=False)
+            if len(key)+len(scalar)>2_000_000: raise ValueError('Source metadata exceeds text bounds.')
+            if isinstance(key,str) and isinstance(scalar,str):
+                s.clean_text(key+': '+scalar,2_000_000)
+            else:
+                left=key.encode('utf-8') if isinstance(key,str) else key
+                right=scalar.encode('utf-8') if isinstance(scalar,str) else scalar
+                if len(left)+len(right)+2>2_000_000: raise ValueError('Source metadata exceeds text bounds.')
+                binary_text(left+b': '+right)
+    while stack:
+        item,depth,leaving=stack.pop()
+        if leaving:
+            active.remove(id(item)); seen.add(id(item)); continue
+        nodes+=1
+        if nodes>max_nodes or depth>max_depth: raise ValueError('Source metadata exceeds structural bounds.')
+        if isinstance(item,(str,bytes)):
+            chars+=len(item)
+            if chars>2_000_000: raise ValueError('Source metadata exceeds text bounds.')
+            if isinstance(item,str):
+                item.encode('utf-8'); s.clean_text(item,2_000_000)
+            else: binary_text(item)
+        elif isinstance(item,(dict,list,tuple,set,frozenset)):
+            ident=id(item)
+            if ident in active: raise ValueError('Circular source metadata.')
+            if ident in seen: continue
+            active.add(ident); stack.append((item,depth,True))
+            if len(item)*(2 if isinstance(item,dict) else 1)+nodes>max_nodes:
+                raise ValueError('Source metadata exceeds structural bounds.')
+            if isinstance(item,dict):
+                for key,child in item.items():
+                    association(key,child)
+                    stack.append((key,depth+1,False)); stack.append((child,depth+1,False))
+            else:
+                # SafeLoader represents !!omap and !!pairs entries as tuples.
+                if isinstance(item,tuple) and len(item)==2: association(*item)
+                stack.extend((child,depth+1,False) for child in item)
+
+
 def _validate_source_context(packet):
     screened=set()
     for row in packet.get('sources',[]):
@@ -219,7 +269,7 @@ def _validate_source_context(packet):
                 with s.safe_path(row['path']).open('rb') as stream: raw=stream.read(2_000_001)
                 if len(raw)>2_000_000 or s.digest(raw)!=row['sha256']:
                     raise WikiTransientError('Source changed since its selected snapshot; prepare current evidence.')
-                _screen_decoded_context(meta(normalized(raw.decode('utf-8-sig'))),max_nodes=100000,max_depth=128)
+                _screen_source_metadata(meta(normalized(raw.decode('utf-8-sig'))))
                 screened.add(row['path'])
         except WikiTransientError: raise
         except (ValueError,UnicodeError,TypeError,KeyError,AttributeError):
