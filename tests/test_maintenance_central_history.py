@@ -72,20 +72,27 @@ def test_saved_lookup_identifies_each_entry_without_opening_or_descending_into_i
     forbidden = []
     if kind == 'linked-file':
         target.write_bytes(b'# Private synthetic linked original\n')
-        entry.symlink_to(target)
+        try: entry.symlink_to(target)
+        except OSError as failure:
+            if os.name == 'nt' and getattr(failure, 'winerror', None) == 1314:
+                pytest.skip('Windows file symlink privilege is unavailable on this host.')
+            raise
     elif kind == 'linked-directory':
         target.mkdir()
         (target / 'Never-read.md').write_bytes(b'# Private synthetic target\n')
-        entry.symlink_to(target, target_is_directory=True)
+        directory_link(entry, target, tmp_path)
         forbidden = [entry, target]
     elif kind in ('hidden-directory', 'ordinary-directory', 'vault-root'):
         entry.mkdir(exist_ok=True)
         if kind == 'hidden-directory': forbidden = [entry]
     else:
         entry.write_bytes(b'# Synthetic original\n')
-    rendered = lookup(vault, relative, monkeypatch, forbidden)
-    assert 'Matching local paths: 1' in rendered and ascii(relative) in rendered
-    if kind == 'linked-file': assert target.read_bytes() == b'# Private synthetic linked original\n'
+    try:
+        rendered = lookup(vault, relative, monkeypatch, forbidden)
+        assert 'Matching local paths: 1' in rendered and ascii(relative) in rendered
+        if kind == 'linked-file': assert target.read_bytes() == b'# Private synthetic linked original\n'
+    finally:
+        if kind == 'linked-directory': unlink_directory(entry, target, tmp_path)
 
 
 @pytest.mark.parametrize('kind', ['hidden', 'linked'])
@@ -96,12 +103,15 @@ def test_lookup_does_not_reach_descendants_beyond_an_opaque_directory_entry(brai
     if kind == 'hidden': entry.mkdir(); actual = entry
     else:
         target.mkdir()
-        entry.symlink_to(target, target_is_directory=True)
+        directory_link(entry, target, tmp_path)
         actual = target
-    original = put(actual, 'Child.md')
-    before = original.read_bytes()
-    rendered = lookup(vault, entry.relative_to(vault).as_posix() + '/Child.md', monkeypatch, (entry, target))
-    assert 'Matching local paths: 0' in rendered and original.read_bytes() == before
+    try:
+        original = put(actual, 'Child.md')
+        before = original.read_bytes()
+        rendered = lookup(vault, entry.relative_to(vault).as_posix() + '/Child.md', monkeypatch, (entry, target))
+        assert 'Matching local paths: 0' in rendered and original.read_bytes() == before
+    finally:
+        if kind == 'linked': unlink_directory(entry, target, tmp_path)
 
 
 @pytest.mark.parametrize('relative,filename', [
@@ -201,7 +211,12 @@ def test_actual_central_directory_link_is_never_traversed_or_read(brain, tmp_pat
             guard.setattr(os, 'scandir', scanned)
             guard.setattr(maintenance, '_read_derived', read)
             result = maintenance.maintenance(sync=False)
-        assert result['status'] == 'completed' and result['review'] == [] and original.read_bytes() == raw
+        assert result['status'] == 'completed' and original.read_bytes() == raw
+        if placement == 'central-root':
+            assert len(result['review']) == 1 and result['review'][0]['path_withheld'] is True
+            assert result['review'][0]['path_sha256'] == digest(entry.relative_to(vault).as_posix())
+            assert result['review'][0]['reasons'] == [WARNING]
+        else: assert result['review'] == []
     finally:
         unlink_directory(entry, target, tmp_path)
 

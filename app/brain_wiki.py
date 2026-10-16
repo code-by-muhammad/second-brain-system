@@ -207,23 +207,54 @@ def _screen_source_metadata(value,*,max_nodes=100000,max_depth=128):
     # context guard. Binary uses ASCII token boundaries and preserves opaque
     # non-UTF-8 octets, with the same NUL, text and graph bounds.
     binary_secret=re.compile(s.SECRET.pattern.encode('ascii'),s.SECRET.flags & ~re.UNICODE)
-    stack=[(value,0,False)]; active=set(); seen=set(); nodes=0; chars=0
-    def binary_text(item):
-        if len(item)>2_000_000 or b'\x00' in item or binary_secret.search(item):
+    stack=[(value,0,False)]; active=set(); seen=set(); nodes=0; chars=0; work=0; rendered={}; utf8_sizes={}
+    def reserve(amount):
+        nonlocal work
+        work+=amount
+        if work>8_000_000: raise ValueError('Source metadata exceeds work bounds.')
+    def scalar_text(item):
+        key=(type(item),id(item)); cached=rendered.get(key)
+        if cached is not None: return cached[1]
+        # Decimal digits are bounded above from integer bit length without
+        # converting the integer. JSON float/bool/null spellings are bounded.
+        bound=(item.bit_length()*30103//100000+1+(item<0)) if type(item) is int else 32 if type(item) is float else 4 if item is None else 5
+        reserve(bound)
+        text=json.dumps(item,allow_nan=True)
+        if len(text)>bound: raise ValueError('Source scalar exceeds its rendering bound.')
+        rendered[key]=(item,text)  # Retain the actual scalar so identity cannot be recycled.
+        return text
+    def utf8_size(item):
+        if isinstance(item,bytes) or item.isascii(): return len(item)
+        # Child frames already verified each actual string. Reuse its exact
+        # byte size, without double-charging the detector/render envelope.
+        cached=utf8_sizes.get(id(item))
+        if cached is None: raise ValueError('Source scalar UTF-8 was not checked.')
+        return cached[1]
+    def binary_text(item,reserved=False):
+        if len(item)>2_000_000: raise ValueError('Unsafe source metadata.')
+        if not reserved: reserve(len(item))
+        if b'\x00' in item or binary_secret.search(item):
             raise ValueError('Unsafe source metadata.')
     def association(key,child):
         if isinstance(key,(str,bytes)) and (isinstance(child,(str,bytes)) or type(child) in (int,float,bool) or child is None):
-            scalar=child if isinstance(child,(str,bytes)) else json.dumps(child,allow_nan=False)
+            # YAML permits .inf/.nan. Cache this local detector view only;
+            # parsed numeric objects are never sent as model JSON.
+            scalar=child if isinstance(child,(str,bytes)) else scalar_text(child)
             if len(key)+len(scalar)>2_000_000: raise ValueError('Source metadata exceeds text bounds.')
             if isinstance(key,str) and isinstance(scalar,str):
+                reserve(len(key)+len(scalar)+2)
                 s.clean_text(key+': '+scalar,2_000_000)
             else:
+                size=utf8_size(key)+utf8_size(scalar)+2
+                if size>2_000_000: raise ValueError('Source metadata exceeds text bounds.')
+                reserve(size)
                 left=key.encode('utf-8') if isinstance(key,str) else key
                 right=scalar.encode('utf-8') if isinstance(scalar,str) else scalar
-                if len(left)+len(right)+2>2_000_000: raise ValueError('Source metadata exceeds text bounds.')
-                binary_text(left+b': '+right)
+                binary_text(left+b': '+right,reserved=True)
     while stack:
         item,depth,leaving=stack.pop()
+        if leaving=='association':
+            association(*item); continue
         if leaving:
             active.remove(id(item)); seen.add(id(item)); continue
         nodes+=1
@@ -232,7 +263,10 @@ def _screen_source_metadata(value,*,max_nodes=100000,max_depth=128):
             chars+=len(item)
             if chars>2_000_000: raise ValueError('Source metadata exceeds text bounds.')
             if isinstance(item,str):
-                item.encode('utf-8'); s.clean_text(item,2_000_000)
+                reserve(len(item))
+                if id(item) not in utf8_sizes:
+                    utf8_sizes[id(item)]=(item,len(item.encode('utf-8')))
+                s.clean_text(item,2_000_000)
             else: binary_text(item)
         elif isinstance(item,(dict,list,tuple,set,frozenset)):
             ident=id(item)
@@ -243,11 +277,13 @@ def _screen_source_metadata(value,*,max_nodes=100000,max_depth=128):
                 raise ValueError('Source metadata exceeds structural bounds.')
             if isinstance(item,dict):
                 for key,child in item.items():
-                    association(key,child)
+                    # Check the pair after its normal child frames consume the
+                    # text budget, so aliases cannot amplify detector work.
+                    stack.append(((key,child),depth,'association'))
                     stack.append((key,depth+1,False)); stack.append((child,depth+1,False))
             else:
                 # SafeLoader represents !!omap and !!pairs entries as tuples.
-                if isinstance(item,tuple) and len(item)==2: association(*item)
+                if isinstance(item,tuple) and len(item)==2: stack.append((item,depth,'association'))
                 stack.extend((child,depth+1,False) for child in item)
 
 

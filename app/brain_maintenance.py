@@ -46,6 +46,10 @@ def _review_reasons(reasons,limit=None):
         except (ValueError,UnicodeError): result.append(WITHHELD_DETAIL)
     return result
 
+def _age_only_review(row):
+    reasons=row.get('reasons') if isinstance(row,dict) else None
+    return isinstance(reasons,list) and bool(reasons) and all(reason=='review older than 30 days' for reason in reasons)
+
 def health_status(path,review_limit=20):
     """Screen even old cached fields; keep the full local receipt unchanged."""
     try: status=json.loads(path.read_text(encoding='utf-8'))
@@ -63,7 +67,7 @@ def health_status(path,review_limit=20):
     if not isinstance(review,list): review=[]
     public['review_count']=len(review); public['review_truncated']=len(review)>review_limit
     bounded=[]
-    for row in review[:review_limit]:
+    for row in sorted(review,key=_age_only_review)[:review_limit]:
         if not isinstance(row,dict): continue
         item=_review_path(row); reasons=row.get('reasons',[])
         item.update(reason_count=len(reasons) if isinstance(reasons,list) else None,
@@ -163,7 +167,9 @@ def _derived_review_pages(status):
     try:
         if central.parent.is_symlink() or os.path.isjunction(central.parent):
             failed.add(central.parent)
-        elif not central.is_symlink() and not os.path.isjunction(central) and central.is_dir():
+        elif central.is_symlink() or os.path.isjunction(central):
+            failed.add(central)
+        elif central.is_dir():
             for directory,dirs,files in os.walk(central,followlinks=False,onerror=lambda error:failed.add(_enumeration_failure_path(error,central))):
                 parent=Path(directory)
                 dirs[:]=sorted((name for name in dirs if not name.startswith('.')
