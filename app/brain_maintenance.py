@@ -139,6 +139,31 @@ def _compiler_history(path):
     base=WIKI_BASE.casefold()
     return relative==base+'log.md' or relative.startswith(base+'log-archives/')
 
+def _derived_review_pages(status):
+    """Enumerate designated summaries by path, without reading original notes."""
+    pages=set((s.VAULT/'02-Areas/AI-Memory').rglob('*.md',case_sensitive=False))
+    failed=set()
+    try: roots=sorted(s.VAULT.iterdir(),key=lambda p:(p.name.casefold(),p.name))
+    except OSError: roots=[]; failed.add(s.VAULT)
+    for root in roots:
+        kind=root.name.casefold()
+        if kind not in ('01-projects','maps'): continue
+        try:
+            if root.is_symlink() or os.path.isjunction(root) or not root.is_dir(): continue
+            if kind=='maps':
+                pages.update(p for p in root.iterdir() if p.name.casefold()=='ai-context.md' and p.is_file())
+                continue
+            for directory,dirs,files in os.walk(root,followlinks=False,onerror=lambda error:failed.add(root)):
+                parent=Path(directory)
+                dirs[:]=sorted((name for name in dirs if not name.startswith('.')
+                               and not (parent/name).is_symlink() and not os.path.isjunction(parent/name)),
+                              key=lambda name:(name.casefold(),name))
+                pages.update(parent/name for name in files if name.casefold()=='ai-memory.md')
+        except OSError: failed.add(root)
+    for root in sorted(failed,key=lambda p:(p.as_posix().casefold(),p.as_posix())):
+        add_review(status,root,['designated derived namespace could not be enumerated; original preserved'])
+    return sorted(pages,key=lambda p:(p.relative_to(s.VAULT).as_posix().casefold(),p.relative_to(s.VAULT).as_posix()))
+
 def _capture_link(path):
     relative=path.relative_to(s.VAULT).as_posix()
     _diagnostic_path(relative)
@@ -227,7 +252,7 @@ def maintenance(sync=True):
                 add_review(status,p,['daily capture marker has an edited, missing or ambiguous identity; owner must reconcile the existing daily entry before retry; owner content preserved'])
             except (OSError,UnicodeError,ValueError):
                 add_review(status,p,['daily note or template could not be linked; inspect the daily/template path, UTF-8, write access and concurrent changes; original preserved'])
-        for p in (s.VAULT/'02-Areas/AI-Memory').rglob('*.md'):
+        for p in _derived_review_pages(status):
             # Compiler history has no derived-header review contract. In
             # particular, a legacy raw archive may exceed the note-size cap.
             if _compiler_history(p): continue
