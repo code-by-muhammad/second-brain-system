@@ -4,6 +4,8 @@ Use this guide with a local Codex agent on Windows, macOS or Linux. The notes re
 
 Release covered: **v0.1.7**. Check the shared `02-Areas/AI-Memory/Second-Brain-System.md` for a newer explicitly approved release before starting. Do not install an arbitrary branch or silently select the newest internet release.
 
+Audit status on 2026-10-16: v0.1.7 remains a candidate. The combined R106–R109 source still needs frozen-commit full gates and fresh independent reviews; native Mac, hosted CI and production/client acceptance remain pending. Use the installation examples below only after shared status explicitly approves that release.
+
 ## Give this prompt to the other device's Codex agent
 
 > Set up my existing shared Second Brain on this device using the private code-by-muhammad/second-brain notes repository and the approved code-by-muhammad/second-brain-system release v0.1.7. Follow docs/DEVICE-SETUP.md and the shared AI-Context and wiki Control pages. Inspect existing installation and client settings first. Reuse an existing vault; preserve notes, local edits, credentials and unrelated settings. Verify the release manifest before running the installer. Use capture/search role; do not transfer wiki ownership or create a compiler schedule. Install native locked dependencies, configure supported local MCP clients, download the local embedding model and register the per-user service. Test authenticated health, tools, source search/read and a single clearly labeled onboarding capture; verify that capture reaches the Windows vault through the existing maintenance sync. Test service restart and verify again after reboot. Report actual receipts and remaining failures. If GitHub authentication needs me, show the official device login flow; never ask me to paste tokens or copy another device's auth files.
@@ -230,7 +232,7 @@ Malformed recovery control fields or progress records also require review of the
 
 ### Local path-SHA lookup
 
-When status withholds a filename, use its `path_sha256` in a private terminal on the affected device. The digest identifies the exact vault-relative POSIX path string, encoded as UTF-8 with `surrogatepass`; it is not a hash of note contents and grants no write authority. The following Python 3.12 snippet enumerates names without reading notes or traversing linked directories. Use the runtime's configured Python. It prints only matching paths, escaped for a terminal, and does not save anything. Keep that output local if the filename contains private information or possible credentials; do not paste it into chat, screenshots or notifications.
+When status withholds a file or folder name, use its `path_sha256` in a private terminal on the affected device. The digest identifies the exact vault-relative POSIX path string, encoded as UTF-8 with `surrogatepass`; `.` identifies the vault itself. It is not a hash of note contents and grants no write authority. The following Python 3.12 snippet enumerates names without reading notes or traversing hidden or linked directories. A folder can match from its parent's directory listing even when the folder itself cannot be listed. Use the runtime's configured Python. It prints only matching paths, escaped for a terminal, and does not save anything. Keep that output local if the name contains private information or possible credentials; do not paste it into chat, screenshots or notifications.
 
 ```python
 from pathlib import Path
@@ -241,21 +243,34 @@ wanted = input('Reported path_sha256: ').strip().lower()
 if not vault.is_dir() or not re.fullmatch(r'[a-f0-9]{64}', wanted):
     raise SystemExit('Use a real vault directory and a 64-character SHA256.')
 matches = 0
+def inspect_name(path):
+    global matches
+    relative = path.relative_to(vault).as_posix()
+    digest = hashlib.sha256(relative.encode('utf-8', errors='surrogatepass')).hexdigest()
+    if digest == wanted:
+        print(ascii(relative))
+        matches += 1
+inspect_name(vault)
 for current, dirs, files in os.walk(vault, followlinks=False):
     dirs[:] = [name for name in dirs
-               if name not in ('.git', '.obsidian')
+               if not name.startswith('.')
                and not (Path(current) / name).is_symlink()
                and not os.path.isjunction(Path(current) / name)]
-    for name in files:
-        relative = (Path(current) / name).relative_to(vault).as_posix()
-        digest = hashlib.sha256(relative.encode('utf-8', errors='surrogatepass')).hexdigest()
-        if digest == wanted:
-            print(ascii(relative))
-            matches += 1
+    for name in dirs + files:
+        path = Path(current) / name
+        if name.startswith('.') or path.is_symlink() or os.path.isjunction(path):
+            continue
+        inspect_name(path)
 print('Matching local paths:', matches)
 ```
 
-No match can mean the file was renamed, moved, removed, or has not synchronized to this device. Inspect the affected device's current paths and preserved local journal deliberately; do not guess a replacement or overwrite Index because it is the generic public locator. Git failure diagnostics screen raw filenames before JSON escaping and use the same opaque locator when needed. This changes displayed diagnostics, not which otherwise valid note filenames may synchronize.
+No match can mean the file or folder was renamed, moved, removed, has not synchronized to this device, or its parent cannot be listed. Hidden and linked paths are deliberately not traversed. Inspect the affected device's current paths and preserved local journal deliberately; do not guess a replacement or overwrite Index because it is the generic public locator. Git failure diagnostics screen raw filenames before JSON escaping and use the same opaque locator when needed. This changes displayed diagnostics, not which otherwise valid note filenames may synchronize.
 
 
 Maintenance source-review warnings cover central AI-Memory pages, reserved project AI-Memory summaries and Maps/AI-Context, including case-renamed reserved filenames. Central Markdown suffixes match case-insensitively on every OS. Source changes and review age use the existing recorded SHA256/30-day checks. Hidden project artifacts, ordinary neighboring originals and compiler Log/archive history are excluded from that extension. A warning requests evidence-based review; it does not rewrite a current label, infer profile facts or modify original notes. Keep canonical shared folder/file casing and use the current SHA before an authorized derived update.
+
+Fresh publication and resumed recovery now use the same bounded JSON packet values, including numeric metadata keys. The first saved input stays stable through publication; caller types, fitting aliases and existing owner claims remain preserved. Already-stranded older noncanonical plans remain held for conservative recovery review. Never rewrite their private hashes or fabricate evidence; this correction does not automatically repair those journals.
+
+Lint checks decoded potential selected context with the existing page/field/index guard: the last twelve claims of a page within the compact budget. Older unselected and compact-omitted claims retain ordinary graph/provenance checks. Enumeration warnings retain a safe failed-subtree identity or fall back to its namespace; the names-only lookup above resolves files, folders and vault root (`.`). Healthy review and the existing Git stage continue.
+
+Undecodable Control refuses maintainer-only work through the existing permission guard. Maintenance reports that shared ownership could not be verified, skips aggregation and still attempts its existing Git stage under normal content checks. Preserve Control and repair UTF-8 deliberately from owner evidence; never guess an encoding or infer a handoff. The last authorized worker-success receipt stays historical, not proof that a refused attempt ran. Missing-Control bootstrap and explicit owner matching remain unchanged.

@@ -32,5 +32,8 @@ def require_maintainer():
     control=VAULT/'02-Areas/AI-Memory/Wiki/Control.md'
     if control.exists():
         import re
-        match=re.search(r'(?m)^maintainer_device_id: ([a-z0-9-]+)$',control.read_text(encoding='utf-8'))
+        try: ownership=control.read_text(encoding='utf-8')
+        except UnicodeError as exc:
+            raise PermissionError('Shared wiki ownership could not be verified; repair Control UTF-8 before an explicit handoff.') from exc
+        match=re.search(r'(?m)^maintainer_device_id: ([a-z0-9-]+)$',ownership)
         if not match or match.group(1)!=DEVICE_ID: raise PermissionError('Shared wiki ownership belongs to a different device; perform an explicit handoff.')

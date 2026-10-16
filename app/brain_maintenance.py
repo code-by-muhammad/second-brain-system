@@ -139,6 +139,23 @@ def _compiler_history(path):
     base=WIKI_BASE.casefold()
     return relative==base+'log.md' or relative.startswith(base+'log-archives/')
 
+def _enumeration_failure_path(error,root):
+    """Keep a failed subtree's lexical identity; never use it as read authority."""
+    value=getattr(error,'filename',None)
+    if not isinstance(value,str) or not value or '\x00' in value: return root
+    try:
+        path=Path(value)
+        if not path.is_absolute() or '..' in path.parts: return root
+        relative=path.relative_to(root)
+        if any(part.startswith('.') for part in relative.parts): return root
+        # os.walk prunes these paths before descent; an unexpected error
+        # filename must not point the owner beyond that same boundary.
+        for parent in (path,*path.parents):
+            if parent==root: break
+            if parent.is_symlink() or os.path.isjunction(parent): return root
+        return path
+    except (OSError,ValueError): return root
+
 def _derived_review_pages(status):
     """Enumerate designated summaries by path, without reading original notes."""
     pages=set((s.VAULT/'02-Areas/AI-Memory').rglob('*.md',case_sensitive=False))
@@ -153,7 +170,7 @@ def _derived_review_pages(status):
             if kind=='maps':
                 pages.update(p for p in root.iterdir() if p.name.casefold()=='ai-context.md' and p.is_file())
                 continue
-            for directory,dirs,files in os.walk(root,followlinks=False,onerror=lambda error:failed.add(root)):
+            for directory,dirs,files in os.walk(root,followlinks=False,onerror=lambda error:failed.add(_enumeration_failure_path(error,root))):
                 parent=Path(directory)
                 dirs[:]=sorted((name for name in dirs if not name.startswith('.')
                                and not (parent/name).is_symlink() and not os.path.isjunction(parent/name)),
@@ -224,7 +241,7 @@ def maintenance(sync=True):
             try: cfg.require_maintainer()
             except PermissionError:
                 can_maintain=False
-                status['aggregation']='skipped: shared ownership belongs to another device; Git synchronization remains enabled'
+                status['aggregation']='skipped: shared ownership could not be verified; Git synchronization remains enabled'
         else: status['aggregation']='skipped: capture/search device'
         captures=sorted((s.VAULT/'00-Inbox/AI-Captures').glob('*.md')) if can_maintain else []
         for p in captures:

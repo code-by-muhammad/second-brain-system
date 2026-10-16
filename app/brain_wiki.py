@@ -575,11 +575,12 @@ def prepare(limit=4):
     # guards to that decoded form before creating durable recovery input.
     try:
         serialized=_bounded_json(packet,sort_keys=True,default=str)
-        _validate_packet_context(json.loads(serialized))
+        saved_packet=json.loads(serialized)
+        _validate_packet_context(saved_packet)
     except (_JSONTooLarge,_JSONStructureTooLarge): raise WikiIntegrityError(BASE+'Index.md',field='packet') from None
     folder=cfg.STATE/'wiki'/'batches'/ident; folder.mkdir(parents=True,exist_ok=True)
     packet_path=folder/'input.json'
-    _atomic_json(packet_path,packet)
+    _atomic_json(packet_path,saved_packet)
     with db() as conn:
         conn.execute('INSERT OR IGNORE INTO batches(id,status,receipt,updated) VALUES(?,?,?,?)',(ident,'pending',None,s.stamp()))
     return packet
@@ -1454,6 +1455,10 @@ def _hold_prior_publication(packet,publication,plan=None):
 def apply(packet,result):
     cfg.require_maintainer()
     _validate_shape(result)
+    # Plan and replay the exact JSON value saved in input.json. A fresh YAML
+    # context may retain aliases or numeric metadata keys whose JSON sort order
+    # differs after decoding; keep that conversion local to publication.
+    packet=json.loads(_bounded_json(packet,sort_keys=True,default=str))
     result=json.loads(_bounded_json(result))
     valid={x['path'] for x in packet['catalog']} | {BASE+p.get('category','')+'/'+p.get('slug','')+'.md' for p in result.get('pages',[])}
     for page in result.get('pages',[]): page['related']=[BASE+link if BASE+link in valid else link for link in page.get('related',[])]
@@ -1601,6 +1606,15 @@ def lint():
         claims=p['meta'].get('wiki_claims',[])
         if not isinstance(claims,list):
             issues.append({'page':p['path'],'issue':'malformed claim metadata'}); claims=[]
+        # Only the last twelve claims can enter selected model context. Match
+        # prepare's bounded compact representation before screening its decoded
+        # claims; omitted context and older claims retain their graph checks.
+        decoded_claims=None; selected_offset=max(0,len(claims)-12)
+        compact={**p,'meta':{key:p['meta'].get(key) for key in ('title','wiki_kind')}}
+        compact['claim_count']=len(claims); compact['meta']['wiki_claims']=claims[-12:]
+        try:
+            decoded_claims=json.loads(_bounded_json(compact,40000,default=str))['meta']['wiki_claims']
+        except (ValueError,TypeError,RecursionError,UnicodeError): pass
         source_hashes=p['meta'].get('source_hashes',{})
         if not isinstance(source_hashes,dict):
             issues.append({'page':p['path'],'issue':'malformed source hash metadata'}); source_hashes={}
@@ -1630,7 +1644,10 @@ def lint():
                 issues.append({'page':p['path'],'issue':'malformed related link metadata','field':'related','related_index':related_index}); continue
             if related not in known: issues.append({'page':p['path'],'issue':'broken related link','target':related})
         for index,claim in enumerate(claims):
-            try: _validate_existing_claim(p['path'],claim,index)
+            try:
+                _validate_existing_claim(p['path'],claim,index)
+                if decoded_claims is not None and index>=selected_offset:
+                    _validate_existing_claim(p['path'],decoded_claims[index-selected_offset],index)
             except WikiIntegrityError as exc:
                 issue='malformed source revision metadata' if exc.field=='source_revision' else 'malformed claim metadata'
                 diagnostic={'page':p['path'],'issue':issue,'field':exc.field,'claim_index':index}
@@ -1917,7 +1934,12 @@ def run(limit=4,timeout=480):
         if saved.get('retry_after',0)>time.time() and not superseded and not (saved.get('status')=='retryable' and saved_output):
             return {'status':'blocked','reason':saved.get('reason'),'retry_after':saved['retry_after']}
         try:
-            if packet is None: packet=prepare(limit)
+            if packet is None:
+                packet=prepare(limit)
+                if packet:
+                    # Match resumed input for publication and post-fault holds,
+                    # while prepare's caller-visible metadata remains untouched.
+                    packet=json.loads(_bounded_json(packet,sort_keys=True,default=str))
             if packet:
                 publication=cfg.STATE/'wiki/batches'/packet['batch_id']/'publication.json'
                 repairing=resumed and saved_output and _saved_publication_started(packet,publication)
