@@ -38,14 +38,25 @@ def test_generic_JSON_and_decoded_claim_guards_remain_strict(brain,number):
     with pytest.raises(ValueError):w._screen_decoded_context({'value':number})
 
 def measure_detector_work(monkeypatch):
-    observed={'calls':0,'units':0};old_clean=s.clean_text
+    observed={'calls':0,'units':0,'phase_calls':{'event':0,'constructed':0},'phase_units':{'event':0,'constructed':0}};old_clean=s.clean_text;phase=[None]
+    def count(value):
+        units=len(value) if isinstance(value,(str,bytes)) else 0
+        observed['calls']+=1;observed['units']+=units
+        if phase[0] is not None:
+            observed['phase_calls'][phase[0]]+=1;observed['phase_units'][phase[0]]+=units
+    def in_phase(actual,name):
+        def call(*args,**kwargs):
+            previous=phase[0];phase[0]=name
+            try:return actual(*args,**kwargs)
+            finally:phase[0]=previous
+        return call
     def clean(value,*args,**kwargs):
-        observed['calls']+=1;observed['units']+=len(value) if isinstance(value,str) else 0
+        count(value)
         return old_clean(value,*args,**kwargs)
     class Pattern:
         def __init__(self,compiled):self.compiled=compiled
         def search(self,value,*args,**kwargs):
-            observed['calls']+=1;observed['units']+=len(value)
+            count(value)
             return self.compiled.search(value,*args,**kwargs)
     class Regex:
         def __getattr__(self,name):return getattr(re,name)
@@ -53,6 +64,8 @@ def measure_detector_work(monkeypatch):
             compiled=re.compile(pattern,flags)
             return Pattern(compiled) if pattern==s.SECRET.pattern.encode('ascii') else compiled
     monkeypatch.setattr(s,'clean_text',clean);monkeypatch.setattr(w,'re',Regex())
+    monkeypatch.setattr(w,'_screen_source_metadata',in_phase(w._screen_source_metadata,'constructed'))
+    if hasattr(w,'_screen_source_header'):monkeypatch.setattr(w,'_screen_source_header',in_phase(w._screen_source_header,'event'))
     return observed
 
 def aliased_header(kind,shape,aliases,size=700000):
@@ -71,7 +84,8 @@ def test_scalar_association_work_obeys_text_budget_without_charging_pairs_twice(
         assert caught.value.page=='01-Projects/Example.md' and caught.value.field=='content'
     else:w._validate_source_context({'sources':[rows[0]]})
     assert path.read_bytes()==raw and observed['calls']>0
-    assert observed['units']<=8_000_000, 'Detector scalar and association work must stop with the ordinary source text budget.'
+    assert all(units<=8_000_000 for units in observed['phase_units'].values()), 'Each event/constructed detector phase retains its own 8M bound.'
+    assert observed['units']<=16_000_000, 'Combined detector work retains the explicit 16M aggregate bound.'
 
 @pytest.mark.parametrize('length,allowed',[(999994,True),(999995,False)],ids=['fitting-two-million','one-over-two-million'])
 def test_existing_two_million_semantic_text_boundary_is_not_double_charged(brain,monkeypatch,length,allowed):
@@ -81,7 +95,9 @@ def test_existing_two_million_semantic_text_boundary_is_not_double_charged(brain
     if allowed:w._validate_source_context({'sources':[rows[0]]})
     else:
         with pytest.raises(w.WikiIntegrityError):w._validate_source_context({'sources':[rows[0]]})
-    assert path.read_bytes()==raw and observed['units']<=8_000_000
+    assert path.read_bytes()==raw
+    assert all(units<=8_000_000 for units in observed['phase_units'].values()), 'Constructed SOURCE stays bounded at 8M even before the event phase exists.'
+    assert observed['units']<=16_000_000
 
 @pytest.mark.parametrize('kind',['string','binary'])
 def test_sensitive_association_after_fitting_aliases_still_stops_before_provider(brain,monkeypatch,kind):
@@ -114,4 +130,6 @@ def test_fitting_shared_container_aliases_keep_the_existing_seen_graph_contract(
     decoded=w.meta(raw.decode('utf-8'));assert decoded['first'] is decoded['second'] is decoded['third']
     rows=w.inventory();observed=measure_detector_work(monkeypatch)
     w._validate_source_context({'sources':[rows[0]]})
-    assert path.read_bytes()==raw and observed['units']<=8_000_000
+    assert path.read_bytes()==raw
+    assert all(units<=8_000_000 for units in observed['phase_units'].values()), 'Constructed SOURCE stays bounded at 8M even before the event phase exists.'
+    assert observed['units']<=16_000_000

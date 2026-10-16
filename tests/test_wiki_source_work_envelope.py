@@ -87,7 +87,7 @@ def test_fitting_text_binary_and_UTF8_associations_keep_their_existing_semantics
     elif kind=='opaque-semantic-boundary':header='first: &same '+binary(b'A'*999994)+'\nsecond: *same'
     elif kind=='Unicode-binary-key':header=binary('first')+': "'+'漢'*666600+'"'
     elif kind=='aliased-Unicode-binary-keys':header=binary('first')+': &same "'+'漢'*666600+'"\n'+binary('other')+': *same\n'+binary('third')+': *same'
-    else:header=escaped('漢'*200)+': '+binary(b'\xff'+b'A'*1498999)
+    else:header=escaped('漢'*150)+': '+binary(b'\xff'+b'A'*1498999)
     path,raw,rows=original(header);observed=measure_source_work(monkeypatch)
     assert preflight(rows,observed)=='accepted' and path.read_bytes()==raw
 

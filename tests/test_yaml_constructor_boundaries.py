@@ -59,5 +59,5 @@ def test_valid_explicit_types_quoted_tag_words_and_aliases_remain_supported():
 @pytest.mark.parametrize('strict',[False,True])
 def test_unrelated_programming_or_fatal_resource_errors_are_not_hidden(monkeypatch,failure,strict):
     def failed(*args,**kwargs):raise failure
-    monkeypatch.setattr(md.yaml,'safe_load',failed)
+    monkeypatch.setattr(md.yaml,'load',failed)
     with pytest.raises(type(failure)):md.frontmatter('---\ntitle: Valid\n---\n# Body',strict=strict)

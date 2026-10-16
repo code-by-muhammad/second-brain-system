@@ -207,7 +207,7 @@ def _screen_source_metadata(value,*,max_nodes=100000,max_depth=128):
     # context guard. Binary uses ASCII token boundaries and preserves opaque
     # non-UTF-8 octets, with the same NUL, text and graph bounds.
     binary_secret=re.compile(s.SECRET.pattern.encode('ascii'),s.SECRET.flags & ~re.UNICODE)
-    stack=[(value,0,False)]; active=set(); seen=set(); nodes=0; chars=0; work=0; rendered={}; utf8_sizes={}
+    stack=[(value,0,False)]; active=set(); seen=set(); nodes=0; chars=0; work=0; rendered={}; utf8_sizes={}; binary_views={}
     def reserve(amount):
         nonlocal work
         work+=amount
@@ -235,6 +235,16 @@ def _screen_source_metadata(value,*,max_nodes=100000,max_depth=128):
         if not reserved: reserve(len(item))
         if b'\x00' in item or binary_secret.search(item):
             raise ValueError('Unsafe source metadata.')
+    def binary_view(item):
+        cached=binary_views.get(id(item))
+        if cached is not None: return cached[1]
+        # Preserve known Unicode strings in mixed pairs. Opaque binary octets
+        # retain ASCII semantics: high octets become nonword/nonspace markers,
+        # never UTF-8, base64 or other arbitrary text decoding.
+        reserve(len(item))
+        view=item.decode('ascii','replace')
+        binary_views[id(item)]=(item,view)  # Retain identity across aliases.
+        return view
     def association(key,child):
         if isinstance(key,(str,bytes)) and (isinstance(child,(str,bytes)) or type(child) in (int,float,bool) or child is None):
             # YAML permits .inf/.nan. Cache this local detector view only;
@@ -247,10 +257,14 @@ def _screen_source_metadata(value,*,max_nodes=100000,max_depth=128):
             else:
                 size=utf8_size(key)+utf8_size(scalar)+2
                 if size>2_000_000: raise ValueError('Source metadata exceeds text bounds.')
-                reserve(size)
-                left=key.encode('utf-8') if isinstance(key,str) else key
-                right=scalar.encode('utf-8') if isinstance(scalar,str) else scalar
-                binary_text(left+b': '+right,reserved=True)
+                if isinstance(key,bytes) and isinstance(scalar,bytes):
+                    reserve(size)
+                    binary_text(key+b': '+scalar,reserved=True)
+                else:
+                    reserve(len(key)+len(scalar)+2)
+                    left=binary_view(key) if isinstance(key,bytes) else key
+                    right=binary_view(scalar) if isinstance(scalar,bytes) else scalar
+                    s.clean_text(left+': '+right,2_000_000)
     while stack:
         item,depth,leaving=stack.pop()
         if leaving=='association':
@@ -287,6 +301,141 @@ def _screen_source_metadata(value,*,max_nodes=100000,max_depth=128):
                 stack.extend((child,depth+1,False) for child in item)
 
 
+def _screen_source_header(text,*,max_nodes=100000,max_depth=128):
+    # Match frontmatter() recognition exactly. An unclosed opening fence remains
+    # ordinary Markdown. A closed header is screened before constructors can
+    # overwrite keys, flatten merges, discard set/null values or return {}.
+    import yaml
+    lines=text.removeprefix('\ufeff').replace('\r\n','\n').replace('\r','\n').splitlines(keepends=True)
+    if not lines or lines[0].rstrip('\n \t')!='---': return 0
+    end=next((i for i,line in enumerate(lines[1:],1) if line.rstrip('\n \t')=='---'),None)
+    if end is None: return 0
+    header=''.join(lines[1:end])
+    if len(header)>2_000_000: raise ValueError('Source YAML exceeds text bounds.')
+    # One event-phase 8M ledger plus the unchanged constructed-phase 8M ledger
+    # bounds total detector/render work at 16M. Neither resets for each pair.
+    work=0; nodes=0; lexical_chars=0; semantic_chars=0; documents=0; event_count=0
+    missing=object(); collection=object(); frames=[]; anchors={}; active=set(); utf8_sizes={}; binary_views={}
+    binary_secret=re.compile(s.SECRET.pattern.encode('ascii'),s.SECRET.flags & ~re.UNICODE)
+    loader=yaml.SafeLoader(''); events=yaml.parse(header,Loader=yaml.SafeLoader)
+    nontext_tags={'tag:yaml.org,2002:'+name for name in ('null','bool','int','float','timestamp')}
+    def reserve(amount):
+        nonlocal work
+        work+=amount
+        if work>8_000_000: raise ValueError('Source YAML exceeds work bounds.')
+    def semantic(amount):
+        nonlocal semantic_chars
+        semantic_chars+=amount
+        if semantic_chars>2_000_000: raise ValueError('Source YAML exceeds text bounds.')
+    def binary_text(value,reserved=False):
+        if len(value)>2_000_000: raise ValueError('Source YAML exceeds text bounds.')
+        if not reserved: reserve(len(value))
+        if b'\x00' in value or binary_secret.search(value): raise ValueError('Unsafe source YAML.')
+    def binary_view(value):
+        cached=binary_views.get(id(value))
+        if cached is not None: return cached[1]
+        reserve(len(value)); view=value.decode('ascii','replace')
+        binary_views[id(value)]=(value,view)
+        return view
+    def pair(key,value):
+        if key is collection or value is collection: return
+        if len(key)+len(value)>2_000_000: raise ValueError('Source YAML exceeds text bounds.')
+        if isinstance(key,str) and isinstance(value,str):
+            reserve(len(key)+len(value)+2); s.clean_text(key+': '+value,2_000_000)
+        else:
+            left_size=len(key) if isinstance(key,bytes) else utf8_sizes[id(key)][1]
+            right_size=len(value) if isinstance(value,bytes) else utf8_sizes[id(value)][1]
+            if left_size+right_size+2>2_000_000: raise ValueError('Source YAML exceeds text bounds.')
+            if isinstance(key,bytes) and isinstance(value,bytes):
+                reserve(left_size+right_size+2); binary_text(key+b': '+value,reserved=True)
+            else:
+                reserve(len(key)+len(value)+2)
+                left=binary_view(key) if isinstance(key,bytes) else key
+                right=binary_view(value) if isinstance(value,bytes) else value
+                s.clean_text(left+': '+right,2_000_000)
+    def attach(view):
+        if frames and frames[-1][0]=='map':
+            frame=frames[-1]
+            if frame[1] is missing: frame[1]=view
+            else: pair(frame[1],view); frame[1]=missing
+    def bind(anchor,view,weight):
+        if anchor is not None:
+            if anchor in anchors: raise ValueError('Ambiguous source YAML anchor.')
+            anchors[anchor]=(view,weight)
+    try:
+        for event in events:
+            event_count+=1
+            if event_count>2*max_nodes+8: raise ValueError('Source YAML exceeds structural bounds.')
+            if isinstance(event,yaml.events.DocumentStartEvent):
+                documents+=1
+                if documents>1: raise ValueError('Source YAML must have one header document.')
+            elif isinstance(event,(yaml.events.ScalarEvent,yaml.events.AliasEvent,yaml.events.MappingStartEvent,yaml.events.SequenceStartEvent)):
+                nodes+=1
+                if nodes>max_nodes or len(frames)>max_depth: raise ValueError('Source YAML exceeds structural bounds.')
+                if isinstance(event,yaml.events.ScalarEvent):
+                    raw=event.value; lexical_chars+=len(raw)
+                    if lexical_chars>2_000_000: raise ValueError('Source YAML exceeds text bounds.')
+                    reserve(len(raw)); utf8_sizes[id(raw)]=(raw,len(raw.encode('utf-8'))); s.clean_text(raw,2_000_000)
+                    tag=event.tag
+                    if tag is None:
+                        reserve(len(raw)); tag=loader.resolve(yaml.nodes.ScalarNode,raw,event.implicit)
+                    view=raw; weight=0 if tag in nontext_tags else len(raw)
+                    if tag=='tag:yaml.org,2002:binary':
+                        # Bound the produced byte view before the standard
+                        # ASCII/base64 constructor. A constructor error leaves
+                        # only the already screened lexical fallback; guard
+                        # budget/privacy errors are never swallowed here.
+                        bound=3*((len(raw)+3)//4); reserve(bound)
+                        try: actual=loader.construct_yaml_binary(yaml.nodes.ScalarNode(tag,raw))
+                        except (yaml.YAMLError,ValueError,TypeError,KeyError,AttributeError,IndexError,RecursionError):
+                            weight=len(raw)
+                        else:
+                            if not isinstance(actual,bytes) or len(actual)>bound: raise ValueError('Invalid source YAML binary bound.')
+                            view=actual; binary_text(view); weight=len(view)
+                    elif tag in nontext_tags:
+                        # Known primitive associations must use their actual
+                        # standard normalized view: padded hex may be 1, while
+                        # sexagesimal notation may yield a long decimal value.
+                        # Reserve before conversion and rendering, once per
+                        # definition; scalar aliases reuse this anchored view.
+                        name=tag.rsplit(':',1)[-1]
+                        bound=2*len(raw)+4 if name=='int' else 32 if name=='float' else 5 if name=='bool' else 4 if name=='null' else 64
+                        conversion=len(raw)*len(raw) if name=='int' and ':' in raw else len(raw)
+                        reserve(conversion+bound)
+                        constructor={'int':loader.construct_yaml_int,'float':loader.construct_yaml_float,'bool':loader.construct_yaml_bool,'null':loader.construct_yaml_null,'timestamp':loader.construct_yaml_timestamp}[name]
+                        try: actual=constructor(yaml.nodes.ScalarNode(tag,raw))
+                        except (yaml.YAMLError,ValueError,TypeError,KeyError,AttributeError,IndexError,RecursionError):
+                            weight=len(raw)
+                        else:
+                            weight=0
+                            if name=='timestamp': view=collection  # Existing SOURCE associations exclude dates/datetimes.
+                            else:
+                                view=json.dumps(actual,allow_nan=True)
+                                if len(view)>bound: raise ValueError('Source YAML scalar exceeds rendering bound.')
+                                reserve(len(view)); utf8_sizes[id(view)]=(view,len(view.encode('utf-8'))); s.clean_text(view,2_000_000)
+                    semantic(weight); bind(event.anchor,view,weight); attach(view)
+                elif isinstance(event,yaml.events.AliasEvent):
+                    if event.anchor in active or event.anchor not in anchors: raise ValueError('Circular or unknown source YAML alias.')
+                    view,weight=anchors[event.anchor]; semantic(weight); attach(view)
+                else:
+                    bind(event.anchor,collection,0)
+                    if event.anchor is not None: active.add(event.anchor)
+                    attach(collection)
+                    frames.append(['map' if isinstance(event,yaml.events.MappingStartEvent) else 'seq',missing,event.anchor])
+            elif isinstance(event,(yaml.events.MappingEndEvent,yaml.events.SequenceEndEvent)):
+                kind='map' if isinstance(event,yaml.events.MappingEndEvent) else 'seq'
+                if not frames or frames[-1][0]!=kind or (kind=='map' and frames[-1][1] is not missing): raise ValueError('Incomplete source YAML collection.')
+                frame=frames.pop()
+                if frame[2] is not None: active.remove(frame[2])
+            elif isinstance(event,(yaml.events.DocumentEndEvent,yaml.events.StreamEndEvent)):
+                if frames or active: raise ValueError('Incomplete source YAML header.')
+        return work
+    except (yaml.YAMLError,ValueError,TypeError,UnicodeError,KeyError,AttributeError,IndexError,RecursionError):
+        raise ValueError('Unsafe or incomplete source YAML header.') from None
+    finally:
+        events.close(); loader.dispose()
+
+
 def _validate_source_context(packet):
     screened=set()
     for row in packet.get('sources',[]):
@@ -305,7 +454,9 @@ def _validate_source_context(packet):
                 with s.safe_path(row['path']).open('rb') as stream: raw=stream.read(2_000_001)
                 if len(raw)>2_000_000 or s.digest(raw)!=row['sha256']:
                     raise WikiTransientError('Source changed since its selected snapshot; prepare current evidence.')
-                _screen_source_metadata(meta(normalized(raw.decode('utf-8-sig'))))
+                source_text=normalized(raw.decode('utf-8-sig'))
+                _screen_source_header(source_text)
+                _screen_source_metadata(meta(source_text))
                 screened.add(row['path'])
         except WikiTransientError: raise
         except (ValueError,UnicodeError,TypeError,KeyError,AttributeError):
