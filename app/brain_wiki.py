@@ -197,9 +197,12 @@ def _validate_packet_paths(packet,screen_credentials=True):
         try:
             item['path'].encode('utf-8'); s.safe_path(item['path'])
             if screen_credentials: s.clean_text(item['path'],400)
-        except (ValueError,TypeError,UnicodeError,AttributeError): raise WikiIntegrityError(BASE+'Index.md',field='path') from None
+        except (ValueError,TypeError,UnicodeError,AttributeError):
+            if any(item is row for row in packet.get('sources',[])): raise _source_integrity_error(item,'path') from None
+            raise WikiIntegrityError(BASE+'Index.md',field='path') from None
 
 def _validate_source_context(packet):
+    screened=set()
     for row in packet.get('sources',[]):
         try:
             # Inventory screens the complete source before chunking; resume also
@@ -210,8 +213,17 @@ def _validate_source_context(packet):
             text.encode('utf-8')
             for key in ('title','date'):
                 s.clean_text(row[key],2_000_000); row[key].encode('utf-8')
+            if row['path'] not in screened:
+                # Parse the complete source header, not a potentially truncated
+                # chunk. This is local known YAML, never arbitrary decoding.
+                with s.safe_path(row['path']).open('rb') as stream: raw=stream.read(2_000_001)
+                if len(raw)>2_000_000 or s.digest(raw)!=row['sha256']:
+                    raise WikiTransientError('Source changed since its selected snapshot; prepare current evidence.')
+                _screen_decoded_context(meta(normalized(raw.decode('utf-8-sig'))),max_nodes=100000,max_depth=128)
+                screened.add(row['path'])
+        except WikiTransientError: raise
         except (ValueError,UnicodeError,TypeError,KeyError,AttributeError):
-            raise WikiIntegrityError(BASE+'Index.md',field='content') from None
+            raise _source_integrity_error(row,'content') from None
 
 
 def _validate_packet_context(packet):
@@ -221,7 +233,7 @@ def _validate_packet_context(packet):
     # metadata before a request, without changing their durable source evidence.
     for page in packet.get('current_pages',[]):
         claims=page['meta'].get('wiki_claims',[]); count=page.get('claim_count')
-        offset=count-len(claims) if type(count) is int and isinstance(claims,list) and len(claims)<=count<=120 else 0
+        offset=count-len(claims) if type(count) is int and isinstance(claims,list) and len(claims)<=count else 0
         _validate_existing_claims(page['path'],claims,offset)
         title=page['meta'].get('title')
         if title is not None: _existing_topic_title(page)
@@ -278,6 +290,14 @@ def _public_locator(relative, wiki_only=True):
         return {'path':BASE+'Index.md','path_sha256':s.digest(relative.encode('utf-8',errors='surrogatepass'))}
 
 
+def _source_integrity_error(row,field):
+    relative=row.get('path') if isinstance(row,dict) else None
+    locator=_public_locator(relative,wiki_only=False) if isinstance(relative,str) else {'path':BASE+'Index.md'}
+    error=WikiIntegrityError(locator['path'],field=field)
+    if 'path_sha256' in locator: error.page_sha256=locator['path_sha256']
+    return error
+
+
 def _public_pending_parts(value):
     result=[]
     if not isinstance(value,list): return result
@@ -308,6 +328,9 @@ def _worker_summary():
         locator=_public_locator(value['integrity_page'])
         result['integrity_page']=locator['path']
         if 'path_sha256' in locator: result['integrity_page_sha256']=locator['path_sha256']
+    if result.get('integrity_page')==BASE+'Index.md' and 'integrity_page_sha256' not in result:
+        fingerprint=value.get('integrity_page_sha256')
+        if isinstance(fingerprint,str) and re.fullmatch('[a-f0-9]{64}',fingerprint): result['integrity_page_sha256']=fingerprint
     if value.get('integrity_field') in ('title','wiki_claims','source_revision','latest_source_part','frontmatter','wiki_kind','encoding','content','path','packet','archive','archive_capacity','recovery','serialization','publication_cas','unused_publication_cas'): result['integrity_field']=value['integrity_field']
     if type(value.get('claim_index')) is int and 0<=value['claim_index']<120: result['claim_index']=value['claim_index']
     if value.get('recovery_action') in ('resolve_saved_publication_cas_then_retry','retry_fresh_generation_preserving_owner_edits','resolve_saved_source_revision_then_retry','reconcile_saved_publication_then_retry'): result['recovery_action']=value['recovery_action']
@@ -545,6 +568,11 @@ def prepare(limit=4):
         compact['meta']['wiki_claims']=_list(p['meta'].get('wiki_claims'))[-12:]
         try: size=len(_bounded_json(compact,40000,default=str))
         except _JSONTooLarge: continue
+        except _JSONStructureTooLarge:
+            # Aggregate optional context has its own envelope. Retain raw
+            # individual guards, but do not screen decoded omitted context.
+            _validate_existing_claims(p['path'],p['meta'].get('wiki_claims',[]))
+            continue
         except (TypeError,ValueError,RecursionError): raise WikiIntegrityError(p['path']) from None
         if context_size+size>40000: continue
         _validate_existing_claims(p['path'],p['meta'].get('wiki_claims',[]))
@@ -1912,6 +1940,7 @@ def run(limit=4,timeout=480):
             attention={'status':'attention','at':s.stamp(),'reason':'WikiIntegrityError','retry_after':0,'backoff_seconds':0,
                        'consecutive_failures':saved.get('consecutive_failures',0),'attention_required':True,
                        'integrity_page':exc.page,'integrity_field':exc.field,'claim_index':exc.claim_index,'manual_retry_required':True}
+            if isinstance(getattr(exc,'page_sha256',None),str) and re.fullmatch('[a-f0-9]{64}',exc.page_sha256): attention['integrity_page_sha256']=exc.page_sha256
             batch_id=getattr(exc,'batch_id',None)
             if isinstance(batch_id,str) and re.fullmatch('[a-f0-9]{24}',batch_id): attention['batch_id']=batch_id
             if getattr(exc,'recovery_action',None) in ('resolve_saved_source_revision_then_retry','reconcile_saved_publication_then_retry'): attention['recovery_action']=exc.recovery_action
@@ -1953,6 +1982,7 @@ def run(limit=4,timeout=480):
             attention={'status':'attention','at':s.stamp(),'reason':'WikiIntegrityError','retry_after':0,'backoff_seconds':0,
                        'consecutive_failures':saved.get('consecutive_failures',0),'attention_required':True,
                        'integrity_page':exc.page,'integrity_field':exc.field,'claim_index':exc.claim_index,'manual_retry_required':True}
+            if isinstance(getattr(exc,'page_sha256',None),str) and re.fullmatch('[a-f0-9]{64}',exc.page_sha256): attention['integrity_page_sha256']=exc.page_sha256
             batch_id=packet.get('batch_id') if isinstance(packet,dict) else None
             if isinstance(batch_id,str) and re.fullmatch('[a-f0-9]{24}',batch_id): attention['batch_id']=batch_id
             _atomic_json(worker_state,attention)
@@ -2076,6 +2106,7 @@ def run(limit=4,timeout=480):
                          'pending_parts':[{'job_key':row['job_key'],'sha256':row['sha256']} for row in packet['sources']]}
             if integrity:
                 worker_receipt.update(integrity_page=exc.page,integrity_field=exc.field,claim_index=exc.claim_index)
+                if isinstance(getattr(exc,'page_sha256',None),str) and re.fullmatch('[a-f0-9]{64}',exc.page_sha256): worker_receipt['integrity_page_sha256']=exc.page_sha256
                 if getattr(exc,'recovery_action',None)=='reconcile_saved_publication_then_retry': worker_receipt['recovery_action']=exc.recovery_action
             if isinstance(exc,WikiTransientError) and getattr(exc,'field',None)=='publication_cas':
                 partial=_saved_publication_started(packet,folder/'publication.json')

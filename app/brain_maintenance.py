@@ -137,7 +137,7 @@ def review_sources(path,meta):
 def _compiler_history(path):
     relative=path.relative_to(s.VAULT).as_posix().casefold()
     base=WIKI_BASE.casefold()
-    return relative==base+'log.md' or relative.startswith(base+'log-archives/')
+    return relative==base+'log.md' or relative.startswith((base+'log-archives/',base+'receipts/'))
 
 def _enumeration_failure_path(error,root):
     """Keep a failed subtree's lexical identity; never use it as read authority."""
@@ -158,8 +158,19 @@ def _enumeration_failure_path(error,root):
 
 def _derived_review_pages(status):
     """Enumerate designated summaries by path, without reading original notes."""
-    pages=set((s.VAULT/'02-Areas/AI-Memory').rglob('*.md',case_sensitive=False))
-    failed=set()
+    pages=set(); failed=set()
+    central=s.VAULT/'02-Areas/AI-Memory'
+    try:
+        if central.parent.is_symlink() or os.path.isjunction(central.parent):
+            failed.add(central.parent)
+        elif not central.is_symlink() and not os.path.isjunction(central) and central.is_dir():
+            for directory,dirs,files in os.walk(central,followlinks=False,onerror=lambda error:failed.add(_enumeration_failure_path(error,central))):
+                parent=Path(directory)
+                dirs[:]=sorted((name for name in dirs if not name.startswith('.')
+                               and not (parent/name).is_symlink() and not os.path.isjunction(parent/name)),
+                              key=lambda name:(name.casefold(),name))
+                pages.update(parent/name for name in files if name.casefold().endswith('.md'))
+    except OSError: failed.add(central)
     try: roots=sorted(s.VAULT.iterdir(),key=lambda p:(p.name.casefold(),p.name))
     except OSError: roots=[]; failed.add(s.VAULT)
     for root in roots:

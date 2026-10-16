@@ -4,7 +4,7 @@ Use this guide with a local Codex agent on Windows, macOS or Linux. The notes re
 
 Release covered: **v0.1.7**. Check the shared `02-Areas/AI-Memory/Second-Brain-System.md` for a newer explicitly approved release before starting. Do not install an arbitrary branch or silently select the newest internet release.
 
-Audit status on 2026-10-16: v0.1.7 remains a candidate. The current R110/R111 follow-up still needs frozen-commit full gates and fresh independent reviews; native Mac, hosted CI and production/client acceptance remain pending. Use the installation examples below only after shared status explicitly approves that release.
+Audit status on 2026-10-16: **HOLD — v0.1.7 remains a candidate.** The R112–R118 follow-up still needs final combined-source integration, frozen-commit full gates and fresh Codex/Claude reviews; native Mac, hosted CI and production/client acceptance remain pending and unwaived. Scoped author/root checks do not approve a release. Use the installation examples below only after shared status explicitly approves that release.
 
 ## Give this prompt to the other device's Codex agent
 
@@ -232,7 +232,7 @@ Malformed recovery control fields or progress records also require review of the
 
 ### Local path-SHA lookup
 
-When status withholds a file or folder name, use its `path_sha256` in a private terminal on the affected device. The digest identifies the exact vault-relative POSIX path string, encoded as UTF-8 with `surrogatepass`; `.` identifies the vault itself. It is not a hash of note contents and grants no write authority. The following Python 3.12 snippet enumerates names without reading notes or traversing hidden or linked directories. A folder can match from its parent's directory listing even when the folder itself cannot be listed. Use the runtime's configured Python. It prints only matching paths, escaped for a terminal, and does not save anything. Keep that output local if the name contains private information or possible credentials; do not paste it into chat, screenshots or notifications.
+When status withholds a file or folder name, use its `path_sha256` in a private terminal on the affected device. The digest identifies the exact vault-relative POSIX path string, encoded as UTF-8 with `surrogatepass`; `.` identifies the vault itself. It is not a hash of note contents and grants no write authority. The following Python 3.12 snippet hashes every entry name in each visited directory, including hidden names and links, without reading notes or traversing hidden or linked directories. A folder or link can match from its parent's directory listing even when its target cannot be listed. Use the runtime's configured Python. It prints only matching paths, escaped for a terminal, and does not save anything. Keep that output local if the name contains private information or possible credentials; do not paste it into chat, screenshots or notifications.
 
 ```python
 from pathlib import Path
@@ -252,22 +252,19 @@ def inspect_name(path):
         matches += 1
 inspect_name(vault)
 for current, dirs, files in os.walk(vault, followlinks=False):
+    for name in dirs + files:
+        inspect_name(Path(current) / name)
     dirs[:] = [name for name in dirs
                if not name.startswith('.')
                and not (Path(current) / name).is_symlink()
                and not os.path.isjunction(Path(current) / name)]
-    for name in dirs + files:
-        path = Path(current) / name
-        if name.startswith('.') or path.is_symlink() or os.path.isjunction(path):
-            continue
-        inspect_name(path)
 print('Matching local paths:', matches)
 ```
 
-No match can mean the file or folder was renamed, moved, removed, has not synchronized to this device, or its parent cannot be listed. Hidden and linked paths are deliberately not traversed. Inspect the affected device's current paths and preserved local journal deliberately; do not guess a replacement or overwrite Index because it is the generic public locator. Git failure diagnostics screen raw filenames before JSON escaping and use the same opaque locator when needed. This changes displayed diagnostics, not which otherwise valid note filenames may synchronize.
+No match can mean the file or folder was renamed, moved, removed, has not synchronized to this device, or its parent cannot be listed. Hidden and linked directory entry names can match, but their descendants are deliberately not traversed. Inspect the affected device's current paths and preserved local journal deliberately; do not guess a replacement or overwrite Index because it is the generic public locator. Git failure diagnostics screen raw filenames before JSON escaping and use the same opaque locator when needed. This changes displayed diagnostics, not which otherwise valid note filenames may synchronize.
 
 
-Maintenance source-review warnings cover central AI-Memory pages, reserved project AI-Memory summaries and Maps/AI-Context, including case-renamed reserved filenames. Central Markdown suffixes match case-insensitively on every OS. Source changes and review age use the existing recorded SHA256/30-day checks. Hidden project artifacts, ordinary neighboring originals and compiler Log/archive history are excluded from that extension. A warning requests evidence-based review; it does not rewrite a current label, infer profile facts or modify original notes. Keep canonical shared folder/file casing and use the current SHA before an authorized derived update.
+Maintenance source-review warnings cover central AI-Memory pages, reserved project AI-Memory summaries and Maps/AI-Context, including case-renamed reserved filenames. Central Markdown suffixes match case-insensitively on every OS, with hidden and linked directories pruned before traversal and enumeration failures reported through a safe locator. Source changes and review age use the existing recorded SHA256/30-day checks. Ordinary neighboring originals and immutable compiler receipt/Log/archive history are excluded from summary-age review; receipt integrity remains checked by wiki status, and claim/source integrity by wiki lint. Control retains its existing age review and ownership guard. A warning requests evidence-based review; it does not rewrite a current label, infer profile facts or modify original notes. Keep canonical shared folder/file casing and use the current SHA before an authorized derived update.
 
 Fresh publication and resumed recovery now use the same bounded JSON packet values, including numeric metadata keys. The first saved input stays stable through publication; caller types, fitting aliases and existing owner claims remain preserved. Already-stranded older noncanonical plans remain held for conservative recovery review. Never rewrite their private hashes or fabricate evidence; this correction does not automatically repair those journals.
 
@@ -278,3 +275,15 @@ Undecodable Control refuses maintainer-only work through the existing permission
 Memory writes screen capture evidence paths, derived-page source paths and dynamic destination paths with the existing credential/NUL guard and 400-character limit before writing. Original filenames and notes remain preserved and available through existing read/search; this does not rewrite historical metadata.
 
 A derived update needs evidence distinct from its destination's actual file. Alternate separators, filesystem case aliases and hard links to the same existing file cannot supply independent evidence. Genuinely distinct files remain valid, including differently cased files on a case-sensitive device; a missing destination can still be created from genuinely distinct existing sources. Stored path strings are not rewritten.
+
+For the R112–R118 candidate, the lookup above also identifies hidden note names and link entry names without reading their contents or traversing hidden/linked directories. Central AI-Memory review uses a pruned walk and reports enumeration failures. If the in-vault `02-Areas` parent is linked, review stops at that entry and its opaque locator identifies `02-Areas`, rather than a child that the safe lookup cannot reach. Preserve the original layout and review the link deliberately; a diagnostic does not authorize deleting it or following its target.
+
+Immutable compiler receipt records do not acquire current-summary age reminders. Their optional proof integrity remains visible in `wiki status`, and claim/source evidence remains subject to `wiki lint`. Ordinary derived summaries and Control keep the existing 30-day review policy; Control's maintainer guard is unchanged.
+
+An aggregate structural limit in optional compact topic context now omits that context only after its raw individual claims pass the existing guards. Character-based omission, malformed graph refusal, decoded checks for included context, whole-packet limits and publication authority stay unchanged. An omitted page is preserved; it is not silently repaired or granted more capacity.
+
+Source-specific path/content attention identifies the screened source when possible. Cached public worker status may instead show the safe Index locator and `integrity_page_sha256`; use that digest with the local lookup above. An invalid source date or other selected source metadata remains pending with its original bytes intact. Inspect the actual source and repair only from owner evidence before an explicit `wiki retry`; do not overwrite Index or guess a replacement date from the generic locator.
+
+Before unused work reaches a provider, the compiler also screens known standard YAML frontmatter after parsing its scalar values, keys and associations. It rereads each selected source within the existing byte bound and verifies the selected raw SHA256 before this check, so metadata beyond the first source chunk cannot bypass it. This parses known local frontmatter only; it does not decode arbitrary body text. A possible credential produces controlled source/content attention with no provider request or raw value in diagnostics. A changed source snapshot remains a transient refusal; original notes and saved inputs are not rewritten.
+
+Selected-context claim diagnostics retain the original zero-based claim index when a valid full claim count is available, including a legacy/manual topic already above capacity. Invalid count types keep the existing safe fallback. The 120-claim publication limit is unchanged; bounded public status may omit an index outside its existing range, so inspect the controlled local attention receipt rather than guessing a window-relative index. No claims are deleted automatically to clear capacity or attention.
