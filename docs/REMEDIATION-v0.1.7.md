@@ -95,6 +95,8 @@ The v0.1.6 audit fixes passed independent Codex and Claude reviews, four-platfor
 | R107 | Selected alias expansion stops the worker without a matching lint diagnostic | Apply decoded guards to potential last-twelve compact context; preserve older/omitted graph and provenance checks. |
 | R108 | Folder/root warnings are unresolved by file-only lookup and lose precise subtree identity | Resolve names only for files/folders/root and retain safe callback identity, without new read/write authority. |
 | R109 | Undecodable Control escapes ownership refusal and aborts maintenance before sync | Refuse maintainer work, report uncertain ownership, preserve worker history and continue the existing Git stage. |
+| R110 | Capture evidence, derived-source or dynamic destination strings bypass the existing credential screen and enter saved metadata | Reuse the existing guard and 400-character bound at these three write boundaries; preserve originals, retrieval and historical records. |
+| R111 | An alternate separator/case path names the destination itself as supposedly distinct evidence | Reject the same existing physical file, including hard links, without rewriting path strings or rejecting genuinely distinct files. |
 
 
 
@@ -506,3 +508,15 @@ The saved names-only lookup now resolves files, folders and vault root without r
 Invalid UTF-8 and UTF-16 Control fixtures previously escaped permission refusal and prevented sync. Only that decoding failure now becomes the existing permission contract; capture-role refusal, missing-Control bootstrap and owner matching stay unchanged. Maintenance skips aggregation, reports uncertain ownership and attempts normal Git sync, preserving the last authorized worker receipt. Raw root V1 remains excluded: its one failed assertion incorrectly demanded rewriting that history. The corrected eleven-case oracle passes. Root then verified three introduced cases where safe refusal still displayed an inaccurate different-owner explanation. The final message-only correction passes those three, all thirty-six authored cases, 213 existing functional cases and 249 native Linux focused cases. Mocked-provider/Git scoped results do not establish production acceptance.
 
 The combined frozen commit still requires full native suites, unchanged-contract replays, actual model/history/Git integration and fresh Codex/Claude reviews. Planned inventory/collection counts are not executed results. Native Mac, hosted CI and production/client acceptance remain separate and unwaived.
+
+## R110 write-path metadata screening
+
+Frozen d314104 passed Windows 1,525 tests with six verified skips, Linux 1,526 with five, 320 original root contracts and the 1,291-case binder, but remains held for two independently verified P2 findings. Codex R25's 485 passing checks and three failed assertions do not constitute clean approval; Claude R21 was still running during this follow-up.
+
+Root's seven accepted R110 refusal contracts have three failures/four controls before repair. Two separate before-only impact probes demonstrate actual synthetic metadata writes and local Git preflight acceptance; they are not after-fix refusal contracts and demonstrate no remote transfer. Reuse existing clean_text credential/NUL screening and max_len=400 for capture evidence_paths, update_current source_paths and dynamic destinations. Preserve original notes, read/search, path identity and history; no historical cleanup is implied.
+
+## R111 distinct physical source identity
+
+Root's four accepted before contracts have two failures/two controls. Two separate before-only writes show backslash/actual-case aliases letting a page record its own old source hash and immediately appear changed. Check existing target/source identity with [Path.samefile](https://docs.python.org/3.12/library/pathlib.html#pathlib.Path.samefile), retaining controlled I/O failure behavior and stored path strings. Hard links to that same physical file also cannot count as distinct evidence. Missing destinations with genuine existing evidence and distinct case-sensitive Linux files remain supported.
+
+A nonfinal Linux test wrongly required a retained CAS lock pathname. The [filelock API](https://py-filelock.readthedocs.io/en/latest/api.html#filelock.UnixFileLock) describes different backend cleanup behavior; the portable oracle checks exclusion and owner bytes instead. Product Store bytes remain unchanged by that test-only correction. Focused author execution now has 41 passes on Windows and Linux and the exact eleven root refusal contracts pass; these are scoped results, not the full combined release gates. Remaining existing checks and all final frozen-source suites/reviews, native Mac/CI and deployment acceptance remain pending and unwaived.

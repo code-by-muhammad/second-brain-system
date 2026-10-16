@@ -98,6 +98,7 @@ def capture(event_id:str,title:str,outcome:str,source_app:str,source_reference:s
     if max(len(decisions),len(next_steps),len(evidence_paths))>30: raise ValueError('Too many list items.')
     for x in decisions+next_steps: clean_text(x,2000)
     for x in evidence_paths:
+        clean_text(x,400)
         if not safe_path(x).is_file(): raise ValueError('Evidence note does not exist: '+x)
     payload=dict(event_id=event_id,title=title,outcome=outcome,source_app=source_app,source_reference=source_reference,
                  project=project,decisions=decisions,next_steps=next_steps,evidence_paths=evidence_paths)
@@ -124,6 +125,7 @@ def capture(event_id:str,title:str,outcome:str,source_app:str,source_reference:s
 def update_current(path:str,title:str,content:str,source_paths:list[str],expected_sha256:str|None=None):
     """Only derived pages, with source evidence and compare-and-swap for existing files."""
     cfg.require_maintainer()
+    clean_text(path,400)
     p=safe_path(path); rel=p.relative_to(VAULT).as_posix()
     if rel.casefold().startswith('02-areas/ai-memory/wiki/'):
         raise ValueError('Wiki pages and writer Control are compiler-owned; use the wiki worker or an explicit handoff/migration.')
@@ -132,7 +134,9 @@ def update_current(path:str,title:str,content:str,source_paths:list[str],expecte
     clean_text(title,180); clean_text(content)
     if not content.strip() or not source_paths or len(source_paths)>30: raise ValueError('Content and 1–30 source notes are required.')
     for src in source_paths:
-        if src==rel or not safe_path(src).is_file(): raise ValueError('A distinct existing source is required.')
+        clean_text(src,400)
+        source=safe_path(src)
+        if src==rel or not source.is_file() or (p.exists() and source.samefile(p)): raise ValueError('A distinct existing source is required.')
     with FileLock(str(STATE/'writer.lock'),timeout=20):
         if p.exists() and expected_sha256 is None: raise ValueError('Read current SHA256 before updating an existing page.')
         now=stamp()

@@ -4,7 +4,7 @@ Use this guide with a local Codex agent on Windows, macOS or Linux. The notes re
 
 Release covered: **v0.1.7**. Check the shared `02-Areas/AI-Memory/Second-Brain-System.md` for a newer explicitly approved release before starting. Do not install an arbitrary branch or silently select the newest internet release.
 
-Audit status on 2026-10-16: v0.1.7 remains a candidate. The combined R106–R109 source still needs frozen-commit full gates and fresh independent reviews; native Mac, hosted CI and production/client acceptance remain pending. Use the installation examples below only after shared status explicitly approves that release.
+Audit status on 2026-10-16: v0.1.7 remains a candidate. The current R110/R111 follow-up still needs frozen-commit full gates and fresh independent reviews; native Mac, hosted CI and production/client acceptance remain pending. Use the installation examples below only after shared status explicitly approves that release.
 
 ## Give this prompt to the other device's Codex agent
 
@@ -274,3 +274,7 @@ Fresh publication and resumed recovery now use the same bounded JSON packet valu
 Lint checks decoded potential selected context with the existing page/field/index guard: the last twelve claims of a page within the compact budget. Older unselected and compact-omitted claims retain ordinary graph/provenance checks. Enumeration warnings retain a safe failed-subtree identity or fall back to its namespace; the names-only lookup above resolves files, folders and vault root (`.`). Healthy review and the existing Git stage continue.
 
 Undecodable Control refuses maintainer-only work through the existing permission guard. Maintenance reports that shared ownership could not be verified, skips aggregation and still attempts its existing Git stage under normal content checks. Preserve Control and repair UTF-8 deliberately from owner evidence; never guess an encoding or infer a handoff. The last authorized worker-success receipt stays historical, not proof that a refused attempt ran. Missing-Control bootstrap and explicit owner matching remain unchanged.
+
+Memory writes screen capture evidence paths, derived-page source paths and dynamic destination paths with the existing credential/NUL guard and 400-character limit before writing. Original filenames and notes remain preserved and available through existing read/search; this does not rewrite historical metadata.
+
+A derived update needs evidence distinct from its destination's actual file. Alternate separators, filesystem case aliases and hard links to the same existing file cannot supply independent evidence. Genuinely distinct files remain valid, including differently cased files on a case-sensitive device; a missing destination can still be created from genuinely distinct existing sources. Stored path strings are not rewritten.
