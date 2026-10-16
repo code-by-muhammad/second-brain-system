@@ -110,7 +110,11 @@ An existing v0.1.6 device uses the normal verified v0.1.7 updater without legacy
 
 ## Select temporary sources without losing retrieval
 
+Source inventory and fresh-file fallback recognize .md, .MD and .Md consistently on supported operating systems. Keep each original filename's exact casing: paths identify source parts, receipts and owner policy. A committed rename does not require rewriting original content or copying another device's index.
+
 The optional shared `02-Areas/AI-Memory/Wiki-Source-Policy.md` contains one JSON fenced object with `version: 1`, `exclude_paths` and `exclude_prefixes` arrays. Exact paths identify Markdown originals; explicit directory prefixes end with `/`. Paths use forward slashes under existing source roots. Absolute paths, traversal, hidden/derived paths, wildcards, duplicates and unknown keys are rejected. An absent policy preserves normal ingestion; an invalid policy stops compilation for review. Do not treat words such as "research" or "handoff" as automatic exclusions.
+
+Exact exclusions require a lowercase .md suffix. For an uppercase original, an explicit folder-prefix rule excludes the source notes in that folder; keep that wider scope intentional.
 
 The owner has selected temporary session documents to remain searchable without future permanent wiki compilation. Excluded files and parts are reported separately from eligible completion. Original notes, existing historical claims and receipts remain preserved. Policy changes sync through the notes repository and require v0.1.7 or later on the maintainer; notes synchronization does not upgrade older software. Change this derived policy only from explicit owner evidence with its current SHA256.
 

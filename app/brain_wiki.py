@@ -408,7 +408,7 @@ def inventory(include_excluded=False,policy=None):
     policy=source_policy() if policy is None else policy
     result=[]
     for root in SOURCE_ROOTS:
-        for p in (s.VAULT/root).rglob('*.md'):
+        for p in (s.VAULT/root).rglob('*.md',case_sensitive=False):
             rel=p.relative_to(s.VAULT).as_posix()
             folded=rel.casefold()
             # Reserved generated summaries are never original source evidence,

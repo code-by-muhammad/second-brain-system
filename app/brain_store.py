@@ -147,7 +147,7 @@ def fresh_search(query:str,limit:int=6):
     stop={'the','and','for','with','was','were','where','what','which','how','does','this','that','from','about','built','project'}
     terms=[t for t in re.findall(r'[\w]+',query.lower()) if len(t)>2 and t not in stop]
     found=[]
-    for p in VAULT.rglob('*.md'):
+    for p in VAULT.rglob('*.md',case_sensitive=False):
         try:
             rel=p.relative_to(VAULT).as_posix(); safe_path(rel)
             if p.stat().st_size>2_000_000: continue
