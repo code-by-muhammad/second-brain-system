@@ -46,6 +46,43 @@ def backup(path,root):
         private_dir(target.parent)
         if not target.exists(): atomic(target,path.read_bytes())
 
+def _same_toml_value(left,right):
+    """Compare parsed owner values, including TOML's non-finite floats."""
+    if type(left) is not type(right): return False
+    if isinstance(left,dict):
+        return left.keys()==right.keys() and all(_same_toml_value(value,right[key]) for key,value in left.items())
+    if isinstance(left,list):
+        return len(left)==len(right) and all(_same_toml_value(a,b) for a,b in zip(left,right))
+    if isinstance(left,float):
+        import math
+        if math.isnan(left): return math.isnan(right)
+    return left==right
+
+def _codex_toml_plan(content,spec):
+    """Replace one logical server with a locked parser; never write or spawn."""
+    import tomllib
+    original=tomllib.loads(content)
+    servers=original.get('mcp_servers',{})
+    if not isinstance(servers,dict): raise ValueError('Invalid TOML MCP parent object; no client configuration changed.')
+    try:
+        import tomlkit
+    except ImportError as exc:
+        raise ValueError('Client configuration requires locked tomlkit==0.15.1. Run install.py using the synced project Python environment; no client configuration changed.') from exc
+    if getattr(tomlkit,'__version__',None)!='0.15.1':
+        raise ValueError('Client configuration requires locked tomlkit==0.15.1; no client configuration changed.')
+    try: document=tomlkit.parse(content)
+    except tomlkit.exceptions.ParseError as exc:
+        raise ValueError('Cannot safely parse this TOML configuration; no client configuration changed.') from exc
+    managed={**spec,'startup_timeout_sec':60,'tool_timeout_sec':120}
+    if 'mcp_servers' not in document: document['mcp_servers']={}
+    if 'second-brain' in document['mcp_servers']: del document['mcp_servers']['second-brain']
+    document['mcp_servers']['second-brain']=managed
+    result=tomlkit.dumps(document)
+    expected={**original,'mcp_servers':{**servers,'second-brain':managed}}
+    if not _same_toml_value(expected,tomllib.loads(result)):
+        raise ValueError('TOML parser changed unrelated owner settings; no client configuration changed.')
+    return result
+
 def client_plan(root,python,home=None):
     home=home or Path.home()
     spec={'command':str(python),'args':[str(root/'app/brain_client.py')]}
@@ -61,12 +98,8 @@ def client_plan(root,python,home=None):
         plan.append((path,json.dumps(data,indent=2,ensure_ascii=False)+'\n'))
     path=home/'.codex/config.toml'
     content=path.read_text(encoding='utf-8') if path.exists() else ''
-    import re, tomllib
-    tomllib.loads(content)  # Validate the original before stripping any managed block.
-    blocks=re.split(r'(?m)(?=^\[)',content)
-    content=''.join(b for b in blocks if not re.match(r'^\[mcp_servers\.(?:second-brain|"second-brain")(?:\.|\])',b))
-    content=content.rstrip()+'\n\n[mcp_servers.second-brain]\ncommand = '+json.dumps(str(python))+'\nargs = ['+json.dumps(str(root/'app/brain_client.py'))+']\nstartup_timeout_sec = 60\ntool_timeout_sec = 120\n'
-    tomllib.loads(content)
+    import re
+    content=_codex_toml_plan(content,spec)
     plan.append((path,content))
     # Install the shared protocol as a managed block, preserving the owner's other instructions.
     instructions=home/'.codex/AGENTS.md'
@@ -175,6 +208,18 @@ def main():
         subprocess.run(['uv','sync','--locked','--no-dev','--project',str(REPO),'--python','3.12'],check=True)
         python=REPO/('.venv/Scripts/python.exe' if os.name=='nt' else '.venv/bin/python')
     if not python.is_file(): parser.error('The selected Python executable does not exist.')
+    if not args.reuse_python:
+        # uv sync prepares the locked dependencies; it does not switch this
+        # bootstrap interpreter. Preserve the venv's lexical symlink path and
+        # use the existing reuse flag to terminate the handoff after one child.
+        child_arguments=list(sys.argv[1:])
+        terminator=child_arguments.index('--') if '--' in child_arguments else len(child_arguments)
+        child_arguments[terminator:terminator]=['--reuse-python',str(python)]
+        try:
+            child=subprocess.run([str(python),str(REPO/'install.py'),*child_arguments],check=True)
+        except subprocess.CalledProcessError as exc:
+            raise SystemExit(exc.returncode) from None
+        raise SystemExit(child.returncode)
     if args.validate_only:
         validate(root,vault,python,args.configure_clients)
         print(json.dumps({'status':'validated'})); return

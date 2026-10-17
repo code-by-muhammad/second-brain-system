@@ -233,7 +233,8 @@ def sync(vault=None):
                 if not target.is_file(): continue
                 if _archive_path(rel): archives[rel]=_archive_file(rel,target)
                 else:
-                    try: text=target.read_text(encoding='utf-8')
+                    try:
+                        with target.open('r',encoding='utf-8') as stream: text=stream.read(NOTE_CHARACTER_LIMIT+1)
                     except (OSError,UnicodeError) as exc:
                         raise GitSyncError('Note '+_note_locator(rel)+' cannot be read as UTF-8; original preserved.') from None
                     validate_note(rel,text)

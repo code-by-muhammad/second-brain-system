@@ -408,6 +408,7 @@ def _screen_source_header(text,*,max_nodes=100000,max_depth=128):
         tag=node['tag'];mapped=node['kind']=='map'
         raw_node=raw_scalar(node) if mapped else node
         raw=raw_node['raw'] if raw_node is not None else ''
+        lexical_fallback=not mapped or (raw_node is not None and tag in {prefix+name for name in ('int','float','bool','binary')})
         if not mapped and tag not in scalar_tags:
             return raw,len(raw),True
         if not mapped and tag==prefix+'str': return raw,len(raw),True
@@ -419,10 +420,9 @@ def _screen_source_header(text,*,max_nodes=100000,max_depth=128):
         cached=normalized_views.get(cache_key)
         if cached is not None:
             if cached[-1]: return cached[1:]
-            # Successful scalar conversions share the raw node and tag. A
-            # failed constructor instead keeps its caller's old fallback:
-            # lexical text for a scalar, a collection for a mapped scalar.
-            return (collection,0,False) if mapped else (raw,len(raw),False)
+            # Failed known scalar-consuming wrappers retain the already
+            # selected raw association, including shared cached failures.
+            return (raw,len(raw),False) if lexical_fallback else (collection,0,False)
         name=tag.rsplit(':',1)[-1]
         if name=='binary': bound=3*((len(raw)+3)//4);reserve(bound)
         elif name=='str': bound=len(raw)
@@ -447,10 +447,10 @@ def _screen_source_header(text,*,max_nodes=100000,max_depth=128):
             # constructor scope. Binary/string, rendering and unrelated/fatal
             # failures retain their original propagation behavior.
             if isinstance(exc,OverflowError) and tag not in nontext_tags: raise
-            # Scalar-event fallback keeps its old lexical association behavior.
-            # An invalid mapped scalar remains a collection, as before; every
-            # original lexical scalar/direct association has still been checked.
-            view=collection if mapped else raw;weight=0 if mapped else len(raw);success=False
+            # The named constructors consume this selected raw scalar before
+            # failing. Keep that evidence; structural/nonconsuming mapped
+            # failures still use the existing collection fallback.
+            view=raw if lexical_fallback else collection;weight=len(raw) if lexical_fallback else 0;success=False
         else:
             success=True
             if name=='binary':
@@ -510,7 +510,7 @@ def _screen_source_header(text,*,max_nodes=100000,max_depth=128):
                 frame=frames.pop();node=frame['node']
                 if kind=='map' and node['tag'] in scalar_tags:
                     view,weight,success=normalize(node);node.update(view=view,weight=weight,
-                        definition_weight=weight if success else frame['deferred_weight'])
+                        definition_weight=weight if success else max(weight,frame['deferred_weight']))
                 elif frame['selector_context']:node['definition_weight']=frame['deferred_weight']
                 if frame['anchor'] is not None: active.remove(frame['anchor'])
                 attach(node)
@@ -598,7 +598,7 @@ def _read_worker_state():
         retry=value['retry_after']
         if type(retry) not in (int,float) or not math.isfinite(retry) or retry<0: raise ValueError('Invalid worker backoff.')
         return value
-    except (OSError,ValueError,TypeError):
+    except (OSError,ValueError,TypeError,OverflowError,RecursionError):
         return {**default,'status':'attention','attention_required':True,'reason':'malformed private worker state; inspect it or reset with wiki retry'}
 
 def _public_locator(relative, wiki_only=True):

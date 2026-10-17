@@ -262,12 +262,12 @@ def test_raw_value_descriptors_retain_collection_alias_and_structural_guards(bra
 
 @pytest.mark.parametrize('tag',['int','binary','float','bool'])
 def test_invalid_inner_scalar_cache_keeps_mapped_constructor_fallback_shape(brain,monkeypatch,tag):
-    # The inner scalar fails first and caches a lexical fallback. The outer
-    # standard constructor fails on the same raw value but must stay a
-    # collection, rather than invent a password association from that cache.
+    # The inner scalar caches a failed conversion of the selected raw value.
+    # The enclosing known scalar-consuming wrapper must retain that same
+    # existing password association and refuse it before a provider request.
     value='A'*(21 if tag=='binary' else 20)
     expression=mapped(tag,'!!'+tag+' "'+value+'"')
     header=PASSWORD+': '+expression
     path,raw,rows=original(header)
     assert w.meta(raw.decode('utf-8'))=={}
-    calls=provider(monkeypatch,rows);assert_run(path,raw,rows,calls,False)
+    calls=provider(monkeypatch,rows);assert_run(path,raw,rows,calls,True)

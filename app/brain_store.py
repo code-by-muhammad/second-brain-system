@@ -49,7 +49,7 @@ def note_text(meta, body):
 
 def read(relative: str, start_line=1, max_lines=160):
     p=safe_path(relative)
-    raw=p.read_bytes()
+    with p.open('rb') as stream: raw=stream.read(2_000_001)
     if len(raw)>2_000_000: raise ValueError('Note exceeds 2 MB; select a smaller source.')
     lines=raw.decode('utf-8-sig').splitlines()
     start_line=max(1,int(start_line)); max_lines=max(1,min(int(max_lines),250))
@@ -93,6 +93,7 @@ def capture(event_id:str,title:str,outcome:str,source_app:str,source_reference:s
     for x in (event_id,title,outcome,source_app,source_reference,project): clean_text(x)
     if not event_id or len(event_id)>180 or not title.strip() or not outcome.strip() or not source_reference.strip():
         raise ValueError('Stable event_id, title, outcome and source_reference are required.')
+    if any(x in event_id for x in ('\r','\n','-->')): raise ValueError('Invalid capture marker.')
     if len(title)>180 or len(project)>180: raise ValueError('Title/project too long.')
     decisions=decisions or []; next_steps=next_steps or []; evidence_paths=evidence_paths or []
     if max(len(decisions),len(next_steps),len(evidence_paths))>30: raise ValueError('Too many list items.')
