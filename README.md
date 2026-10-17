@@ -1,6 +1,10 @@
 # Shared Second Brain
 
-## Current combined candidate — 2026-10-17
+## Current combined candidate preparation — 2026-10-17
+
+This private v0.1.7 source adds Windows-compatible Markdown sync preflight, bounded store note reads, literal POSIX source-identity attention and the corrected isolated update/acceptance documentation to the previously reviewed294c08e fixes. Actual scoped BEFORE/AFTER evidence is recorded externally; it does not approve the combined source. Combined full tests, the cross-device workflow, fresh Codex/Claude reviews, required native Mac evidence and release/deployment acceptance remain pending at this preparation. Production remains v0.1.6. Exact source inventory and full case identities are bound by the external freeze/vector/run receipts. The intended payload has 165 tracked files/164 manifest entries/14 app modules/127 test-support files and 2525 test cases. Windows requires 2509 passes/16 exact platform skips; native Linux requires 2502 passes/23 exact platform skips. These are requirements, not passing results. All older counts and pending statements below retain only their dated historical meaning.
+
+## Historical294c08e source preparation — 2026-10-17
 
 This private v0.1.7 candidate combines the verified authentication recovery, wiki path preflight, maintenance status restoration and isolated software entrypoint fixes. Component tests are scoped evidence. Combined full tests, cross-device workflow, fresh reviews, required native Mac/CI and deployment acceptance remain pending. Production remains v0.1.6. The intended full suite contains 2,455 cases; Windows requires 2,447 passes/eight platform skips and Linux 2,432 passes/23 platform skips. These are requirements, not passing results. The complete source has 160 tracked files, 159 manifest entries, 14 app modules and 122 test/support files. The dated preparations below are historical.
 

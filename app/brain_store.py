@@ -65,10 +65,22 @@ def clean_text(value: str, max_len=30000):
 def note_text(meta, body):
     return '---\n'+yaml.safe_dump(meta,sort_keys=False,allow_unicode=True)+'---\n\n'+body.rstrip()+'\n'
 
+NOTE_LIMIT=2_000_000
+_NOTE_LIMIT_ERROR='Note exceeds 2 MB; select a smaller source.'
+
+def _check_note_size(path):
+    try: size=path.stat().st_size
+    except FileNotFoundError: return
+    if size>NOTE_LIMIT: raise ValueError(_NOTE_LIMIT_ERROR)
+
+def _note_bytes(path):
+    with path.open('rb') as stream: raw=stream.read(NOTE_LIMIT+1)
+    if len(raw)>NOTE_LIMIT: raise ValueError(_NOTE_LIMIT_ERROR)
+    return raw
+
 def read(relative: str, start_line=1, max_lines=160):
     p=safe_path(relative)
-    with p.open('rb') as stream: raw=stream.read(2_000_001)
-    if len(raw)>2_000_000: raise ValueError('Note exceeds 2 MB; select a smaller source.')
+    raw=_note_bytes(p)
     lines=raw.decode('utf-8-sig').splitlines()
     start_line=max(1,int(start_line)); max_lines=max(1,min(int(max_lines),250))
     return {'path':p.relative_to(VAULT).as_posix(),'sha256':digest(raw),'total_lines':len(lines),
@@ -76,7 +88,7 @@ def read(relative: str, start_line=1, max_lines=160):
 
 def _write(p:Path,text:str,kind:str,expected_sha256:str|None=None):
     raw=text.encode('utf-8')
-    old=p.read_bytes() if p.exists() else None
+    old=_note_bytes(p) if p.exists() else None
     before=digest(old) if old is not None else None
     if expected_sha256 is not None and before!=expected_sha256:
         raise ValueError('Concurrent change detected. Read the current note and merge before retrying.')
@@ -125,11 +137,13 @@ def capture(event_id:str,title:str,outcome:str,source_app:str,source_reference:s
     fingerprint=digest(json.dumps(payload,sort_keys=True,ensure_ascii=False).encode())
     key=digest(event_id.encode())[:24]
     p=safe_path(f'00-Inbox/AI-Captures/{key}.md')
+    _check_note_size(p)
     with FileLock(str(STATE/'writer.lock'),timeout=20):
         if p.exists():
-            previous=frontmatter(p.read_text(encoding='utf-8'),strict=True)
+            existing=_note_bytes(p)
+            previous=frontmatter(existing.decode('utf-8'),strict=True)
             if previous.get('payload_sha256')==fingerprint:
-                return {'path':p.relative_to(VAULT).as_posix(),'status':'duplicate','sha256':digest(p.read_bytes())}
+                return {'path':p.relative_to(VAULT).as_posix(),'status':'duplicate','sha256':digest(existing)}
             raise ValueError('event_id already saved with different content. Use a new milestone ID; evidence is immutable.')
         now=stamp()
         meta={'date':now[:10],'type':'work-log','tags':['ai-capture'],'event_id':event_id,
@@ -157,11 +171,13 @@ def update_current(path:str,title:str,content:str,source_paths:list[str],expecte
         clean_text(src,400)
         source=safe_path(src)
         if src==rel or not source.is_file() or (p.exists() and source.samefile(p)): raise ValueError('A distinct existing source is required.')
+        _check_note_size(source)
+    _check_note_size(p)
     with FileLock(str(STATE/'writer.lock'),timeout=20):
         if p.exists() and expected_sha256 is None: raise ValueError('Read current SHA256 before updating an existing page.')
         now=stamp()
         meta={'date':now[:10],'type':'note','tags':['ai-memory','derived'],'updated_at':now,
-              'sources':source_paths,'source_hashes':{src:digest(safe_path(src).read_bytes()) for src in source_paths},
+              'sources':source_paths,'source_hashes':{src:digest(_note_bytes(safe_path(src))) for src in source_paths},
               'status':'current','maintained_by':'second-brain'}
         body=f'# {title}\n\n{content}\n\n## Sources\n'+'\n'.join('- '+note_link(source,rel) for source in source_paths)
         return _write(p,note_text(meta,body),'update_current',expected_sha256)
@@ -174,8 +190,8 @@ def fresh_search(query:str,limit:int=6):
     for p in VAULT.rglob('*.md',case_sensitive=False):
         try:
             rel=p.relative_to(VAULT).as_posix(); safe_path(rel)
-            if p.stat().st_size>2_000_000: continue
-            text=p.read_text(encoding='utf-8-sig'); low=text.lower()
+            if p.stat().st_size>NOTE_LIMIT: continue
+            text=_note_bytes(p).decode('utf-8-sig').replace('\r\n','\n').replace('\r','\n'); low=text.lower()
             title=p.stem.lower()
             score=sum(1 for t in terms if t in low)+sum(5 for t in terms if t in title)
             if score:

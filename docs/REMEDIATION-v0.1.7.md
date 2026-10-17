@@ -1,6 +1,10 @@
 # v0.1.7 source-revision and cross-device evidence follow-up
 
-## Current combined candidate — 2026-10-17
+## Current combined candidate preparation — 2026-10-17
+
+This private v0.1.7 source adds Windows-compatible Markdown sync preflight, bounded store note reads, literal POSIX source-identity attention and the corrected isolated update/acceptance documentation to the previously reviewed294c08e fixes. Actual scoped BEFORE/AFTER evidence is recorded externally; it does not approve the combined source. Combined full tests, the cross-device workflow, fresh Codex/Claude reviews, required native Mac evidence and release/deployment acceptance remain pending at this preparation. Production remains v0.1.6. Exact source inventory and full case identities are bound by the external freeze/vector/run receipts. The intended payload has 165 tracked files/164 manifest entries/14 app modules/127 test-support files and 2525 test cases. Windows requires 2509 passes/16 exact platform skips; native Linux requires 2502 passes/23 exact platform skips. These are requirements, not passing results. All older counts and pending statements below retain only their dated historical meaning.
+
+## Historical294c08e source preparation — 2026-10-17
 
 This private v0.1.7 candidate combines the verified authentication recovery, wiki path preflight, maintenance status restoration and isolated software entrypoint fixes. Component tests are scoped evidence. Combined full tests, cross-device workflow, fresh reviews, required native Mac/CI and deployment acceptance remain pending. Production remains v0.1.6. The intended full suite contains 2,455 cases; Windows requires 2,447 passes/eight platform skips and Linux 2,432 passes/23 platform skips. These are requirements, not passing results. The complete source has 160 tracked files, 159 manifest entries, 14 app modules and 122 test/support files. The dated preparations below are historical.
 
@@ -25,7 +29,9 @@ This v0.1.7 candidate is accepted only through external receipts bound to its ex
 
 The candidate source contract retains ordinary source wikilink bytes and uses canonical `Source path:` code display for the conservative exceptional-selector class. It does not claim clickable exceptional filenames or reinterpret the retired URI NONPASS as a pass. Active operational logs and existing archives are preserved; visible oversized-log attention comes with possible continued disk growth. Per-command fsmonitor policy preserves owner configuration, and the test transport qualifications retain the original assertions. Conditional signing requires an explicit reviewed disposition against the final source; no signing-policy waiver is implied.
 
-For this proposed payload, the required inventory is 156 tracked source files, 155 manifest entries, 14 app modules and 118 test/support files. The exact 2,403-case vectors require Windows 2,396 passes/seven expected skips and native Linux 2,380 passes/23 expected skips. These are acceptance requirements; this text does not assert that a future run passed. Current source hashes and gate results must be read from the external freeze and verification receipts. At preparation on 2026-10-17, production remained v0.1.6 and PRIMARY remained 0ed.
+The current inventory, complete case identities and gate results are defined by the top combined-source section and the external freeze/verification receipts bound to that exact commit. Earlier preparation counts are historical; do not apply them to a successor.
+
+**Historical R147 final-v3 requirements — superseded:** At that preparation, the payload required 156 tracked source files, 155 manifest entries, 14 app modules and 118 test/support files. Its 2,403-case vectors required Windows 2,396 passes/seven expected skips and native Linux 2,380 passes/23 expected skips. These numbers belong only to that historical source, not the current candidate. Production was v0.1.6 and PRIMARY was 0ed at preparation.
 
 The dated section below is historical preparation evidence. Its source-only/unexecuted, pending and HOLD statements retain their preparation-time meaning and do not assert the state of later exact-commit runs. Component/client receipts named there establish only their recorded unchanged scopes, not a combined-source result.
 

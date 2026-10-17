@@ -16,6 +16,7 @@ import brain_store as s
 FOLDERS={'00-Inbox','01-Projects','02-Areas','03-Resources','04-Archive','05-Daily','06-People','07-Meetings','Maps','Templates'}
 MIN_GIT=(2,38)
 NOTE_CHARACTER_LIMIT=2_000_000
+TREE_PATH_BYTES_LIMIT=64*1024*1024
 ARCHIVE_BLOCK=65536
 ARCHIVE_BYTES_LIMIT=64*1024*1024
 _ARCHIVE=re.compile(r'02-Areas/AI-Memory/Wiki/Log-Archives/([a-f0-9]{64})\.md\Z')
@@ -103,6 +104,45 @@ def _note_locator(relative):
     except (ValueError,UnicodeError):
         digest=hashlib.sha256(relative.encode('utf-8','surrogatepass')).hexdigest()
         return '[withheld locator; path_sha256='+digest+']'
+
+def _windows_note_path(relative):
+    """Screen raw components for shared Windows checkout; never normalize them."""
+    for part in relative.split('/'):
+        if part.endswith((' ','.')) or any(ord(c)<32 or c in '<>:"|?*\\' for c in part):
+            return False
+        stem=part.split('.',1)[0].rstrip(' ').upper()
+        if stem in {'CON','PRN','AUX','NUL','CONIN$','CONOUT$','LPT0'} or (
+                len(stem)==4 and stem[:3] in {'COM','LPT'} and stem[3] in '123456789¹²³'):
+            return False
+    return True
+
+def _windows_path_pause(relative):
+    kind='Markdown path' if relative.split('/')[0] in FOLDERS and relative.lower().endswith('.md') else 'Repository path'
+    return ('paused: '+kind+' is not compatible with Windows: '+_note_locator(relative)+
+        '. Rename it explicitly on a device that can open the original before syncing; original and staging preserved.')
+
+def _incoming_note_path(vault,oid):
+    """Screen a pinned fetched tree before checkout, with bounded decoded input."""
+    try:
+        if not re.fullmatch(r'[a-f0-9]{40}|[a-f0-9]{64}',oid): raise ValueError('identity')
+        env=os.environ.copy()
+        env.update(GIT_ALLOW_PROTOCOL='',GIT_NO_LAZY_FETCH='1',GIT_TERMINAL_PROMPT='0',
+                   GIT_NO_REPLACE_OBJECTS='1',GIT_OPTIONAL_LOCKS='0')
+        command=['git','--literal-pathspecs','-C',str(vault),'ls-tree','-r','-z','--name-only',oid]
+        with tempfile.TemporaryFile(mode='w+b') as stream:
+            result=_run_git(command,stdout=stream,stderr=subprocess.DEVNULL,env=env,timeout=90)
+            if result.returncode or os.fstat(stream.fileno()).st_size>TREE_PATH_BYTES_LIMIT: raise ValueError('tree')
+            stream.seek(0);pending=b''
+            for chunk in iter(lambda:stream.read(65536),b''):
+                rows=(pending+chunk).split(b'\0');pending=rows.pop()
+                if len(pending)>1_048_576: raise ValueError('path')
+                for raw in rows:
+                    if len(raw)>1_048_576: raise ValueError('path')
+                    relative=raw.decode('utf-8')
+                    if not _windows_note_path(relative): return relative
+            if pending: raise ValueError('tree')
+    except (OSError,ValueError,subprocess.TimeoutExpired):
+        raise GitSyncError('Incoming note paths could not be verified locally; local changes preserved. Inspect the local repository and its bounded tree-name output before retrying.') from None
 
 def _worktree_case_path(vault,relative,directories):
     """Find case-only aliases from actual directory entries, without note reads.
@@ -249,6 +289,7 @@ def sync(vault=None):
     def casing_pause():
         directories={}
         for rel in index_entries():
+            if not _windows_note_path(rel): return _windows_path_pause(rel)
             if rel.split('/')[0] not in FOLDERS or not rel.lower().endswith('.md'): continue
             actual=_worktree_case_path(vault,rel,directories)
             if actual is not None:
@@ -283,6 +324,9 @@ def sync(vault=None):
             eligible=[]; archives={}
             for rel in dict.fromkeys(candidates):
                 if not rel or rel.split('/')[0] not in FOLDERS or not rel.lower().endswith('.md'): continue
+                if not _windows_note_path(rel):
+                    return ('paused: Markdown path is not compatible with Windows: '+_note_locator(rel)+
+                        '. Rename it explicitly on a device that can open the original before syncing; original and staging preserved.')
                 target=vault/rel
                 for parent in (target,*target.parents):
                     if parent==vault.parent: break
@@ -337,6 +381,8 @@ def sync(vault=None):
                 raise GitSyncError('Configure an origin tracking branch before automatic synchronization; local changes preserved.')
             upstream=git('rev-parse',upstream_ref).stdout.strip()
             ahead,behind=map(int,git('rev-list','--left-right','--count','HEAD...'+upstream).stdout.split())
+            if behind and (invalid:=_incoming_note_path(vault,upstream)) is not None:
+                return _windows_path_pause(invalid)
             if ahead and behind:
                 result=git('merge-tree','--write-tree','HEAD',upstream,check=False)
                 if result.returncode==1:

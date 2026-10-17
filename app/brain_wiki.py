@@ -542,14 +542,18 @@ def _validate_source_context(packet):
             if row['path'] not in screened:
                 # Parse the complete source header, not a potentially truncated
                 # chunk. This is local known YAML, never arbitrary decoding.
-                with s.safe_path(row['path']).open('rb') as stream: raw=stream.read(2_000_001)
+                source_path=s.safe_path(row['path'])
+                # Inventory rows identify literal originals, not separator aliases.
+                if source_path!=s.VAULT/row['path']:
+                    raise _source_integrity_error(row,'path')
+                with source_path.open('rb') as stream: raw=stream.read(2_000_001)
                 if len(raw)>2_000_000 or s.digest(raw)!=row['sha256']:
                     raise WikiTransientError('Source changed since its selected snapshot; prepare current evidence.')
                 source_text=normalized(raw.decode('utf-8-sig'))
                 _screen_source_header(source_text)
                 _screen_source_metadata(meta(source_text))
                 screened.add(row['path'])
-        except WikiTransientError: raise
+        except (WikiTransientError,WikiIntegrityError): raise
         except (ValueError,UnicodeError,TypeError,KeyError,AttributeError):
             raise _source_integrity_error(row,'content') from None
 
