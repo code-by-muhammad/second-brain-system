@@ -1,5 +1,24 @@
 # v0.1.7 — portable evidence and selective wiki sources
 
+## Current combined candidate — 2026-10-17
+
+This private v0.1.7 candidate combines the verified authentication recovery, wiki path preflight, maintenance status restoration and isolated software entrypoint fixes. Component tests are scoped evidence. Combined full tests, cross-device workflow, fresh reviews, required native Mac/CI and deployment acceptance remain pending. Production remains v0.1.6. The intended full suite contains 2,455 cases; Windows requires 2,447 passes/eight platform skips and Linux 2,432 passes/23 platform skips. These are requirements, not passing results. The complete source has 160 tracked files, 159 manifest entries, 14 app modules and 122 test/support files. The dated preparations below are historical.
+
+## Historical R153 software-entrypoint preparation — 2026-10-17
+
+**HOLD — source-only successor, not an approved release.** Actual synthetic BEFORE10 recorded five named untracked-module import failures and five clean controls (receipt cd73d1b1). The repair requests isolated Python mode for software verification, fresh installation, updater entry, selected-environment bootstrap and model download. It preserves the two existing cached-installer isolated launches and trusted installed-app sibling imports. The ten-case AFTER, final combined inventory, full tests, reviews and device/release gates remain pending; no final counts are guessed here.
+
+Production remains v0.1.6. All earlier preparation sections below retain their dated historical meaning; none approves this successor for installation.
+
+
+## Historical R150 authentication-recovery preparation — 2026-10-17
+
+**HOLD — source-only successor, not an approved release.** Installation now validates existing client/server authentication before changing runtime or client settings. A missing server hash can be recovered from the existing valid client token; missing client credentials, malformed JSON, invalid UTF-8 tokens and mismatched hashes cause refusal. Existing credential bytes and additional valid JSON metadata are preserved. No token format migration or credential rotation is introduced.
+
+Actual scoped Windows evidence is 23 named failures/four controls on frozen `d5770ac`, followed by 27 passes on the R150 patch (paired receipt `49f99609`). This includes interruption between the two auth publications, retry continuity and read-only validation. The base `d5770ac` full Windows run passed 2,396 cases with seven expected skips (receipt `235e86c3`). Its native Linux run remains failed: 2,377 passes, 23 skips and three async cases invalidated by the launcher's disabled plugin loading (receipt `893188d7`, author disposition `2f93f750`). Those failures and original results are preserved; no Linux full pass is claimed.
+
+The successor requires 157 tracked files, 156 manifest entries, 14 app modules and 119 test/support files. Its prospective 2,430-case vectors require Windows 2,423 passes/seven expected skips and native Linux 2,407 passes/23 expected skips, with locked async plugin loading restored for that run. These are requirements, not successor results. Production remains v0.1.6; native Mac/CI, final-source full tests, cross-device workflow, reviews and release approval remain pending. All preparation sections below retain their dated historical meaning.
+
 ## Candidate acceptance and final-source evidence — 2026-10-17
 
 This v0.1.7 candidate is accepted only through external receipts bound to its exact frozen commit, manifest and canonical source map. Source freeze and release approval are separate decisions. Required evidence includes full Windows/native Linux case/status vectors and unchanged source maps; actual 14-app origin/hash imports in a separately identified synthetic process; native dependency/MCP smoke imports; lock, audit and lifecycle checks; final-source integration and fresh reviews; the single five-mode cross-filesystem workflow; and the required Mac/CI/device acceptance. Exact-commit result records remain external so later testing does not require a source edit and another freeze.

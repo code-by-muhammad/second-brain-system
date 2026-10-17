@@ -126,7 +126,7 @@ def test_normal_bootstrap_hands_off_original_arguments_once_before_deploy(tmp_pa
         calls.append((args,kwargs))
         if args[0]=='uv':python.parent.mkdir(parents=True);python.write_bytes(b'prepared only')
         else:
-            assert args==[str(python),str(release/'install.py'),*argv[1:],'--reuse-python',str(python)]
+            assert args==[str(python),'-I',str(release/'install.py'),*argv[1:],'--reuse-python',str(python)]
             if child_fails:raise subprocess.CalledProcessError(23,args)
         return subprocess.CompletedProcess(args,0)
     monkeypatch.setattr(installer.subprocess,'run',run)
@@ -189,7 +189,8 @@ def test_handoff_reuse_flag_terminates_a_simulated_child_without_a_loop(tmp_path
         if args[0]=='uv':python.parent.mkdir(parents=True);python.write_bytes(b'fixture only')
         else:
             saved=sys.argv
-            try:sys.argv=[args[1],*args[2:]];installer.main()
+            assert args[:3]==[str(python),'-I',str(release/'install.py')]
+            try:sys.argv=[args[2],*args[3:]];installer.main()
             finally:sys.argv=saved
         return subprocess.CompletedProcess(args,0)
     monkeypatch.setattr(installer.subprocess,'run',run);before=(tree(home),tree(appdata))

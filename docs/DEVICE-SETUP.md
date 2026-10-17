@@ -1,6 +1,25 @@
 # Second Brain setup and updates on another device
 
-## Current R142 preparation — 2026-10-17
+## Current combined candidate — 2026-10-17
+
+This private v0.1.7 candidate combines the verified authentication recovery, wiki path preflight, maintenance status restoration and isolated software entrypoint fixes. Component tests are scoped evidence. Combined full tests, cross-device workflow, fresh reviews, required native Mac/CI and deployment acceptance remain pending. Production remains v0.1.6. The intended full suite contains 2,455 cases; Windows requires 2,447 passes/eight platform skips and Linux 2,432 passes/23 platform skips. These are requirements, not passing results. The complete source has 160 tracked files, 159 manifest entries, 14 app modules and 122 test/support files. The dated preparations below are historical.
+
+## Historical R153 software-entrypoint preparation — 2026-10-17
+
+**HOLD — source-only successor, not an approved release.** Actual synthetic BEFORE10 recorded five named untracked-module import failures and five clean controls (receipt cd73d1b1). The repair requests isolated Python mode for software verification, fresh installation, updater entry, selected-environment bootstrap and model download. It preserves the two existing cached-installer isolated launches and trusted installed-app sibling imports. The ten-case AFTER, final combined inventory, full tests, reviews and device/release gates remain pending; no final counts are guessed here.
+
+Production remains v0.1.6. All earlier preparation sections below retain their dated historical meaning; none approves this successor for installation.
+
+
+## Historical R150 authentication-recovery preparation — 2026-10-17
+
+**HOLD — source-only successor, not an approved release.** Installation now validates existing client/server authentication before changing runtime or client settings. A missing server hash can be recovered from the existing valid client token; missing client credentials, malformed JSON, invalid UTF-8 tokens and mismatched hashes cause refusal. Existing credential bytes and additional valid JSON metadata are preserved. No token format migration or credential rotation is introduced.
+
+Actual scoped Windows evidence is 23 named failures/four controls on frozen `d5770ac`, followed by 27 passes on the R150 patch (paired receipt `49f99609`). This includes interruption between the two auth publications, retry continuity and read-only validation. The base `d5770ac` full Windows run passed 2,396 cases with seven expected skips (receipt `235e86c3`). Its native Linux run remains failed: 2,377 passes, 23 skips and three async cases invalidated by the launcher's disabled plugin loading (receipt `893188d7`, author disposition `2f93f750`). Those failures and original results are preserved; no Linux full pass is claimed.
+
+The successor requires 157 tracked files, 156 manifest entries, 14 app modules and 119 test/support files. Its prospective 2,430-case vectors require Windows 2,423 passes/seven expected skips and native Linux 2,407 passes/23 expected skips, with locked async plugin loading restored for that run. These are requirements, not successor results. Production remains v0.1.6; native Mac/CI, final-source full tests, cross-device workflow, reviews and release approval remain pending. All preparation sections below retain their dated historical meaning.
+
+## Historical R142 preparation — 2026-10-17
 
 **HOLD.** R142 changes the Windows synchronization command runner; it does not change device roles, shared notes, ownership, MCP configuration or the verified-tag installation procedure below. The Windows runtime receives one additional standard-library app module through the normal installer. POSIX devices receive the same release files but keep the existing `subprocess.run` synchronization path; no new POSIX process-tree guarantee is claimed.
 
@@ -92,8 +111,8 @@ brain_release="$brain_root/releases/v0.1.7"
 gh repo clone code-by-muhammad/second-brain "$brain_vault"
 gh repo clone code-by-muhammad/second-brain-system "$brain_release" -- --branch v0.1.7 --depth 1
 cd "$brain_release"
-uv run --no-project --python 3.12 python -c "from pathlib import Path; import update; print(update.verify(Path.cwd())['version'])"
-uv run --no-project --python 3.12 install.py --root "$brain_root" --vault "$brain_vault" --configure-clients --download-model --install-service
+uv run --no-project --python 3.12 python -I -c "from pathlib import Path; import runpy; print(runpy.run_path(str(Path.cwd()/'update.py'))['verify'](Path.cwd())['version'])"
+uv run --no-project --python 3.12 python -I install.py --root "$brain_root" --vault "$brain_vault" --configure-clients --download-model --install-service
 
 brain_python="$brain_release/.venv/bin/python"
 "$brain_python" "$brain_root/app/brain_cli.py" service start
@@ -114,8 +133,8 @@ $brainRelease = Join-Path $brainRoot 'releases\v0.1.7'
 gh repo clone code-by-muhammad/second-brain $brainVault
 gh repo clone code-by-muhammad/second-brain-system $brainRelease -- --branch v0.1.7 --depth 1
 Set-Location -LiteralPath $brainRelease
-uv run --no-project --python 3.12 python -c "from pathlib import Path; import update; print(update.verify(Path.cwd())['version'])"
-uv run --no-project --python 3.12 install.py --root $brainRoot --vault $brainVault --configure-clients --download-model --install-service
+uv run --no-project --python 3.12 python -I -c "from pathlib import Path; import runpy; print(runpy.run_path(str(Path.cwd()/'update.py'))['verify'](Path.cwd())['version'])"
+uv run --no-project --python 3.12 python -I install.py --root $brainRoot --vault $brainVault --configure-clients --download-model --install-service
 
 $brainDevice = Get-Content -LiteralPath (Join-Path $brainRoot 'device.json') -Raw | ConvertFrom-Json
 $brainCli = Join-Path $brainRoot 'app\brain_cli.py'
@@ -147,14 +166,14 @@ Notes synchronize automatically through the existing per-device maintenance serv
 Software updates are explicit. Read the approved version from the shared system status. For the first upgrade from v0.1.5, **use the verified new v0.1.7 updater**, because the old updater does not contain the rollback and preflight fixes. Download the approved tag into `<runtime>/releases/v0.1.7` with `gh repo clone code-by-muhammad/second-brain-system <candidate directory> -- --branch v0.1.7 --depth 1`. If that directory already exists, verify it and reuse it; do not clone over it or change its files. Use the current Python from `device.json` to verify the candidate manifest using `update.verify(Path(<candidate directory>))` before executing its installer/updater.
 
 ```text
-<candidate v0.1.7 Python> <verified v0.1.7 checkout>/update.py --root <runtime root> --version v0.1.7
+<candidate v0.1.7 Python> -I <verified v0.1.7 checkout>/update.py --root <runtime root> --version v0.1.7
 ```
 
 Before the update command, prepare the verified candidate environment with `uv sync --locked --no-dev --project <verified v0.1.7 checkout> --python 3.12`. Use `<candidate>/.venv/bin/python` on Mac/Linux or `<candidate>/.venv/Scripts/python.exe` on Windows to run the updater and migration dry run. This matters when a v0.1.5 POSIX installation recorded the faulty base interpreter: that old interpreter cannot import the updater dependencies. Manifest verification itself uses only the standard library and can run before environment creation.
 
 Capture/search devices use that command without migration flags. Before dependency preparation or cached Python execution, the updater verifies a standalone Git checkout with an approved GitHub origin, the requested local tag resolving to HEAD, and exact committed index/worktree bytes including the manifest. HTTPS and normal GitHub SSH origins, annotated and lightweight tags are supported. The manifest must describe the entire committed payload. Missing/unverified identity or modified tracked bytes refuse without deleting or replacing the cache; preserve it for inspection. Unrelated untracked files and ignored native environments do not become release payload. The standalone `update.verify(path)` command checks manifest consistency only; the updater additionally checks Git release identity.
 
-An offline cache relies on trusted owner-controlled Git metadata from the earlier approved download: the recorded origin, tag commit, index/worktree and manifest must agree. This is local provenance evidence, not a fresh remote lookup or a signed-tag authenticity guarantee. The updater records this identity in its success result. It prepares native locked dependencies and preflights client settings while the old service remains healthy, serializes the switch against compilation and maintenance, preserves identity/auth/role, and polls authenticated versioned health. Failure restores exact software/device/client snapshots without invoking the old faulty installer; original notes, tokens and SQLite are not rolled back.
+An offline cache relies on trusted owner-controlled Git metadata from the earlier approved download: the recorded origin, tag commit, index/worktree and manifest must agree. This is local provenance evidence, not a fresh remote lookup or a signed-tag authenticity guarantee. The updater records this identity in its success result. Ignored native environments and untracked uv configuration remain owner-controlled; the manifest does not authenticate their contents. Isolated Python mode excludes checkout/caller-directory imports and Python environment injection, but it is not an OS sandbox and does not make an untrusted tool or environment trustworthy. It prepares native locked dependencies and preflights client settings while the old service remains healthy, serializes the switch against compilation and maintenance, preserves identity/auth/role, and polls authenticated versioned health. Failure restores exact software/device/client snapshots without invoking the old faulty installer; original notes, tokens and SQLite are not rolled back.
 
 A designated maintainer upgrading from v0.1.5 or an older release also needs a legacy-publication migration. Its agent must use the candidate Python to run the new checkout's `app/brain_cli.py wiki migrate` with `BRAIN_SYSTEM_ROOT` set to the existing runtime. This defaults to a dry run. Inspect verified and unverified source parts first; a Source note alone is not proof that all parts completed. Then invoke the new updater with `--migrate-wiki --requeue-unverified`. It migrates exact per-part proofs and repairs source navigation while holding the compiler lock, and leaves unproved parts queued for a normal bounded worker batch. The Windows maintainer performs this once; new capture devices do not compile or migrate shared wiki state.
 
@@ -194,6 +213,9 @@ Never replace a healthy runtime by copying folders or running `git pull` inside 
 
 - Tools missing: inspect that client's generated second-brain entry, restart it and check a new session. Test the adapter and authenticated local health before changing settings.
 - Service unavailable: check the per-user startup entry and local service logs. Keep log/source excerpts private; never dump auth files.
+- Windows Git helpers: only an actually signaled synchronization root starts the one-second background-process grace. Remaining owned descendants then enter termination and full lifetime verification before the root result or lock release; the original 90-second execution deadline still wins. Background hook writes are not guaranteed to finish during that grace. Uncertain cleanup keeps the owning pass at attention; do not force-release its locks. If a signing or credential agent must persist, have the owner start/authenticate its official agent outside this command lifetime while preserving the existing signing policy.
+- Git fsmonitor: core.fsmonitor=false is a per-command override for synchronization and staged-object commands routed through brain_git._run_git. It does not rewrite owner Git settings, apply to other clients or claim to cover separate read-only wiki-history operations.
+- Oversized operational logs: a service-*.log above 5,000,000 bytes remains preserved and reports attention on every maintenance pass while it grows. There is no automatic bounded rotation. Stop the registered service, then positively verify that every writer to the exact log, including already-running maintenance/children, has exited. A stop command alone is insufficient proof. Only after verified quiescence, move the exact file with its bytes and permissions into an owner-private dated archive outside the active service-*.log set, then restart and verify new logging and health. If writer identity or cleanup is uncertain, preserve the original and attention; do not truncate/delete/rotate a live log or force-release locks.
 - Search not ready: check local index progress and model download. Do not copy another OS's SQLite/WAL while it is live.
 - Index bootstrap needs attention: have the agent diagnose the private bootstrap log and fix the cause first. With the registered service stopped, it can reset the local `state/index-bootstrap-status.json` marker and start the service to retry. Preserve the actual retrieval database and model cache, then verify indexing and known-source retrieval again.
 - Sync paused: preserve all files and staged changes; inspect the conflict. The service must remain the only sync owner.

@@ -180,6 +180,8 @@ def _validate_existing_claim(page,claim,index):
         context=_bounded_json(claim,sort_keys=True,ensure_ascii=False,allow_nan=False)
         context.encode('utf-8'); s.clean_text(context,2_000_000); _screen_decoded_context(claim)
     except (ValueError,TypeError,RecursionError,UnicodeError): raise WikiIntegrityError(page,index) from None
+    try: s.note_link(claim['source'],page)
+    except (ValueError,TypeError,UnicodeError): raise WikiIntegrityError(page,index,'path') from None
 
 def _validate_existing_claims(page,claims,start_index=0):
     if not isinstance(claims,list): raise WikiIntegrityError(page)
@@ -196,7 +198,9 @@ def _validate_packet_paths(packet,screen_credentials=True):
     for item in packet.get('sources',[])+packet.get('catalog',[])+packet.get('current_pages',[]):
         try:
             item['path'].encode('utf-8'); s.safe_path(item['path'])
-            if screen_credentials: s.clean_text(item['path'],400)
+            if screen_credentials:
+                s.clean_text(item['path'],400)
+                s.note_link(item['path'],BASE+'Index.md')
         except (ValueError,TypeError,UnicodeError,AttributeError):
             if any(item is row for row in packet.get('sources',[])): raise _source_integrity_error(item,'path') from None
             raise WikiIntegrityError(BASE+'Index.md',field='path') from None
@@ -1580,7 +1584,9 @@ def _render_topic(page,packet,ident,result_hash,history=None):
             date=claim['source_revision'].get('date',proof['date'])
         evidence_note='; verified historical Git revision' if proof and proof['mode']=='git-history' else ''
         if not proof: evidence_note='; evidence requires review'
-        rendered.append(f'- **{claim["status"]}; source date {date}{evidence_note}:** {claim["text"]}\n  - Evidence: {s.note_link(claim["source"],rel)} — '+json.dumps(claim['quote'],ensure_ascii=False))
+        try: reference=s.note_link(claim['source'],rel)
+        except (ValueError,TypeError,UnicodeError): raise WikiIntegrityError(rel,index,'path') from None
+        rendered.append(f'- **{claim["status"]}; source date {date}{evidence_note}:** {claim["text"]}\n  - Evidence: {reference} — '+json.dumps(claim['quote'],ensure_ascii=False))
     now=s.stamp()
     info={'date':now[:10],'title':page['title'],'type':'note','tags':['ai-memory','derived','wiki'],
           'wiki_kind':page['category'],'wiki_claims':list(unique.values()),'related':page['related'],
@@ -1598,6 +1604,7 @@ def _serialize_derived(path,info,body):
         raise WikiIntegrityError(path.relative_to(s.VAULT).as_posix(),field='serialization') from None
 
 def _source_note(row,topic_pages):
+    _validate_packet_paths({'sources':[row]})
     target=s.safe_path(BASE+'Sources/'+s.digest(row['path'].encode())[:16]+'.md')
     if target.exists():
         raw,text=_read_derived(target); info=_derived_metadata(target,text); before=s.digest(raw)

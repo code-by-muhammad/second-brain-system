@@ -136,6 +136,26 @@ def clients(root,python,home=None):
         backup(path,root); atomic(path,text)
     return [str(path) for path,_ in plan]
 
+def _auth_recovery_token(root):
+    """Validate existing auth and recover only a missing server hash."""
+    access=root/'state/client-access.json'
+    server=root/'state/access.json'
+    if server.exists() and not access.exists():
+        raise ValueError('Existing server credential has no client credential; refusing to replace it.')
+    if not access.exists(): return None
+    try:
+        data=json.loads(access.read_text(encoding='utf-8'))
+        token=data.get('token') if isinstance(data,dict) else None
+        if not isinstance(token,str) or not token: raise ValueError('Invalid client credential.')
+        expected=hashlib.sha256(token.encode('utf-8')).hexdigest()
+        if server.exists():
+            data=json.loads(server.read_text(encoding='utf-8'))
+            actual=data.get('token_sha256') if isinstance(data,dict) else None
+            if not isinstance(actual,str) or actual!=expected: raise ValueError('Invalid server credential.')
+    except (ValueError,UnicodeError) as exc:
+        raise ValueError('Invalid or mismatched existing authentication; no credentials changed.') from exc
+    return token
+
 def validate(root,vault,python,configure_clients=False):
     if root==vault or root.is_relative_to(vault) or vault.is_relative_to(root):
         raise ValueError('Runtime and vault must be separate, non-nested directories.')
@@ -155,11 +175,13 @@ def validate(root,vault,python,configure_clients=False):
         for existing in (indexed.get('project_root'),project.get('path')):
             if existing and Path(existing).expanduser().resolve()!=vault.resolve():
                 raise ValueError('Existing index targets another vault; create a new runtime and rebuild its local index.')
+    _auth_recovery_token(root)
     if configure_clients: client_plan(root,python)
     return old
 
 def deploy(root,python,vault,role='capture',configure_clients=False):
     old=validate(root,vault,python,configure_clients)
+    token=_auth_recovery_token(root)
     for folder in ('state','logs','models','backups'): private_dir(root/folder)
     device=root/'device.json'
     # Existing role and identity must not change implicitly during an upgrade.
@@ -179,6 +201,7 @@ def deploy(root,python,vault,role='capture',configure_clients=False):
     if not access.exists():
         token=secrets.token_urlsafe(48)
         atomic(access,json.dumps({'token':token})+'\n')
+    if not (root/'state/access.json').exists():
         atomic(root/'state/access.json',json.dumps({'token_sha256':hashlib.sha256(token.encode()).hexdigest()})+'\n')
     for path in (access,root/'state/access.json',device): private(path)
     config=root/'state/config.json'
@@ -216,7 +239,7 @@ def main():
         terminator=child_arguments.index('--') if '--' in child_arguments else len(child_arguments)
         child_arguments[terminator:terminator]=['--reuse-python',str(python)]
         try:
-            child=subprocess.run([str(python),str(REPO/'install.py'),*child_arguments],check=True)
+            child=subprocess.run([str(python),'-I',str(REPO/'install.py'),*child_arguments],check=True)
         except subprocess.CalledProcessError as exc:
             raise SystemExit(exc.returncode) from None
         raise SystemExit(child.returncode)
@@ -227,7 +250,7 @@ def main():
     if args.download_model:
         code='from fastembed import TextEmbedding; TextEmbedding(model_name="BAAI/bge-small-en-v1.5",cache_dir='+repr(str(root/'models'))+',threads=4)'
         env=os.environ.copy(); env.pop('HF_HUB_OFFLINE',None); env['HF_HUB_DISABLE_TELEMETRY']='1'
-        subprocess.run([str(python),'-c',code],env=env,check=True)
+        subprocess.run([str(python),'-I','-c',code],env=env,check=True)
     if args.install_service:
         subprocess.run([str(python),str(root/'app/brain_cli.py'),'service','install'],check=True)
     print(json.dumps(result,indent=2))

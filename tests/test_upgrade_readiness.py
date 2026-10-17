@@ -38,4 +38,4 @@ def test_upgrade_readiness_has_a_bounded_deadline(tmp_path,monkeypatch):
     old_start=next(i for i,c in enumerate(calls) if c[-2:]==['service','start'] and c[0]=='old-python')
     assert new_stop<restore<old_start
     assert health_calls==['0.1.1','0.1.0']
-    assert not any(len(c)>1 and c[1]==str(previous/'install.py') for c in calls)
+    assert not any(str(previous/'install.py') in c for c in calls)

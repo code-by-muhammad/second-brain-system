@@ -311,12 +311,14 @@ def maintenance(sync=True):
             save_status(status)
             try:
                 from brain_git import sync as sync_git, GitSyncError, cleanup_reporting
+                status_before_git=status['status']
                 def report_git_cleanup_wait():
                     status.update(status='needs attention',stage='Git cleanup pending',
                         git='needs attention: Git process cleanup is not yet verified; this maintenance pass still owns its locks.')
                     save_status(status)
                 with cleanup_reporting(report_git_cleanup_wait):
                     status['git']=sync_git()
+                status['status']=status_before_git
             except GitSyncError as e:
                 try: status['git']='needs attention: '+_diagnostic_text(str(e))
                 except (ValueError,UnicodeError): status['git']='needs attention: Git synchronization requires local review; diagnostic withheld'

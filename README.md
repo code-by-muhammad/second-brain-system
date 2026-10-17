@@ -1,12 +1,18 @@
 # Shared Second Brain
 
+## Current combined candidate — 2026-10-17
+
+This private v0.1.7 candidate combines the verified authentication recovery, wiki path preflight, maintenance status restoration and isolated software entrypoint fixes. Component tests are scoped evidence. Combined full tests, cross-device workflow, fresh reviews, required native Mac/CI and deployment acceptance remain pending. Production remains v0.1.6. The intended full suite contains 2,455 cases; Windows requires 2,447 passes/eight platform skips and Linux 2,432 passes/23 platform skips. These are requirements, not passing results. The complete source has 160 tracked files, 159 manifest entries, 14 app modules and 122 test/support files. The dated preparations below are historical.
+
 Private, local Obsidian retrieval plus an evidence-linked Karpathy-style wiki. Same Python core and commands on Windows, macOS and Linux. This repository contains software only; the private `second-brain` repository contains notes and derived wiki pages.
 
 ## Candidate acceptance and source contract — 2026-10-17
 
+At R153 source-only preparation, the entrypoint repair follows actual BEFORE10 evidence: five named untracked-module import failures and five clean controls (receipt cd73d1b1). Its AFTER and the final combined source/release gates remain pending. Software entrypoints request isolated Python mode; this does not authenticate an untrusted interpreter, environment or uv configuration.
+
 This source is a v0.1.7 release candidate. Acceptance is established by external receipts bound to the exact frozen commit, manifest and source map: combined Windows/native Linux checks, actual app-import origins, source/reference and operational safety evidence, the single five-mode cross-filesystem workflow, final-source integration/reviews and the required platform/device gates. A passing component receipt covers only its recorded source scope. These instructions and the preparation history below do not themselves approve installation or deployment.
 
-The source preserves ordinary wikilinks and displays conservative exceptional source selectors as canonical code text, preserves potentially live operational logs with visible attention and a disk-growth tradeoff, disables fsmonitor only for service Git commands, and retains the original assertions with corrected test transport delegates. Conditional signing requires an explicit reviewed disposition in the external evidence; no signing-policy waiver is implied. The proposed payload has 156 source files, 155 manifest entries, 14 app modules and 118 test/support files. Its exact full-case vectors require 2,403 cases: Windows 2,396 passed/seven expected skips; native Linux 2,380 passed/23 expected skips. Those numbers are gate requirements, not embedded passing results.
+The source preserves ordinary wikilinks and displays conservative exceptional source selectors as canonical code text, preserves potentially live operational logs with visible attention and a disk-growth tradeoff, disables fsmonitor for synchronization and staged-object commands routed through brain_git._run_git, and retains the original assertions with corrected test transport delegates. Conditional signing requires an explicit reviewed disposition in the external evidence; no signing-policy waiver is implied. Final inventory and exact-case requirements must be derived from the complete eventual source assembly and its freeze/run receipts. Earlier counts below belong only to their dated preparations.
 
 At preparation on 2026-10-17, production remained v0.1.6 and PRIMARY remained 0ed. The following explicitly historical section describes that preparation stage; its source-only/unexecuted statements do not describe later exact-commit receipts.
 
@@ -15,6 +21,12 @@ The active final strategy is one exact-vector full Windows run, one exact-vector
 The Windows Git boundary starts a one-second background-process grace only after the native Git root handle is signaled. Remaining owned descendants then enter cleanup; the original root result may be returned only after the existing complete lifetime verifier authorizes lock release. The 90-second command deadline and ownership/attention holds remain. An exit code alone cannot start this grace. Cached release reuse checks the requested local tag, approved repository origin, HEAD, index and raw Git payload before cached Python or dependency preparation. Both cached installer launches use isolated Python mode so unrelated untracked checkout modules cannot become installer imports.
 
 At successor preparation on 2026-10-17, grace Win20 recorded 19 passes and one expected skip (6e231423); R148 recorded seven named BEFORE failures/eight controls and 15 AFTER passes (86dd2317); R149 recorded two BEFORE import-marker failures and two AFTER passes (b0b800bf). These are scoped component results, not full successor results. The production-budget signed cycles individually synchronized in 2.312/8.234 seconds with signaled roots, signatures, exact remote bytes and three native owned lock releases per cycle. Root accepted the narrow grace component with independent review on that basis. The overall auxiliary harness remains unaccepted because later PermissionErrors and outer cleanup coverage are separately unresolved. Exact accepted per-command evidence, independent review, an explicit root disposition and separately verified safe outer cleanup must authorize any later freeze; no aggregate harness pass is claimed.
+
+## Historical R147 final-v3 requirements — 2026-10-17
+
+The proposed payload has 156 source files, 155 manifest entries, 14 app modules and 118 test/support files. Its exact full-case vectors require 2,403 cases: Windows 2,396 passed/seven expected skips; native Linux 2,380 passed/23 expected skips. Those numbers are gate requirements, not embedded passing results.
+
+These were the requirements of the d5770ac preparation. They do not describe the later R150/R153 successor inventory or claim that its native Linux/full-platform gates passed.
 
 ## Historical R147 combined v2 source-only preparation — 2026-10-17
 
@@ -56,8 +68,8 @@ gh repo clone code-by-muhammad/second-brain ~/Documents/Second-Brain
 gh repo clone code-by-muhammad/second-brain-system ~/Code/second-brain-system
 cd ~/Code/second-brain-system
 git checkout v0.1.7
-uv run --no-project --python 3.12 python -c "from pathlib import Path; import update; print(update.verify(Path.cwd())['version'])"
-uv run --no-project --python 3.12 install.py --vault "$HOME/Documents/Second-Brain" --configure-clients --download-model --install-service
+uv run --no-project --python 3.12 python -I -c "from pathlib import Path; import runpy; print(runpy.run_path(str(Path.cwd()/'update.py'))['verify'](Path.cwd())['version'])"
+uv run --no-project --python 3.12 python -I install.py --vault "$HOME/Documents/Second-Brain" --configure-clients --download-model --install-service
 ```
 
 If the vault already exists, use its actual path instead of cloning again. Default runtime location is `~/.local/share/second-brain`; override with `--root`. Default role is **capture/search**. Linux startup requires a working systemd user session. macOS startup uses a per-user LaunchAgent. Both depend on the user session; sleep/offline devices catch up after they return.
@@ -73,7 +85,7 @@ The first model download comes from the FastEmbed-supported BAAI embedding model
 The current installation uses `E:\Second-Brain-System` and the existing vault `E:\Second-Brain`. New Windows installations use the same installer, with their own actual paths:
 
 ```powershell
-uv run --no-project --python 3.12 install.py --vault 'E:\Second-Brain' --root 'E:\Second-Brain-System' --configure-clients --download-model --install-service
+uv run --no-project --python 3.12 python -I install.py --vault 'E:\Second-Brain' --root 'E:\Second-Brain-System' --configure-clients --download-model --install-service
 ```
 
 Do not add `--role maintainer` on another device. Writer ownership must be explicitly handed off first.
@@ -109,7 +121,7 @@ Keep one live sync transport. Syncthing is not enabled by this release. GitHub c
 Notes sync does not upgrade running software. Install an explicit release using the verified candidate Python:
 
 ```text
-<candidate v0.1.7 Python> <verified v0.1.7 checkout>/update.py --root <runtime> --version v0.1.7
+<candidate v0.1.7 Python> -I <verified v0.1.7 checkout>/update.py --root <runtime> --version v0.1.7
 ```
 
 For the initial v0.1.5 upgrade, bootstrap the verified v0.1.7 checkout as described in [the device guide](docs/DEVICE-SETUP.md); running the old updater would retain its old rollback behavior. The updater clones only the owner's private repository, verifies the release file hashes, creates a native environment and preflights client settings before stopping the service, preserves tokens/paths/role, and polls authenticated MCP health for the expected version. Failed upgrades restore exact app/device/client snapshots and verify former health without executing the old installer. The designated maintainer explicitly reviews and applies legacy receipt migration under the compiler lock; capture devices omit that option. Hashes detect accidental corruption; they do not substitute for repository access controls or independent code review.
