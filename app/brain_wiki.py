@@ -696,8 +696,8 @@ def source_policy():
             return {'path':SOURCE_POLICY,'present':False,'sha256':None,'rules_sha256':None,
                     'version':1,'exclude_paths':[],'exclude_prefixes':[]}
         if not path.is_file() or path.stat().st_size>131072: raise ValueError('policy must be a regular Markdown file no larger than 128 KiB')
-        raw=path.read_bytes()
-        if len(raw)>131072: raise ValueError('policy exceeds 128 KiB')
+        with path.open('rb') as stream: raw=stream.read(131073)
+        if len(raw)>131072: raw=None; raise ValueError('policy exceeds 128 KiB')
         lines=normalized(raw.decode('utf-8-sig')).splitlines()
         fences=[i for i,line in enumerate(lines) if re.match(r'^\s*(?:```|~~~)',line)]
         if len(fences)!=2 or lines[fences[0]]!='```json' or lines[fences[1]]!='```':
@@ -771,9 +771,10 @@ def inventory(include_excluded=False,policy=None):
             if folded.startswith('02-areas/ai-memory/') or (folded.startswith('01-projects/') and folded.endswith('/ai-memory.md')): continue
             if not include_excluded and _policy_excluded(rel,policy): continue
             try:
+                s._safe_discovered_path(p)
                 if p.stat().st_size>2_000_000: continue
-                s.safe_path(rel); s.clean_text(rel,400)
-                raw=p.read_bytes(); text=normalized(raw.decode('utf-8-sig')); s.clean_text(text,2_000_000)
+                s.clean_text(rel,400)
+                raw=s._note_bytes(p); text=normalized(raw.decode('utf-8-sig')); s.clean_text(text,2_000_000)
                 info=meta(text)
                 if 'ai-capture' in _tags(info.get('tags')) and info.get('project')=='Second Brain': continue
                 chunks=[text[i:i+24000] for i in range(0,len(text),23000)] or ['']
@@ -1172,7 +1173,7 @@ def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
             ident=_json_hash({'legacy_batch_id':batch_id,'parts':entries})[:24]
             target=s.safe_path(BASE+'Receipts/'+ident+'.md')
             if target.exists():
-                existing=meta(target.read_text(encoding='utf-8')).get('wiki_receipt',{})
+                existing=meta(_read_derived(target)[1]).get('wiki_receipt',{})
                 if existing.get('parts')!=entries: raise ValueError('Legacy migration receipt collision.')
                 continue
             if not dry_run: written.append(s._write(target,_receipt_note(ident,entries,'legacy-receipt-migration'),'wiki_receipt_migration'))

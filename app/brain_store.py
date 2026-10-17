@@ -38,6 +38,20 @@ def safe_path(relative: str) -> Path:
     return p
 
 
+def _safe_discovered_path(path: Path) -> Path:
+    """Check the actual enumerated original before I/O; preserve separator aliases."""
+    relative=path.relative_to(VAULT)
+    safe_path(relative.as_posix())
+    target=VAULT
+    for part in relative.parts:
+        target=target/part
+        if target.is_symlink() or os.path.isjunction(target):
+            raise ValueError('Linked/reparse paths are refused.')
+    if not path.resolve().is_relative_to(VAULT):
+        raise ValueError('Path leaves the vault.')
+    return path
+
+
 def note_link(relative: str, from_path: str) -> str:
     """Preserve ordinary links; display exceptional source paths without an anchor."""
     for value in (relative,from_path):
@@ -189,7 +203,7 @@ def fresh_search(query:str,limit:int=6):
     found=[]
     for p in VAULT.rglob('*.md',case_sensitive=False):
         try:
-            rel=p.relative_to(VAULT).as_posix(); safe_path(rel)
+            rel=p.relative_to(VAULT).as_posix(); _safe_discovered_path(p)
             if p.stat().st_size>NOTE_LIMIT: continue
             text=_note_bytes(p).decode('utf-8-sig').replace('\r\n','\n').replace('\r','\n'); low=text.lower()
             title=p.stem.lower()
