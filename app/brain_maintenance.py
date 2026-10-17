@@ -53,7 +53,7 @@ def _age_only_review(row):
 def health_status(path,review_limit=20):
     """Screen even old cached fields; keep the full local receipt unchanged."""
     try: status=json.loads(path.read_text(encoding='utf-8'))
-    except (OSError,ValueError): return {'status':'needs attention','error':'Maintenance status is unavailable or invalid.'}
+    except (OSError,ValueError,RecursionError): return {'status':'needs attention','error':'Maintenance status is unavailable or invalid.'}
     if not isinstance(status,dict): return {'status':'needs attention','error':'Maintenance status is invalid.'}
     public={}
     for key in ('at','status','stage','git','aggregation','error_type','error'):

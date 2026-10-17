@@ -1,6 +1,14 @@
 # v0.1.7 — portable evidence and selective wiki sources
 
-## Latest R133 v3 static preparation — 2026-10-17
+## Current R138–R141 preparation — 2026-10-17
+
+**HOLD.** This candidate adds owned asynchronous maintenance, bounded pinned ordinary staged-object reads, capture source_app producer/consumer alignment, and contained optional health-cache failures. The prior frozen193 full runs were nonpassing; source193 and every earlier receipt remain preserved. Actual scoped results bind their recorded private source only. Final combined full Windows/native Linux checks, exact replay/binders, fresh authenticated integration and final-source reviews remain required. Native Mac, hosted CI, tag, deployment and physical-client/reboot acceptance remain pending. Production v0.1.6 and PRIMARY0ed remain unchanged.
+
+The final critical maintenance regression uses a qualified base interpreter/filelock path to avoid the Windows venv redirector PID assumption. Its original v1 Windows failure is fixture-invalid; native v1 observed the actual direct-parent timeout/lock-release defect. Existing supervisor and Git fixture transports retain their case identities/oracles; the authenticated MCP health case is strengthened with seven real health calls. These qualifications are not native process-tree cleanup claims.
+
+Static targets are148 tracked files/147 manifest entries/111 test-support files and2316 full cases. Replay requires746 executions/734 distinct contracts/19 aliases; the exact-ID binder requires72 families/1894 complete cases/2076 selected identities. These counts are requirements, not passing results. Earlier sections below retain their dated source-stage meaning.
+
+## Historical R133 v3 static preparation — 2026-10-17
 
 **HOLD. At this static preparation stage (2026-10-17T04:09:05.172669+00:00), this revised source is prepared for review; actual R133 v3 scoped evidence and final combined acceptance evidence remain pending.** Consult the current shared Second-Brain-System page and actual dated receipts for later state. Production remains v0.1.6 and PRIMARY remains 0ed unchanged. The previous v2 candidate, its proof12d5/map9ebd and the sealed original coalescing folder remain preserved.
 

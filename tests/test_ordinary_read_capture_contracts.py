@@ -100,10 +100,14 @@ def watch_read(monkeypatch, path, maximum=LIMIT + 1):
 
 
 def fake_sync_git(monkeypatch, expected_text):
-    """Reach real sync validation; every Git response is local deterministic data."""
+    """Reach real validation with a pinned, bounded synthetic staged-object transport."""
     calls = []
+    added = False
+    oid = 'a' * 40
+    encoded = expected_text.encode('utf-8')
 
     def run(command, **kwargs):
+        nonlocal added
         assert command[:2] == ['git', '--literal-pathspecs']
         args = command[4:]
         calls.append(args)
@@ -112,13 +116,21 @@ def fake_sync_git(monkeypatch, expected_text):
         elif args and args[0] == 'diff':
             output = ''
         elif args == ['ls-files', '--stage', '-z']:
-            output = ''
+            output = '100644 ' + oid + ' 0\t01-Projects/Synthetic.md\0' if added else ''
         elif args == ['ls-files', '--modified', '--others', '--exclude-standard', '-z']:
             output = '01-Projects/Synthetic.md\0'
         elif args and args[0] == 'add':
+            added = True
             output = ''
-        elif args == ['show', ':01-Projects/Synthetic.md']:
-            output = expected_text
+        elif args == ['cat-file', '-s', oid]:
+            assert kwargs.get('stdout') == subprocess.PIPE and kwargs.get('stderr') == subprocess.DEVNULL
+            assert kwargs['env']['GIT_ALLOW_PROTOCOL'] == '' and kwargs['env']['GIT_NO_LAZY_FETCH'] == '1'
+            return subprocess.CompletedProcess(command, 0, str(len(encoded)).encode() + b'\n', b'')
+        elif args == ['cat-file', 'blob', oid]:
+            assert kwargs.get('stdout') not in (None, subprocess.PIPE)
+            kwargs['stdout'].write(encoded)
+            kwargs['stdout'].flush()
+            return subprocess.CompletedProcess(command, 0, None, None)
         elif args == ['status', '--porcelain']:
             output = '?? synthetic-unrelated.txt\n'
         else:

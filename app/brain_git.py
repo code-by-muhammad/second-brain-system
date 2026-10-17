@@ -1,6 +1,7 @@
 """Serialize index/worktree changes; let captures proceed during Git network I/O."""
 import codecs
 import hashlib
+import io
 import json
 import os
 import re
@@ -158,6 +159,40 @@ def _archive_blob(vault,relative,entry,raw):
     except ValueError as exc: raise _archive_failure(relative,str(exc)) from None
     except (OSError,subprocess.TimeoutExpired): raise _archive_failure(relative,'blob') from None
 
+def _ordinary_blob(vault,relative,entry):
+    """Bound staged content before allocating decoded text; retain character semantics.
+
+    A permitted UTF-8 character needs at most four raw bytes. Universal newline
+    conversion cannot increase that bound (CRLF uses two bytes for one character).
+    Size-check the pinned, local object before spooling at most that bounded raw
+    content to disk; read only the decoded capacity plus one sentinel character.
+    """
+    try:
+        mode,oid,stage=entry.split()
+        if mode not in ('100644','100755') or stage!='0' or not re.fullmatch(r'[a-f0-9]{40}|[a-f0-9]{64}',oid):
+            raise ValueError('blob')
+        env=os.environ.copy()
+        env.update(GIT_ALLOW_PROTOCOL='',GIT_NO_LAZY_FETCH='1',GIT_TERMINAL_PROMPT='0',GIT_NO_REPLACE_OBJECTS='1')
+        command=['git','--literal-pathspecs','-C',str(vault),'cat-file']
+        result=subprocess.run([*command,'-s',oid],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=env,timeout=90)
+        if result.returncode or len(result.stdout)>32 or not re.fullmatch(rb'[0-9]+\n?',result.stdout): raise ValueError('blob')
+        size=int(result.stdout)
+        if size>4*NOTE_CHARACTER_LIMIT: raise ValueError('size')
+        with tempfile.TemporaryFile(mode='w+b') as stream:
+            result=subprocess.run([*command,'blob',oid],stdout=stream,stderr=subprocess.DEVNULL,env=env,timeout=90)
+            if result.returncode or os.fstat(stream.fileno()).st_size!=size: raise ValueError('blob')
+            stream.seek(0)
+            with io.TextIOWrapper(stream,encoding='utf-8',newline=None) as decoded:
+                return decoded.read(NOTE_CHARACTER_LIMIT+1)
+    except UnicodeError:
+        raise GitSyncError('Note '+_note_locator(relative)+' cannot be read as UTF-8; original preserved.') from None
+    except ValueError as exc:
+        reason='invalid characters or note exceeds the allowed size' if str(exc)=='size' else 'staged note could not be verified locally'
+        raise GitSyncError('Note '+_note_locator(relative)+' blocks sync: '+reason+'. Original preserved.') from None
+    except (OSError,subprocess.TimeoutExpired):
+        raise GitSyncError('Note '+_note_locator(relative)+' blocks sync: staged note could not be verified locally. Original preserved.') from None
+
+
 def sync(vault=None):
     vault=Path(vault or s.VAULT)
     def git(*args,check=True,input=None):
@@ -250,7 +285,9 @@ def sync(vault=None):
                         if rel in archives:
                             if rel not in owned: raise _archive_failure(rel,'blob')
                             _archive_blob(vault,rel,owned[rel],archives[rel])
-                        else: validate_note(rel,git('show',':'+rel).stdout)
+                        else:
+                            if rel not in owned: raise GitSyncError('Note '+_note_locator(rel)+' blocks sync: staged note could not be verified locally. Original preserved.')
+                            validate_note(rel,_ordinary_blob(vault,rel,owned[rel]))
                     changed=staged_paths()
                     if changed-set(owned):
                         raise GitSyncError('Other staged changes arrived during sync; user staging preserved for review.')

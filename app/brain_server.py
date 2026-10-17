@@ -124,7 +124,11 @@ def brain_health() -> dict:
         from brain_maintenance import health_status
         health['maintenance']=health_status(p)
     p=store.STATE/'index-bootstrap-status.json'
-    if p.exists(): health['initial_index_validation']=json.loads(p.read_text())
+    if p.exists():
+        try: initial_index=json.loads(p.read_text())
+        except (OSError,ValueError,RecursionError): initial_index=None
+        health['initial_index_validation']=initial_index if isinstance(initial_index,dict) else {
+            'status':'needs attention','error':'Initial index status is unavailable or invalid; inspect local logs.'}
     try:
         import sqlite3
         with sqlite3.connect((store.STATE/'memory.db').resolve().as_uri()+'?mode=ro',uri=True,timeout=2) as conn:

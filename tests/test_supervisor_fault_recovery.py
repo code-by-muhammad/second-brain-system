@@ -55,6 +55,12 @@ def test_actual_supervisor_recovery_keeps_owned_children(brain, monkeypatch, lab
     class Process:
         def __init__(self, command, **kwargs):
             name = Path(command[1]).name
+            # R138 transport qualification only: preserve every old oracle.
+            if name == 'brain_maintenance.py':
+                maintenance(command, **kwargs)
+                self.pid = 9001
+                self.name = name
+                return
             assert name in ('brain_server.py', 'brain_index_bootstrap.py')
             assert kwargs['env'] == {}
             self.pid = 1001 + len(processes)
@@ -62,7 +68,7 @@ def test_actual_supervisor_recovery_keeps_owned_children(brain, monkeypatch, lab
             processes.append(self)
 
         def poll(self):
-            return None
+            return 0 if self.name == 'brain_maintenance.py' else None
 
     def sleep(seconds):
         assert seconds in (10, 20)

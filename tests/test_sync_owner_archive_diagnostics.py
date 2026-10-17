@@ -161,11 +161,12 @@ def test_every_git_error_screens_raw_credential_like_path_before_json_format(bra
     payload={'utf8':b'\xffinvalid','nul':b'ordinary\x00invalid','credential':b'secret: '+b'a'*16,'size':b'a'*(CHARACTERS+1),'read-error':b'ordinary','linked':b'ordinary'}[branch]
     path.write_bytes(payload)
     if branch=='read-error':
-        original=Path.read_text
+        original=Path.open
         def failed_read(self,*args,**kwargs):
-            if self==path:raise OSError('Synthetic unavailable note.')
+            mode=args[0] if args else kwargs.get('mode','r')
+            if self==path and mode=='r' and kwargs.get('encoding')=='utf-8':raise OSError('Synthetic unavailable note.')
             return original(self,*args,**kwargs)
-        monkeypatch.setattr(Path,'read_text',failed_read)
+        monkeypatch.setattr(Path,'open',failed_read)
     if branch=='linked':
         original=syncer.os.path.isjunction
         monkeypatch.setattr(syncer.os.path,'isjunction',lambda p:Path(p)==a/'01-Projects' or original(p))

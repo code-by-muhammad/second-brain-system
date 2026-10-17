@@ -90,9 +90,10 @@ def _write(p:Path,text:str,kind:str,expected_sha256:str|None=None):
 def capture(event_id:str,title:str,outcome:str,source_app:str,source_reference:str,
             project:str='',decisions:list[str]|None=None,next_steps:list[str]|None=None,
             evidence_paths:list[str]|None=None):
-    for x in (event_id,title,outcome,source_app,source_reference,project): clean_text(x)
-    if not event_id or len(event_id)>180 or not title.strip() or not outcome.strip() or not source_reference.strip():
-        raise ValueError('Stable event_id, title, outcome and source_reference are required.')
+    for x in (event_id,title,outcome,source_reference,project): clean_text(x)
+    clean_text(source_app,2000)
+    if not event_id or len(event_id)>180 or not title.strip() or not outcome.strip() or not source_app or not source_reference.strip():
+        raise ValueError('Stable event_id, title, outcome, source_app and source_reference are required.')
     if any(x in event_id for x in ('\r','\n','-->')): raise ValueError('Invalid capture marker.')
     if len(title)>180 or len(project)>180: raise ValueError('Title/project too long.')
     decisions=decisions or []; next_steps=next_steps or []; evidence_paths=evidence_paths or []

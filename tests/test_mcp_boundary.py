@@ -37,6 +37,19 @@ async def test_authenticated_mcp_and_safe_writes(tmp_path):
                 assert {tool.name for tool in await c.list_tools()}=={'brain_context','brain_search','brain_read','brain_capture','brain_update_current','brain_health'}
                 context=(await c.call_tool('brain_context',{})).data
                 assert Path(context['vault'])==vault
+                # R141: exercise the registered/authenticated health tool itself.
+                health=(await c.call_tool('brain_health',{})).data
+                assert health['status']=='running' and health['version']=='0.1.7'
+                for filename,key in [('maintenance-status.json','maintenance'),('index-bootstrap-status.json','initial_index_validation')]:
+                    cache=state/filename
+                    for raw in (b'{',b'[]'):
+                        cache.write_bytes(raw)
+                        health=(await c.call_tool('brain_health',{})).data
+                        assert health['status']=='running' and health[key]['status']=='needs attention'
+                        assert cache.read_bytes()==raw
+                    cache.write_text(json.dumps({'status':'completed' if key=='maintenance' else 'verified'}),encoding='utf-8')
+                    health=(await c.call_tool('brain_health',{})).data
+                    assert health[key]['status']==('completed' if key=='maintenance' else 'verified')
                 args={'event_id':'isolated-mcp-milestone','title':'Synthetic test','outcome':'Synthetic marker QUARTZ-57321.',
                       'source_app':'CI','source_reference':'synthetic disposable fixture'}
                 first=(await c.call_tool('brain_capture',args)).data
