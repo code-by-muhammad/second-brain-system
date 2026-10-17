@@ -137,7 +137,7 @@ def fake_sync_git(monkeypatch, expected_text):
             raise AssertionError('Unapproved synthetic Git operation: ' + repr(args))
         return subprocess.CompletedProcess(command, 0, output, '')
 
-    monkeypatch.setattr(g.subprocess, 'run', run)
+    monkeypatch.setattr(g, '_run_git', run)
     return calls
 
 

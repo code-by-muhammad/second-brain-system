@@ -1,6 +1,14 @@
 # v0.1.7 — portable evidence and selective wiki sources
 
-## Current R138–R141 preparation — 2026-10-17
+## Current R142 preparation — 2026-10-17
+
+**HOLD.** R142 follows frozen source `23b9b77` and adds a Windows-specific Git command boundary. Each synchronization command has a 90-second execution deadline, file-backed stdin/stdout/stderr and an atomically assigned private Job. Completion requires retained process handles to be signaled, followed by fresh Job accounting that covers every observed lifetime. An empty active-process count or an exit code alone is insufficient.
+
+On timeout, cleanup keeps the Job and the caller's locks until termination is verified. Missing birth notifications, uncertain process identity or incomplete lifetime coverage can instead leave the owning pass at `needs attention` / `Git cleanup pending`. This is an operator-attention hold, not a promise that locks are released after 90 seconds. Git terminal and Git Credential Manager prompts are disabled for synchronization; credentials must already be available. POSIX synchronization retains its existing `subprocess.run` routing; this Windows repair establishes no new POSIX process-tree guarantee.
+
+The planned freeze has 150 tracked source files, 149 manifest entries and 112 test/support files. Its full collection target is 2,333 cases: the prior 2,316 identities plus 17 R142 cases. These are preparation requirements, not passing results. Scoped and final source-bound checks, reviews and the existing installation/platform gates remain required; production v0.1.6 and PRIMARY0ed remain unchanged. Earlier sections retain their historical source-stage meaning.
+
+## Historical R138–R141 preparation — 2026-10-17
 
 **HOLD.** This candidate adds owned asynchronous maintenance, bounded pinned ordinary staged-object reads, capture source_app producer/consumer alignment, and contained optional health-cache failures. The prior frozen193 full runs were nonpassing; source193 and every earlier receipt remain preserved. Actual scoped results bind their recorded private source only. Final combined full Windows/native Linux checks, exact replay/binders, fresh authenticated integration and final-source reviews remain required. Native Mac, hosted CI, tag, deployment and physical-client/reboot acceptance remain pending. Production v0.1.6 and PRIMARY0ed remain unchanged.
 

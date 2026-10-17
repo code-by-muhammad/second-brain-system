@@ -59,7 +59,7 @@ def test_operational_merge_error_is_not_reported_as_a_conflict(brain,tmp_path,mo
     def injected(cmd,**kwargs):
         if 'merge-tree' in cmd: return subprocess.CompletedProcess(cmd,128,'','synthetic operational failure')
         return native(cmd,**kwargs)
-    monkeypatch.setattr(syncer.subprocess,'run',injected)
+    monkeypatch.setattr(syncer, '_run_git', injected)
     with pytest.raises(syncer.GitSyncError,match='preflight failed.*128'):
         syncer.sync(b)
     assert not git(b,'status','--porcelain').strip()
@@ -70,7 +70,7 @@ def test_unsupported_git_has_a_clear_diagnostic_before_mutation(brain,tmp_path,m
     def old_git(cmd,**kwargs):
         calls.append(cmd)
         return subprocess.CompletedProcess(cmd,0,'git version 2.34.1\n','')
-    monkeypatch.setattr(syncer.subprocess,'run',old_git)
+    monkeypatch.setattr(syncer, '_run_git', old_git)
     with pytest.raises(syncer.GitSyncError,match=r'Git >= 2\.38'): syncer.sync(a)
     assert len(calls)==1 and calls[0][-1]=='--version'
 
@@ -96,7 +96,7 @@ def test_large_windows_path_list_uses_nul_stdin(brain,tmp_path,monkeypatch):
             assert '--pathspec-from-file=-' in cmd and '--pathspec-file-nul' in cmd
             assert len(subprocess.list2cmdline(cmd))<1000
         return native(cmd,**kwargs)
-    monkeypatch.setattr(syncer.subprocess,'run',traced)
+    monkeypatch.setattr(syncer, '_run_git', traced)
     assert syncer.sync(a)=='synced'
     assert len(additions)==1 and len(additions[0][1])>32767
     assert len(git(a,'ls-files','01-Projects').splitlines())==341
@@ -117,7 +117,7 @@ def test_network_does_not_hold_writer_but_merge_and_index_stages_do(brain,tmp_pa
             action=next((name for name in ('add','commit','fetch','merge','push') if name in cmd),None)
             if action: observed[action]=pool.submit(writer_available,state).result(timeout=2)
             return native(cmd,**kwargs)
-        monkeypatch.setattr(syncer.subprocess,'run',traced)
+        monkeypatch.setattr(syncer, '_run_git', traced)
         assert syncer.sync(b)=='synced'
     assert observed=={'add':False,'commit':False,'fetch':True,'merge':False,'push':True}
 
@@ -130,7 +130,7 @@ def test_real_capture_succeeds_during_network_wait(brain,tmp_path,monkeypatch,ne
         if network_stage in cmd and not captured:
             captured.append(store.capture('during-'+network_stage,'Synthetic capture','Saved during network I/O.','test','synthetic fixture'))
         return native(cmd,**kwargs)
-    monkeypatch.setattr(syncer.subprocess,'run',traced)
+    monkeypatch.setattr(syncer, '_run_git', traced)
     outcome=syncer.sync(a)
     assert captured[0]['status']=='saved'
     assert (a/captured[0]['path']).is_file()

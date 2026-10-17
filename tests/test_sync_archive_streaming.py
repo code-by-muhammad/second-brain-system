@@ -398,7 +398,7 @@ def _intercept_first_size(monkeypatch, action):
                 return override
         return original(command, *args, **kwargs)
 
-    monkeypatch.setattr(subprocess, "run", intercept)
+    monkeypatch.setattr(brain_git, '_run_git', intercept)
     return lambda: fired
 
 
@@ -500,7 +500,7 @@ def test_actual_owned_blob_read_is_spooled_local_only_and_failures_rollback(brai
                     return subprocess.CompletedProcess(command, 0)
         return native(command, *args, **kwargs)
 
-    monkeypatch.setattr(subprocess, "run", intercept)
+    monkeypatch.setattr(brain_git, '_run_git', intercept)
     before = _git(a, "rev-parse", "HEAD")
     if failure is None:
         assert brain_git.sync(a) == "synced"

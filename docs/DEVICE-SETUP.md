@@ -1,6 +1,14 @@
 # Second Brain setup and updates on another device
 
-## Current R138–R141 preparation — 2026-10-17
+## Current R142 preparation — 2026-10-17
+
+**HOLD.** R142 changes the Windows synchronization command runner; it does not change device roles, shared notes, ownership, MCP configuration or the verified-tag installation procedure below. The Windows runtime receives one additional standard-library app module through the normal installer. POSIX devices receive the same release files but keep the existing `subprocess.run` synchronization path; no new POSIX process-tree guarantee is claimed.
+
+On Windows, each synchronization Git command has a 90-second execution deadline and uses temporary files for stdin/stdout/stderr. The owning pass releases its locks only after actual retained process handles are signaled and fresh Job accounting verifies complete lifetime coverage. If that evidence is unavailable, health can show `needs attention` with stage `Git cleanup pending`; the pass deliberately keeps ownership while retrying verification. The 90-second command deadline does not guarantee lock release after 90 seconds. Preserve local changes and diagnostic evidence, have the agent inspect the owning pass, and do not run competing synchronization or force-release locks merely to clear this attention state. Git/Git Credential Manager prompts are disabled in synchronization, so complete any necessary official login interactively on that device before retrying.
+
+The planned release inventory is 150 tracked files / 149 manifest entries / 112 test-support files, with 2,333 full case identities (2,316 prior + 17 R142). These are pending freeze and acceptance targets, not a claim that any device or final release already passed. Production v0.1.6 and PRIMARY0ed remain unchanged; use the commands below only after the exact release and manifest are approved. Earlier preparation sections are historical.
+
+## Historical R138–R141 preparation — 2026-10-17
 
 **HOLD.** This candidate adds owned asynchronous maintenance, bounded pinned ordinary staged-object reads, capture source_app producer/consumer alignment, and contained optional health-cache failures. The prior frozen193 full runs were nonpassing; source193 and every earlier receipt remain preserved. Actual scoped results bind their recorded private source only. Final combined full Windows/native Linux checks, exact replay/binders, fresh authenticated integration and final-source reviews remain required. Native Mac, hosted CI, tag, deployment and physical-client/reboot acceptance remain pending. Production v0.1.6 and PRIMARY0ed remain unchanged.
 

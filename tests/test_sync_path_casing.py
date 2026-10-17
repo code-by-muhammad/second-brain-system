@@ -31,7 +31,7 @@ def _trace(monkeypatch):
         if command[:2]==['git','--literal-pathspecs']:
             calls.append(tuple(command[4:]))
         return native(command,**kwargs)
-    monkeypatch.setattr(syncer.subprocess,'run',traced)
+    monkeypatch.setattr(syncer, '_run_git', traced)
     return calls
 
 
@@ -220,7 +220,7 @@ def test_case_change_during_fetch_is_rechecked_before_push(brain,tmp_path,monkey
             if action=='fetch' and not renamed:
                 renamed.append(_rename(source,'example.md'))
         return native(command,**kwargs)
-    monkeypatch.setattr(syncer.subprocess,'run',traced)
+    monkeypatch.setattr(syncer, '_run_git', traced)
     head=git(a,'rev-parse','HEAD'); outcome=syncer.sync(a)
     assert renamed and renamed[0].read_bytes()==original
     if source.is_file(): assert outcome.startswith('paused: tracked Markdown path casing')

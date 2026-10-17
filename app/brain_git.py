@@ -7,6 +7,8 @@ import os
 import re
 import subprocess
 import tempfile
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from filelock import FileLock
 import brain_store as s
@@ -21,6 +23,27 @@ _WHITESPACE=re.compile(r'\s+')
 
 class GitSyncError(RuntimeError):
     """Controlled diagnostics: never include subprocess output or note contents."""
+
+_CLEANUP_REPORTER=ContextVar('git_cleanup_reporter',default=None)
+
+@contextmanager
+def cleanup_reporting(callback):
+    """Keep cleanup attention scoped to the maintenance call that owns its state."""
+    token=_CLEANUP_REPORTER.set(callback)
+    try:yield
+    finally:_CLEANUP_REPORTER.reset(token)
+
+def _run_git(command,**kwargs):
+    env=kwargs.get('env')
+    kwargs['env']=dict(os.environ if env is None else env)
+    kwargs['env'].update(GIT_TERMINAL_PROMPT='0',GCM_INTERACTIVE='0')
+    if os.name=='nt':
+        from brain_windows_process import run
+        try:return run(command,on_cleanup_wait=_CLEANUP_REPORTER.get(),**kwargs)
+        except FileNotFoundError:raise
+        except OSError as exc:
+            raise GitSyncError('Windows Git process containment could not be verified; local changes preserved. Inspect the local Windows process environment before retrying.') from exc
+    return subprocess.run(command,**kwargs)
 
 def _archive_path(relative):
     return bool(isinstance(relative,str) and _ARCHIVE.fullmatch(relative))
@@ -147,12 +170,12 @@ def _archive_blob(vault,relative,entry,raw):
         env=os.environ.copy()
         env.update(GIT_ALLOW_PROTOCOL='',GIT_NO_LAZY_FETCH='1',GIT_TERMINAL_PROMPT='0',GIT_NO_REPLACE_OBJECTS='1')
         command=['git','--literal-pathspecs','-C',str(vault),'cat-file']
-        result=subprocess.run([*command,'-s',oid],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=env,timeout=90)
+        result=_run_git([*command,'-s',oid],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=env,timeout=90)
         if result.returncode or len(result.stdout)>32 or not re.fullmatch(rb'[0-9]+\n?',result.stdout): raise ValueError('blob')
         size=int(result.stdout)
         if size>raw['bytes'] or size>ARCHIVE_BYTES_LIMIT: raise ValueError('staged')
         with tempfile.TemporaryFile(mode='w+b') as stream:
-            result=subprocess.run([*command,'blob',oid],stdout=stream,stderr=subprocess.DEVNULL,env=env,timeout=90)
+            result=_run_git([*command,'blob',oid],stdout=stream,stderr=subprocess.DEVNULL,env=env,timeout=90)
             if result.returncode or os.fstat(stream.fileno()).st_size!=size: raise ValueError('blob')
             stream.seek(0); staged=_scan_archive(stream,size)
         if staged['raw_sha256'] not in (raw['raw_sha256'],raw['lf_sha256']): raise ValueError('staged')
@@ -174,12 +197,12 @@ def _ordinary_blob(vault,relative,entry):
         env=os.environ.copy()
         env.update(GIT_ALLOW_PROTOCOL='',GIT_NO_LAZY_FETCH='1',GIT_TERMINAL_PROMPT='0',GIT_NO_REPLACE_OBJECTS='1')
         command=['git','--literal-pathspecs','-C',str(vault),'cat-file']
-        result=subprocess.run([*command,'-s',oid],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=env,timeout=90)
+        result=_run_git([*command,'-s',oid],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=env,timeout=90)
         if result.returncode or len(result.stdout)>32 or not re.fullmatch(rb'[0-9]+\n?',result.stdout): raise ValueError('blob')
         size=int(result.stdout)
         if size>4*NOTE_CHARACTER_LIMIT: raise ValueError('size')
         with tempfile.TemporaryFile(mode='w+b') as stream:
-            result=subprocess.run([*command,'blob',oid],stdout=stream,stderr=subprocess.DEVNULL,env=env,timeout=90)
+            result=_run_git([*command,'blob',oid],stdout=stream,stderr=subprocess.DEVNULL,env=env,timeout=90)
             if result.returncode or os.fstat(stream.fileno()).st_size!=size: raise ValueError('blob')
             stream.seek(0)
             with io.TextIOWrapper(stream,encoding='utf-8',newline=None) as decoded:
@@ -197,7 +220,7 @@ def sync(vault=None):
     vault=Path(vault or s.VAULT)
     def git(*args,check=True,input=None):
         try:
-            p=subprocess.run(['git','--literal-pathspecs','-C',str(vault),*args],input=input,
+            p=_run_git(['git','--literal-pathspecs','-C',str(vault),*args],input=input,
                              capture_output=True,text=True,encoding='utf-8',timeout=90)
         except subprocess.TimeoutExpired as exc:
             raise GitSyncError('Git '+args[0]+' timed out; local changes preserved. Retry when the service is available.') from exc

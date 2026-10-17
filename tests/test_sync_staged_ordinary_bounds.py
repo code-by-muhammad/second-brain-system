@@ -9,6 +9,7 @@ import io
 import shlex
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -37,7 +38,7 @@ def _intercept_first_size(monkeypatch, action):
             override = action(native,command,args,kwargs)
             if override is not None: return override
         return native(command,*args,**kwargs)
-    monkeypatch.setattr(subprocess,'run',intercept)
+    monkeypatch.setattr(syncer, '_run_git', intercept)
     return lambda: fired
 
 def install_filter(repo, tmp_path, transformed):
@@ -70,7 +71,7 @@ def observe_blob_transport(monkeypatch):
                 assert kwargs['env']['GIT_NO_REPLACE_OBJECTS'] == '1'
                 calls.append(action)
         return native(command, *args, **kwargs)
-    monkeypatch.setattr(subprocess, 'run', traced)
+    monkeypatch.setattr(syncer, '_run_git', traced)
     return calls
 
 
@@ -89,7 +90,7 @@ def observe_decoded_read(monkeypatch):
     def wrapper(*args, **kwargs):
         result = original(*args, **kwargs)
         return Checked(result) if 'newline' in kwargs and kwargs['newline'] is None and kwargs.get('encoding') == 'utf-8' else result
-    monkeypatch.setattr(io, 'TextIOWrapper', wrapper)
+    monkeypatch.setattr(syncer, 'io', SimpleNamespace(TextIOWrapper=wrapper))
     return requests
 
 
@@ -148,7 +149,7 @@ def test_filtered_staged_invalid_content_refuses_before_commit_and_preserves_ori
                          ids=['nonzero-stage', 'symlink-mode', 'invalid-oid', 'malformed'])
 def test_invalid_staged_metadata_refuses_without_launching_any_git_blob_reader(brain, monkeypatch, entry):
     def forbidden(*args,**kwargs): pytest.fail('Invalid staged metadata must stop before any Git blob call.')
-    monkeypatch.setattr(subprocess, 'run', forbidden)
+    monkeypatch.setattr(syncer, '_run_git', forbidden)
     with pytest.raises(syncer.GitSyncError,match='verified locally'):
         syncer._ordinary_blob(brain[0],RELATIVE,entry)
 
@@ -165,7 +166,7 @@ def test_staged_reader_operational_failure_is_controlled_and_redacts_raw_git_out
         if failure == 'timeout': raise subprocess.TimeoutExpired(command,90,output=marker.encode())
         if failure == 'size-mismatch': kwargs['stdout'].write(b'x'); kwargs['stdout'].flush()
         return subprocess.CompletedProcess(command,1 if failure == 'exit' else 0,marker.encode(),marker.encode())
-    monkeypatch.setattr(subprocess, 'run', controlled)
+    monkeypatch.setattr(syncer, '_run_git', controlled)
     with pytest.raises(syncer.GitSyncError) as error:
         syncer._ordinary_blob(brain[0],relative,'100644 '+oid+' 0')
     message = str(error.value)
