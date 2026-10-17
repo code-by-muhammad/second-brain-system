@@ -121,6 +121,34 @@ def _windows_path_pause(relative):
     return ('paused: '+kind+' is not compatible with Windows: '+_note_locator(relative)+
         '. Rename it explicitly on a device that can open the original before syncing; original and staging preserved.')
 
+def _windows_checkout_path(vault,relative):
+    # Native Git uses UTF-16 units; existing directories need no mkdir.
+    root=Path(os.path.abspath(vault))
+    if root.drive.startswith('\\\\?\\') and len(root.drive)==6 and root.drive[5]==':':
+        root=Path(str(root)[4:])
+    target=Path(os.path.abspath(root/relative))
+    def units(path): return len(str(path).encode('utf-16-le'))//2
+    if units(target)>=260: return False
+    for parent in target.parents:
+        if parent==root.parent: break
+        if units(parent)>=248 and not parent.is_dir(): return False
+    return True
+
+def _windows_longpaths(vault):
+    try:
+        result=_run_git(['git','--literal-pathspecs','-C',str(vault),'config','--bool','--get','core.longpaths'],
+                        capture_output=True,text=True,encoding='utf-8',timeout=90)
+        value=result.stdout.strip()
+        if result.returncode==1 and not value: return False
+        if result.returncode==0 and value in ('true','false'): return value=='true'
+        raise ValueError('configuration')
+    except (OSError,ValueError,subprocess.TimeoutExpired):
+        raise GitSyncError('Windows Git long-path setting could not be verified; local changes preserved.') from None
+
+def _windows_checkout_pause(relative):
+    return ("paused: Incoming path exceeds this Windows device's Git checkout limits: "+_note_locator(relative)+
+        '. Use a shorter vault path or explicitly choose core.longpaths for this repository, then retry; local commits and staging preserved.')
+
 def _incoming_note_path(vault,oid):
     """Screen a pinned fetched tree before checkout, with bounded decoded input."""
     try:
@@ -132,7 +160,7 @@ def _incoming_note_path(vault,oid):
         with tempfile.TemporaryFile(mode='w+b') as stream:
             result=_run_git(command,stdout=stream,stderr=subprocess.DEVNULL,env=env,timeout=90)
             if result.returncode or os.fstat(stream.fileno()).st_size>TREE_PATH_BYTES_LIMIT: raise ValueError('tree')
-            stream.seek(0);pending=b''
+            stream.seek(0);pending=b'';longpaths=None
             for chunk in iter(lambda:stream.read(65536),b''):
                 rows=(pending+chunk).split(b'\0');pending=rows.pop()
                 if len(pending)>1_048_576: raise ValueError('path')
@@ -140,6 +168,9 @@ def _incoming_note_path(vault,oid):
                     if len(raw)>1_048_576: raise ValueError('path')
                     relative=raw.decode('utf-8')
                     if not _windows_note_path(relative): return relative
+                    if os.name=='nt' and longpaths is not True and not _windows_checkout_path(vault,relative):
+                        if longpaths is None: longpaths=_windows_longpaths(vault)
+                        if not longpaths: return relative
             if pending: raise ValueError('tree')
     except (OSError,ValueError,subprocess.TimeoutExpired):
         raise GitSyncError('Incoming note paths could not be verified locally; local changes preserved. Inspect the local repository and its bounded tree-name output before retrying.') from None
@@ -286,10 +317,10 @@ def sync(vault=None):
     def paths_input(paths):
         return ''.join(path+'\0' for path in paths)
 
-    def casing_pause():
+    def casing_pause(check_windows=True):
         directories={}
         for rel in index_entries():
-            if not _windows_note_path(rel): return _windows_path_pause(rel)
+            if check_windows and not _windows_note_path(rel): return _windows_path_pause(rel)
             if rel.split('/')[0] not in FOLDERS or not rel.lower().endswith('.md'): continue
             actual=_worktree_case_path(vault,rel,directories)
             if actual is not None:
@@ -319,7 +350,7 @@ def sync(vault=None):
             raise GitSyncError('Git >= 2.38 is required for safe merge-tree preflight; upgrade Git before synchronization.')
         with FileLock(str(s.STATE/'writer.lock'),timeout=30):
             if staged_paths(): return 'paused: existing staged changes preserved'
-            if pause:=casing_pause(): return pause
+            if pause:=casing_pause(check_windows=False): return pause
             candidates=git('ls-files','--modified','--others','--exclude-standard','-z').stdout.split('\0')
             eligible=[]; archives={}
             for rel in dict.fromkeys(candidates):
@@ -382,7 +413,7 @@ def sync(vault=None):
             upstream=git('rev-parse',upstream_ref).stdout.strip()
             ahead,behind=map(int,git('rev-list','--left-right','--count','HEAD...'+upstream).stdout.split())
             if behind and (invalid:=_incoming_note_path(vault,upstream)) is not None:
-                return _windows_path_pause(invalid)
+                return _windows_path_pause(invalid) if not _windows_note_path(invalid) else _windows_checkout_pause(invalid)
             if ahead and behind:
                 result=git('merge-tree','--write-tree','HEAD',upstream,check=False)
                 if result.returncode==1:

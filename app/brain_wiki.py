@@ -1218,6 +1218,7 @@ def rebuild_source_links():
         return {'source_records_updated':len(receipts),'receipts':receipts}
 
 def _read_derived(path):
+    path=s._safe_discovered_path(path)
     relative=path.relative_to(s.VAULT).as_posix()
     with path.open('rb') as stream: raw=stream.read(2_000_001)
     if len(raw)>2_000_000: raise WikiIntegrityError(relative,field='content')

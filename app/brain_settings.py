@@ -29,10 +29,19 @@ def environment():
 
 def require_maintainer():
     if ROLE != 'maintainer': raise PermissionError('This device is capture/search only; shared derived writes belong to the designated maintainer.')
-    control=VAULT/'02-Areas/AI-Memory/Wiki/Control.md'
+    control=VAULT
+    for part in ('02-Areas','AI-Memory','Wiki','Control.md'):
+        control=control/part
+        if control.is_symlink() or os.path.isjunction(control):
+            raise PermissionError('Shared wiki ownership could not be verified; linked Control paths are refused.')
+    if not control.resolve().is_relative_to(VAULT):
+        raise PermissionError('Shared wiki ownership could not be verified; Control leaves the vault.')
     if control.exists():
         import re
-        try: ownership=control.read_text(encoding='utf-8')
+        with control.open('rb') as stream: raw=stream.read(2_000_001)
+        if len(raw)>2_000_000:
+            raise PermissionError('Shared wiki ownership could not be verified; Control exceeds 2 MB.')
+        try: ownership=raw.decode('utf-8').replace('\r\n','\n').replace('\r','\n')
         except UnicodeError as exc:
             raise PermissionError('Shared wiki ownership could not be verified; repair Control UTF-8 before an explicit handoff.') from exc
         match=re.search(r'(?m)^maintainer_device_id: ([a-z0-9-]+)$',ownership)

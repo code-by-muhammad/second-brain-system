@@ -38,10 +38,11 @@ def test_clean_owner_commit_cannot_publish_incompatible_original(brain,tmp_path,
     vault,state,remote,note=repository(brain,tmp_path,isolated_git)
     p=vault/BAD;p.write_bytes(b'# Owner-committed source\nHarmless original stays unchanged.\n')
     _raw(vault,'add','--',BAD);_raw(vault,'commit','-m','explicit synthetic incompatible owner commit')
+    _raw(vault,'checkout','--','01-Projects/Ordinary.md')  # Genuinely clean owner tree; read-only fetch may discover a peer repair.
     before=snapshot(vault,remote);commands=observe_transport(monkeypatch)
     assert g.sync()==PREFIX+json.dumps(BAD)+SUFFIX
     assert snapshot(vault,remote)==before
-    assert not any(cmd[4] in {'add','commit','fetch','merge','push','reset'} for cmd in commands)
+    assert not any(cmd[4] in {'add','commit','merge','push','reset'} for cmd in commands)
 
 
 def test_fetched_incompatible_tree_pauses_before_checkout_on_every_os(brain,tmp_path,monkeypatch,isolated_git):

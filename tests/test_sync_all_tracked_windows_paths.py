@@ -27,10 +27,11 @@ def test_clean_owner_commit_checks_every_tracked_path(brain,tmp_path,monkeypatch
     vault,state,remote,note=repository(brain,tmp_path,isolated_git)
     p=vault/relative;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(b'Harmless non-Markdown owner original.\n')
     _raw(vault,'add','--',relative);_raw(vault,'commit','-m','synthetic incompatible non-Markdown commit')
+    _raw(vault,'checkout','--','01-Projects/Ordinary.md')  # Genuinely clean owner tree; read-only fetch may discover a peer repair.
     before=snapshot(vault,remote);original=p.read_bytes();commands=observe_transport(monkeypatch)
     assert g.sync()=='paused: Repository path is not compatible with Windows: '+json.dumps(relative)+SUFFIX
     assert snapshot(vault,remote)==before and p.read_bytes()==original
-    assert not any(cmd[4] in {'add','commit','fetch','merge','push','reset'} for cmd in commands)
+    assert not any(cmd[4] in {'add','commit','merge','push','reset'} for cmd in commands)
 
 
 @pytest.mark.parametrize('relative',[path for _,path in BAD],ids=[label for label,_ in BAD])
