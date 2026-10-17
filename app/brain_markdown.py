@@ -88,9 +88,20 @@ class _BoundedSafeLoader(yaml.SafeLoader):
         return yaml.constructor.SafeConstructor.construct_yaml_int(self, node)
 
 
+    def construct_yaml_float(self, node):
+        # Pinned SafeLoader can overflow while converting a short sexagesimal
+        # float. Treat only that known constructor fault as invalid YAML; keep
+        # unrelated and fatal exceptions visible to callers.
+        try:
+            return yaml.constructor.SafeConstructor.construct_yaml_float(self, node)
+        except OverflowError:
+            raise yaml.YAMLError('Invalid YAML float.') from None
+
+
 # Copy only this subclass's dispatch table; ordinary PyYAML consumers retain
 # their original constructors and alias caching remains in BaseConstructor.
 _BoundedSafeLoader.add_constructor('tag:yaml.org,2002:int', _BoundedSafeLoader.construct_yaml_int)
+_BoundedSafeLoader.add_constructor('tag:yaml.org,2002:float', _BoundedSafeLoader.construct_yaml_float)
 
 
 def frontmatter(text: str, *, strict: bool = False) -> dict:

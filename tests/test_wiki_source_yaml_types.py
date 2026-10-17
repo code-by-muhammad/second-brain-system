@@ -104,13 +104,19 @@ def test_known_constructed_types_share_finite_source_metadata_budgets(brain,monk
     elif kind=='depth':header='annotation: '+'['*127+'!!set {ordinary: null}'+']'*127
     else:header='a: &same '+binary(b'A'*700000)+'\nb: *same\nc: *same'
     path,raw=source(header);assert len(raw)<2_000_000 and not s.SECRET.search(raw.decode('utf-8'))
-    decoded=w.meta(raw.decode('utf-8'));assert decoded
-    if kind=='nodes':assert len(decoded['annotation'])==100000 and isinstance(decoded['annotation'],set)
+    decoded=w.meta(raw.decode('utf-8'))
+    if kind=='nodes':
+        # Common construction now stops before this oversized set exists.
+        # The unchanged source still reaches event screening and attention.
+        assert decoded=={}
     elif kind=='depth':
+        assert decoded
         value=decoded['annotation']
         for _ in range(127):value=value[0]
         assert isinstance(value,set)
-    else:assert decoded['a'] is decoded['b'] is decoded['c'] and len(decoded['a'])==700000
+    else:
+        assert decoded
+        assert decoded['a'] is decoded['b'] is decoded['c'] and len(decoded['a'])==700000
     rows=w.inventory();calls=provider(monkeypatch,rows)
     assert_attention(path,raw,rows,calls)
 
