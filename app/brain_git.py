@@ -356,6 +356,9 @@ def sync(vault=None):
             for rel in dict.fromkeys(candidates):
                 if not rel or rel.split('/')[0] not in FOLDERS or not rel.lower().endswith('.md'): continue
                 if not _windows_note_path(rel):
+                    if rel in index_entries():
+                        return ('paused: tracked Markdown edit uses a Windows-incompatible path: '+_note_locator(rel)+
+                            '. Preserve the edit and pending captures. If another device has committed the shared rename, explicitly commit this tracked edit under its current name, then sync. Otherwise make one explicit owner rename on a device that can open the original. Do not choose different replacement names on each peer; original and staging preserved.')
                     return ('paused: Markdown path is not compatible with Windows: '+_note_locator(rel)+
                         '. Rename it explicitly on a device that can open the original before syncing; original and staging preserved.')
                 target=vault/rel
