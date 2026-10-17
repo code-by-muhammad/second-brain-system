@@ -181,7 +181,7 @@ def test_update_preflight_failure_leaves_old_service_and_bytes(portable,monkeypa
             install.main()
         return SimpleNamespace(returncode=0,stdout='')
     monkeypatch.setattr(updater.subprocess,'run',run)
-    monkeypatch.setattr(updater,'verify',lambda path:{'version':'0.1.6'})
+    monkeypatch.setattr(updater,'verify',lambda path,**kwargs:{'version':'0.1.6'})
     with pytest.raises(ValueError): updater.perform(root,'v0.1.6')
     assert (root/'device.json').read_bytes()==original
     assert not any(c[-2:]==['service','stop'] for c in calls)
@@ -197,7 +197,7 @@ def test_failed_real_install_switch_restores_exact_clients_and_app(portable,monk
     calls=[]
     def run(args,**kwargs):
         calls.append(args)
-        if len(args)>1 and args[1]==str(release/'install.py'):
+        if str(release/'install.py') in args:
             monkeypatch.setattr(install,'REPO',release)
             extra=['--configure-clients']+(['--validate-only'] if '--validate-only' in args else [])
             main_args(monkeypatch,install,root,vault,*extra)
@@ -206,7 +206,7 @@ def test_failed_real_install_switch_restores_exact_clients_and_app(portable,monk
     monkeypatch.setattr(updater.subprocess,'run',run)
     # Avoid recursively mocking the Windows ACL helper through subprocess.run.
     if os.name=='nt': monkeypatch.setattr(install,'private',lambda *args:None)
-    monkeypatch.setattr(updater,'verify',lambda path:{'version':'0.1.6'})
+    monkeypatch.setattr(updater,'verify',lambda path,**kwargs:{'version':'0.1.6'})
     health=[]
     def wait(python,path,version):
         health.append(version)
@@ -230,7 +230,7 @@ def test_failed_real_install_switch_restores_exact_clients_and_app(portable,monk
 def test_busy_worker_prevents_service_stop(portable,monkeypatch):
     _,updater,root,_,_=portable
     prepare_update(portable)
-    monkeypatch.setattr(updater,'verify',lambda path:{'version':'0.1.6'})
+    monkeypatch.setattr(updater,'verify',lambda path,**kwargs:{'version':'0.1.6'})
     calls=[]
     monkeypatch.setattr(updater.subprocess,'run',lambda args,**kw:(calls.append(args) or SimpleNamespace(returncode=0,stdout='')))
     with FileLock(str(root/'state/wiki-worker.lock')):
@@ -267,7 +267,7 @@ def test_migration_runs_under_worker_lock_and_does_not_rollback_notes_or_ledger(
     calls=[]
     def run(args,**kwargs):
         calls.append(args)
-        if len(args)>1 and args[1]==str(release/'install.py'):
+        if str(release/'install.py') in args:
             monkeypatch.setattr(install,'REPO',release)
             main_args(monkeypatch,install,root,vault,'--configure-clients',
                       *(['--validate-only'] if '--validate-only' in args else []))
@@ -297,7 +297,7 @@ def test_migration_runs_under_worker_lock_and_does_not_rollback_notes_or_ledger(
             return SimpleNamespace(returncode=0,stdout=json.dumps(result))
         return SimpleNamespace(returncode=0,stdout='')
     monkeypatch.setattr(updater.subprocess,'run',run)
-    monkeypatch.setattr(updater,'verify',lambda path:{'version':'0.1.6'})
+    monkeypatch.setattr(updater,'verify',lambda path,**kwargs:{'version':'0.1.6'})
     monkeypatch.setattr(updater,'wait_health',lambda python,path,version:{'status':'running','version':version})
     if fail_relink:
         with pytest.raises(RuntimeError,match='synthetic relink failure'):
@@ -334,7 +334,7 @@ def test_partial_old_service_stop_failure_recovers_previous_service(portable,mon
             native['running']=True
         return SimpleNamespace(returncode=0,stdout='')
     monkeypatch.setattr(updater.subprocess,'run',run)
-    monkeypatch.setattr(updater,'verify',lambda path:{'version':'0.1.6'})
+    monkeypatch.setattr(updater,'verify',lambda path,**kwargs:{'version':'0.1.6'})
     health=[]
     def wait(python,path,version):
         assert native['running']

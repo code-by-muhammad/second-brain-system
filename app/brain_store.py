@@ -37,6 +37,24 @@ def safe_path(relative: str) -> Path:
         raise ValueError('Path leaves the vault.')
     return p
 
+
+def note_link(relative: str, from_path: str) -> str:
+    """Preserve ordinary links; display exceptional source paths without an anchor."""
+    for value in (relative,from_path):
+        clean_text(value,400); value.encode('utf-8','strict')
+        if any(ord(c)<32 or c in '\x7f\u2028\u2029' for c in value):
+            raise ValueError('Note reference path contains unsupported control characters.')
+    target=safe_path(relative).relative_to(VAULT).as_posix()
+    safe_path(from_path)
+    if not any(c in relative for c in '[]#^%\\'):
+        return '[['+relative[:-3]+']]'
+    # Obsidian 1.12.7 does not resolve the tested literal-# Markdown URL.
+    # Use one conservative display policy for these selectors, not a link claim.
+    fence='`'*(1+max((len(run) for run in re.findall(r'`+',target)),default=0))
+    padding=' ' if target.startswith(('`',' ')) or target.endswith(('`',' ')) else ''
+    return 'Source path: '+fence+padding+target+padding+fence
+
+
 def clean_text(value: str, max_len=30000):
     if not isinstance(value,str) or len(value)>max_len or '\x00' in value:
         raise ValueError('Text exceeds allowed size or contains invalid characters.')
@@ -119,7 +137,7 @@ def capture(event_id:str,title:str,outcome:str,source_app:str,source_reference:s
               'captured_at':now,'payload_sha256':fingerprint,'status':'captured'}
         body=f'# {title}\n\n## Outcome\n{outcome}\n\n## Decisions\n'+('\n'.join('- '+x for x in decisions) or '- None recorded.')
         body+='\n\n## Next steps\n'+('\n'.join('- [ ] '+x for x in next_steps) or '- None recorded.')
-        body+='\n\n## Evidence\n'+('\n'.join('- [['+x[:-3]+']]' for x in evidence_paths) or '- Session summary; verify claims against the source conversation.')
+        body+='\n\n## Evidence\n'+('\n'.join('- '+note_link(x,p.relative_to(VAULT).as_posix()) for x in evidence_paths) or '- Session summary; verify claims against the source conversation.')
         body+='\n\n## Links\n- [[Maps/AI-Context]]'
         result=_write(p,note_text(meta,body),'capture')
         return result
@@ -145,7 +163,7 @@ def update_current(path:str,title:str,content:str,source_paths:list[str],expecte
         meta={'date':now[:10],'type':'note','tags':['ai-memory','derived'],'updated_at':now,
               'sources':source_paths,'source_hashes':{src:digest(safe_path(src).read_bytes()) for src in source_paths},
               'status':'current','maintained_by':'second-brain'}
-        body=f'# {title}\n\n{content}\n\n## Sources\n'+'\n'.join('- [['+s[:-3]+']]' for s in source_paths)
+        body=f'# {title}\n\n{content}\n\n## Sources\n'+'\n'.join('- '+note_link(source,rel) for source in source_paths)
         return _write(p,note_text(meta,body),'update_current',expected_sha256)
 
 def fresh_search(query:str,limit:int=6):

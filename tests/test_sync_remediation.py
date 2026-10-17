@@ -55,7 +55,7 @@ def test_operational_merge_error_is_not_reported_as_a_conflict(brain,tmp_path,mo
     (a/'01-Projects/A.md').write_text('Independent source A.\n')
     assert syncer.sync(a)=='synced'
     (b/'01-Projects/B.md').write_text('Independent source B.\n')
-    native=subprocess.run
+    native=syncer._run_git
     def injected(cmd,**kwargs):
         if 'merge-tree' in cmd: return subprocess.CompletedProcess(cmd,128,'','synthetic operational failure')
         return native(cmd,**kwargs)
@@ -89,7 +89,7 @@ def test_large_windows_path_list_uses_nul_stdin(brain,tmp_path,monkeypatch):
     a,b=pair(tmp_path)
     for i in range(340):
         (a/'01-Projects'/('note-'+str(i).zfill(3)+'-'+'x'*105+'.md')).write_text('Synthetic batch note.\n')
-    native=subprocess.run; additions=[]
+    native=syncer._run_git; additions=[]
     def traced(cmd,**kwargs):
         if 'add' in cmd:
             additions.append((cmd,kwargs.get('input')))
@@ -111,7 +111,7 @@ def test_network_does_not_hold_writer_but_merge_and_index_stages_do(brain,tmp_pa
     (a/'01-Projects/A.md').write_text('Independent source A.\n')
     assert syncer.sync(a)=='synced'
     (b/'01-Projects/B.md').write_text('Independent source B.\n')
-    native=subprocess.run; observed={}
+    native=syncer._run_git; observed={}
     with ThreadPoolExecutor(max_workers=1) as pool:
         def traced(cmd,**kwargs):
             action=next((name for name in ('add','commit','fetch','merge','push') if name in cmd),None)
@@ -125,7 +125,7 @@ def test_network_does_not_hold_writer_but_merge_and_index_stages_do(brain,tmp_pa
 def test_real_capture_succeeds_during_network_wait(brain,tmp_path,monkeypatch,network_stage):
     a,b=pair(tmp_path)
     monkeypatch.setattr(store,'VAULT',a)
-    native=subprocess.run; captured=[]
+    native=syncer._run_git; captured=[]
     def traced(cmd,**kwargs):
         if network_stage in cmd and not captured:
             captured.append(store.capture('during-'+network_stage,'Synthetic capture','Saved during network I/O.','test','synthetic fixture'))

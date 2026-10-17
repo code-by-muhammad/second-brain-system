@@ -55,15 +55,78 @@ def restore(root,target):
             if os.name!='nt': os.chmod(path,entry['mode'])
         else: path.unlink(missing_ok=True)
 
-def verify(checkout):
+def release_identity(checkout,version):
+    """Verify a trusted local tag/cache without running cached code or Git helpers."""
+    def refuse():
+        raise ValueError('Cached release identity/content is not the requested approved tag; preserve it for review.')
+    if not re.fullmatch(r'v\d+\.\d+\.\d+',version): refuse()
+    checkout=checkout.resolve()
+    if not (checkout/'.git').is_dir() or (checkout/'.git').is_symlink(): refuse()
+    git=shutil.which('git')
+    if git is None: refuse()
+    env={k:v for k,v in os.environ.items() if not k.upper().startswith('GIT_')}
+    env.update(GIT_CONFIG_NOSYSTEM='1',GIT_CONFIG_GLOBAL=os.devnull,GIT_ALLOW_PROTOCOL='',
+               GIT_NO_LAZY_FETCH='1',GIT_TERMINAL_PROMPT='0',GIT_NO_REPLACE_OBJECTS='1',GIT_OPTIONAL_LOCKS='0')
+    def read(*arguments):
+        try:
+            result=subprocess.run([git,'--no-optional-locks','-c','core.fsmonitor=false',
+                '-c','core.hooksPath='+os.devnull,'-C',str(checkout),*arguments],
+                env=env,capture_output=True,timeout=30,check=False)
+        except (OSError,subprocess.TimeoutExpired): refuse()
+        if result.returncode: refuse()
+        return result.stdout
+    try:
+        if Path(read('rev-parse','--show-toplevel').decode('utf-8').strip()).resolve()!=checkout: refuse()
+        origin=read('config','--local','--no-includes','--get-all','remote.origin.url').decode('utf-8').strip()
+        if not re.fullmatch(r'(?:https://github\.com(?::443)?/|git@github\.com:|ssh://git@github\.com(?::22)?/)'
+                            r'code-by-muhammad/second-brain-system(?:\.git)?/?',origin,re.IGNORECASE): refuse()
+        head=read('rev-parse','--verify','HEAD^{commit}').decode('ascii').strip()
+        tag=read('rev-parse','--verify','refs/tags/'+version+'^{commit}').decode('ascii').strip()
+        algorithm=read('rev-parse','--show-object-format').decode('ascii').strip()
+        if algorithm not in ('sha1','sha256') or not re.fullmatch(r'[0-9a-f]{'+('40' if algorithm=='sha1' else '64')+'}',head) or head!=tag: refuse()
+        tree={}
+        for entry in read('ls-tree','-r','-z','HEAD').split(b'\0'):
+            if not entry: continue
+            metadata,raw_name=entry.split(b'\t',1)
+            mode,kind,oid=metadata.decode('ascii').split()
+            name=raw_name.decode('utf-8')
+            if mode not in ('100644','100755') or kind!='blob' or name in tree: refuse()
+            tree[name]=(mode,oid)
+        index={}
+        for entry in read('ls-files','--stage','-z').split(b'\0'):
+            if not entry: continue
+            metadata,raw_name=entry.split(b'\t',1)
+            mode,oid,stage=metadata.decode('ascii').split()
+            name=raw_name.decode('utf-8')
+            if stage!='0' or name in index: refuse()
+            index[name]=(mode,oid)
+        if index!=tree or 'release-manifest.json' not in tree: refuse()
+        for name,(_,oid) in tree.items():
+            path=checkout/name
+            if not path.is_file() or path.is_symlink() or path.resolve()!=path: refuse()
+            content=path.read_bytes()
+            if hashlib.new(algorithm,b'blob '+str(len(content)).encode('ascii')+b'\0'+content).hexdigest()!=oid: refuse()
+    except (OSError,UnicodeError,KeyError,TypeError,ValueError): refuse()
+    return {'repository':'code-by-muhammad/second-brain-system','tag':version,'commit':head,
+            'manifest_sha256':hashlib.sha256((checkout/'release-manifest.json').read_bytes()).hexdigest(),
+            'tracked_files':len(tree),'verification':'trusted-local-origin-tag-index-worktree',
+            '_paths':set(tree)}
+
+def verify(checkout,*,version=None):
+    identity=release_identity(checkout,version) if version is not None else None
     manifest=json.loads((checkout/'release-manifest.json').read_text(encoding='utf-8'))
+    if identity is not None:
+        paths=identity.pop('_paths')
+        if (manifest.get('repository')!=identity['repository']
+                or set(manifest['sha256'])!=paths-{'release-manifest.json'}):
+            raise ValueError('Cached release manifest does not describe its committed tag payload.')
     required={'install.py','update.py','pyproject.toml','uv.lock'} | {p.relative_to(checkout).as_posix() for p in (checkout/'app').glob('*.py')}
     if not required <= set(manifest['sha256']): raise ValueError('Release manifest omits executable or dependency files.')
     for relative,expected in manifest['sha256'].items():
         target=(checkout/relative).resolve()
         if not target.is_relative_to(checkout.resolve()): raise ValueError('Unsafe manifest path.')
         if hashlib.sha256(target.read_bytes()).hexdigest()!=expected: raise ValueError('Release integrity mismatch: '+relative)
-    return manifest
+    return {**manifest,'git_identity':identity} if identity is not None else manifest
 
 def cli_environment():
     """Match the UTF-8 JSON pipe decoder, including when using a rollback CLI."""
@@ -124,13 +187,13 @@ def perform(root,version,migrate_wiki=False,requeue_unverified=False):
     if migrate_wiki and device.get('role')!='maintainer': raise PermissionError('--migrate-wiki requires the designated maintainer device.')
     release=root/'releases'/version
     if not release.exists(): subprocess.run(['git','clone','--depth','1','--branch',version,'--',REMOTE,str(release)],check=True)
-    info=verify(release)
+    info=verify(release,version=version)
     if info['version']!=version.removeprefix('v'): raise ValueError('Release version does not match requested tag.')
     subprocess.run(['uv','sync','--locked','--no-dev','--project',str(release),'--python','3.12'],check=True)
     python=release/('.venv/Scripts/python.exe' if os.name=='nt' else '.venv/bin/python')
     # Bad owner config must fail while the old service is still healthy, and the
     # replacement installer must agree before any runtime or client switch.
-    subprocess.run([str(python),str(release/'install.py'),'--root',str(root),'--vault',device['vault'],
+    subprocess.run([str(python),'-I',str(release/'install.py'),'--root',str(root),'--vault',device['vault'],
                     '--reuse-python',str(python),'--configure-clients','--validate-only'],check=True)
     previous={'release_root':device['release_root'],'python':device['python'],'version':device['version']}
     from filelock import FileLock
@@ -145,7 +208,7 @@ def perform(root,version,migrate_wiki=False,requeue_unverified=False):
                 stopped=True
                 subprocess.run([device['python'],str(root/'app/brain_cli.py'),'service','stop'],check=True)
                 installer().atomic(root/'state/previous-release.json',json.dumps({**previous,'snapshot':str(saved)},indent=2)+'\n')
-                subprocess.run([str(python),str(release/'install.py'),'--root',str(root),'--vault',device['vault'],'--reuse-python',str(python),'--configure-clients','--install-service'],check=True)
+                subprocess.run([str(python),'-I',str(release/'install.py'),'--root',str(root),'--vault',device['vault'],'--reuse-python',str(python),'--configure-clients','--install-service'],check=True)
             if migrate_wiki: migration=apply_wiki_migration(python,root,device['vault'],requeue_unverified)
             subprocess.run([str(python),str(root/'app/brain_cli.py'),'service','start'],check=True)
             health=wait_health(python,root,info['version'])
@@ -160,6 +223,7 @@ def perform(root,version,migrate_wiki=False,requeue_unverified=False):
             subprocess.run([previous['python'],str(root/'app/brain_cli.py'),'service','start'],check=True)
             wait_health(previous['python'],root,previous['version'])
             raise
-    print(json.dumps({'status':'updated','version':info['version'],'previous':previous,'health':health,'wiki_migration':migration}))
+    print(json.dumps({'status':'updated','version':info['version'],'release_identity':info.get('git_identity'),
+                      'previous':previous,'health':health,'wiki_migration':migration}))
 
 if __name__=='__main__': main()

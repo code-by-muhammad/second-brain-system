@@ -206,7 +206,7 @@ def test_candidate_update_parser_preflight_failure_preserves_old_runtime_and_nev
     (root/'app/original.py').write_bytes(b'original runtime bytes')
     (root/'device.json').write_text(json.dumps({'vault':str(vault),'python':str(python),'release_root':'synthetic-old-release','version':'0.1.6','role':'capture'}),encoding='utf-8')
     release=root/'releases/v0.1.7';release.mkdir(parents=True)
-    monkeypatch.setattr(updater,'verify',lambda path:{'version':'0.1.7'})
+    monkeypatch.setattr(updater,'verify',lambda path,**kwargs:{'version':'0.1.7'})
     monkeypatch.setattr(updater,'snapshot',forbidden);monkeypatch.setattr(updater,'restore',forbidden)
     missing_parser(monkeypatch,mode);calls=[]
     def run(args,**kwargs):

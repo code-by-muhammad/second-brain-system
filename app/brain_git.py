@@ -34,6 +34,8 @@ def cleanup_reporting(callback):
     finally:_CLEANUP_REPORTER.reset(token)
 
 def _run_git(command,**kwargs):
+    command=list(command)
+    command[1:1]=['-c','core.fsmonitor=false']
     env=kwargs.get('env')
     kwargs['env']=dict(os.environ if env is None else env)
     kwargs['env'].update(GIT_TERMINAL_PROMPT='0',GCM_INTERACTIVE='0')

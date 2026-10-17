@@ -27,7 +27,7 @@ def _intercept_first_size(monkeypatch, action):
     Retain the existing test function bodies; an ordinary Git show read is the
     BEFORE control entrypoint, while cat-file -s is the AFTER entrypoint.
     """
-    native = subprocess.run
+    native = syncer._run_git
     fired = False
     def intercept(command, *args, **kwargs):
         nonlocal fired
@@ -35,7 +35,7 @@ def _intercept_first_size(monkeypatch, action):
         staged_read = operation[:2] == ['cat-file','-s'] or (len(operation) == 2 and operation[0] == 'show' and operation[1] == ':'+RELATIVE)
         if not fired and staged_read:
             fired = True
-            override = action(native,command,args,kwargs)
+            override = action(subprocess.run,command,args,kwargs)
             if override is not None: return override
         return native(command,*args,**kwargs)
     monkeypatch.setattr(syncer, '_run_git', intercept)
@@ -55,7 +55,7 @@ def install_filter(repo, tmp_path, transformed):
 
 
 def observe_blob_transport(monkeypatch):
-    native = subprocess.run
+    native = syncer._run_git
     calls = []
     def traced(command, *args, **kwargs):
         if command[:2] == ['git','--literal-pathspecs']:

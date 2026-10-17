@@ -349,6 +349,9 @@ def run(command,*,input=None,capture_output=False,stdout=None,stderr=None,text=F
     inherited handles are three explicit duplicates of those temporary files.
     JOB_LIST assigns a non-breakaway kill-on-close Job before the initial thread
     runs; the calling maintenance process is never added to that Job.
+    A signaled root gets one second for remaining background work, then the
+    same verified Job cleanup runs before its original exit code is returned.
+    The operation deadline still wins if it arrives first.
     """
     if os.name!='nt':raise OSError('Windows process runner requires Windows 10 or newer.')
     import msvcrt
@@ -372,6 +375,7 @@ def run(command,*,input=None,capture_output=False,stdout=None,stderr=None,text=F
     if input is not None and text and not isinstance(input,str):raise TypeError('Text Git input must be text.')
     api=_kernel();process=_ProcessInformation();job=None;tracker=None;attributes=None;attributes_initialized=False
     inherited=[];verified_empty=False;deadline=time.monotonic()+timeout
+    root_finished_at=None;root_exit_code=None
     with tempfile.TemporaryFile(mode='w+b') as incoming, tempfile.TemporaryFile(mode='w+b') as outgoing, tempfile.TemporaryFile(mode='w+b') as errors:
         if input is not None:
             if text:
@@ -422,13 +426,25 @@ def run(command,*,input=None,capture_output=False,stdout=None,stderr=None,text=F
                 # completed root still has active owned descendants.
                 state=api.WaitForSingleObject(process.hProcess,max(1,min(50,math.ceil(remaining*1000))))
                 if state==0:
+                    if root_finished_at is None:
+                        code=wt.DWORD();_checked(api.GetExitCodeProcess(process.hProcess,ctypes.byref(code)))
+                        root_exit_code=int(code.value);root_finished_at=time.monotonic()
                     if _empty(api,job,process.hProcess,tracker):break
+                    now=time.monotonic()
+                    if now>=deadline:raise subprocess.TimeoutExpired(arguments,timeout)
+                    if now-root_finished_at>=1.0:
+                        _cleanup_owned(api,job,process.hProcess,on_cleanup_wait,tracker)
+                        verified_empty=True
+                        if time.monotonic()>=deadline:raise subprocess.TimeoutExpired(arguments,timeout)
+                        break
                     time.sleep(min(0.005,max(0.0,deadline-time.monotonic())))
                 elif state==0xffffffff:raise ctypes.WinError(ctypes.get_last_error())
                 elif state!=258:raise OSError('Unexpected owned process wait result.')
             verified_empty=True
-            exit_code=wt.DWORD();_checked(api.GetExitCodeProcess(process.hProcess,ctypes.byref(exit_code)))
-            return subprocess.CompletedProcess(arguments,int(exit_code.value),
+            if root_exit_code is None:
+                code=wt.DWORD();_checked(api.GetExitCodeProcess(process.hProcess,ctypes.byref(code)))
+                root_exit_code=int(code.value)
+            return subprocess.CompletedProcess(arguments,root_exit_code,
                 _output(outgoing,stdout,text,encoding),_output(errors,stderr,text,encoding))
         finally:
             # PROCESS_INFORMATION is filled atomically by CreateProcess. Inspect

@@ -299,13 +299,11 @@ def maintenance(sync=True):
             try: stale=review_sources(p,meta)
             except (OSError,UnicodeError,ValueError,TypeError): stale=['source metadata could not be validated; original preserved']
             if stale: add_review(status,p,stale)
-        # Collapse redundant operational logs only; evidence notes and revision backups stay intact.
+        # Child stdout/stderr can retain independent append descriptors. Do not
+        # copy/truncate or rename a potentially live log without writer ownership.
         for p in (s.ROOT/'logs').glob('service-*.log'):
             if p.stat().st_size>5_000_000:
-                import gzip
-                dest=p.with_suffix(p.suffix+'.'+datetime.now().strftime('%Y%m%d%H%M%S')+'.gz')
-                with gzip.open(dest,'wb') as f: f.write(p.read_bytes())
-                p.write_bytes(b'')
+                status.update(status='needs attention',error='Operational log rotation is deferred: active logs are preserved and may continue growing.')
         from brain_wiki import cleanup
         status['completed_private_artifacts_removed']=cleanup()
        if sync:

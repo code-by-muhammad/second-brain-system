@@ -386,14 +386,14 @@ def test_staged_filter_transformation_is_independently_refused_and_owned_stage_r
 
 
 def _intercept_first_size(monkeypatch, action):
-    original = subprocess.run
+    original = brain_git._run_git
     fired = False
 
     def intercept(command, *args, **kwargs):
         nonlocal fired
         if not fired and isinstance(command, (list, tuple)) and "cat-file" in command and "-s" in command:
             fired = True
-            override = action(original, command, args, kwargs)
+            override = action(subprocess.run, command, args, kwargs)
             if override is not None:
                 return override
         return original(command, *args, **kwargs)
@@ -475,7 +475,7 @@ def test_actual_owned_blob_read_is_spooled_local_only_and_failures_rollback(brai
     a, _ = _pair(tmp_path)
     raw = _history()
     _, path = _archive(a, raw)
-    native = subprocess.run
+    native = brain_git._run_git
     observed = []
 
     def intercept(command, *args, **kwargs):

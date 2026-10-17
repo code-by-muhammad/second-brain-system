@@ -25,7 +25,7 @@ def _rename(path, name):
 
 
 def _trace(monkeypatch):
-    native=subprocess.run; calls=[]
+    native=syncer._run_git; calls=[]
     def traced(command,**kwargs):
         # All repositories/remotes are local synthetic fixtures.
         if command[:2]==['git','--literal-pathspecs']:
@@ -213,7 +213,7 @@ def test_tracked_parent_listings_are_shared_and_do_not_scan_unrelated_trees(brai
 
 def test_case_change_during_fetch_is_rechecked_before_push(brain,tmp_path,monkeypatch):
     a,_=pair(tmp_path); source=_source(a); original=source.read_bytes()
-    git(a,'config','core.ignorecase','true'); native=subprocess.run; renamed=[]; calls=[]
+    git(a,'config','core.ignorecase','true'); native=syncer._run_git; renamed=[]; calls=[]
     def traced(command,**kwargs):
         if command[:2]==['git','--literal-pathspecs']:
             action=command[4]; calls.append(action)

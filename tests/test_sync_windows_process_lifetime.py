@@ -240,7 +240,10 @@ def test_actual_native_job_owns_root_and_descendant_until_verified_cleanup(tmp_p
         if behavior!='parent-exits':assert _live(parent,observed.job)
         assert not done.is_set() and not _available(writer) and not _available(sync)
         assert done.wait(RETURN_BOUND), 'Owned timeout waited for natural child expiry.'
-        assert isinstance(result.get('error'),subprocess.TimeoutExpired)
+        if behavior=='parent-exits':
+            assert 'error' not in result and result['value'].returncode==0
+        else:
+            assert isinstance(result.get('error'),subprocess.TimeoutExpired)
         assert result['returned']-result['started']<RETURN_BOUND<CHILD_LIFETIME
         assert not _live(child) and not _live(parent)
         assert not (folder/'late-write').exists()
@@ -256,7 +259,7 @@ def test_unread_inherited_stdin_cannot_trap_timeout_cleanup(tmp_path,windows_run
     try:
         child=_ready(folder,done,parent=True)
         assert done.wait(RETURN_BOUND), 'A descendant retaining unread stdin trapped cleanup.'
-        assert isinstance(result.get('error'),subprocess.TimeoutExpired)
+        assert 'error' not in result and result['value'].returncode==0
         assert result['returned']-result['started']<RETURN_BOUND
         assert not _live(child) and not (folder/'late-write').exists()
     finally:worker.join(CHILD_LIFETIME+2)

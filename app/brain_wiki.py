@@ -1580,7 +1580,7 @@ def _render_topic(page,packet,ident,result_hash,history=None):
             date=claim['source_revision'].get('date',proof['date'])
         evidence_note='; verified historical Git revision' if proof and proof['mode']=='git-history' else ''
         if not proof: evidence_note='; evidence requires review'
-        rendered.append(f'- **{claim["status"]}; source date {date}{evidence_note}:** {claim["text"]}\n  - Evidence: [[{claim["source"][:-3]}]] — '+json.dumps(claim['quote'],ensure_ascii=False))
+        rendered.append(f'- **{claim["status"]}; source date {date}{evidence_note}:** {claim["text"]}\n  - Evidence: {s.note_link(claim["source"],rel)} — '+json.dumps(claim['quote'],ensure_ascii=False))
     now=s.stamp()
     info={'date':now[:10],'title':page['title'],'type':'note','tags':['ai-memory','derived','wiki'],
           'wiki_kind':page['category'],'wiki_claims':list(unique.values()),'related':page['related'],
@@ -1610,7 +1610,7 @@ def _source_note(row,topic_pages):
     info.update({'date':now[:10],'type':'note','tags':['ai-memory','derived','wiki-source'],'sources':[row['path']],
                  'wiki_pages':linked,'latest_source_part':max(latest,row.get('part',1)),
                  'source_parts':row.get('parts',1),'source_hashes':{row['path']:row['sha256']},'updated_at':now,'maintained_by':cfg.DEVICE_ID})
-    body=f'# {row["title"]}\n\nOriginal: [[{row["path"][:-3]}]]\n\nSource date: {row["date"]}\n\n## Wiki pages\n'+'\n'.join('- [['+path[:-3]+']]' for path in linked)
+    body=f'# {row["title"]}\n\nOriginal: {s.note_link(row["path"],target.relative_to(s.VAULT).as_posix())}\n\nSource date: {row["date"]}\n\n## Wiki pages\n'+'\n'.join('- [['+path[:-3]+']]' for path in linked)
     return target,_serialize_derived(target,info,body),before
 
 def _publication_plan(packet,result,dispositions):

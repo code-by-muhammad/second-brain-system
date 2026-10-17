@@ -21,7 +21,7 @@ def test_upgrade_readiness_has_a_bounded_deadline(tmp_path,monkeypatch):
     previous=tmp_path/'old-release'; previous.mkdir()
     (root/'device.json').write_text(json.dumps({'release_root':str(previous),'python':'old-python','version':'0.1.0','vault':str(tmp_path/'vault'),'role':'maintainer'}))
     monkeypatch.setattr(updater.sys,'argv',['update.py','--root',str(root),'--version','v0.1.1'])
-    monkeypatch.setattr(updater,'verify',lambda *a:{'version':'0.1.1'})
+    monkeypatch.setattr(updater,'verify',lambda *a,**kwargs:{'version':'0.1.1'})
     calls=[]
     def run(args,**kwargs):
         calls.append(args); return SimpleNamespace(returncode=0,stdout='')
