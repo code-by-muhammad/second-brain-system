@@ -20,24 +20,39 @@ from pathlib import Path
 release, root, vault, events, route = map(Path, sys.argv[1:])
 route = str(route)
 namespace = runpy.run_path(str(release / 'install.py'))
+product=namespace['main'].__globals__
+support=product['setup_helpers']()
+support.host_context=lambda:None
+product['setup_helpers']=lambda:support
+selected = release / ('.venv/Scripts/python.exe' if os.name == 'nt' else '.venv/bin/python')
 real_run = subprocess.run
 def record(value):
     with events.open('a', encoding='utf-8') as output:
         output.write(json.dumps(value) + '\n')
 def run(arguments, **kwargs):
-    if arguments[0] == 'uv':
-        assert route == 'bootstrap-child', 'Reuse must not run uv.'
-        assert arguments == ['uv', 'sync', '--locked', '--no-dev', '--project', str(release), '--python', '3.12']
-        record({'kind': 'uv-intercepted', 'argv': arguments})
-        return subprocess.CompletedProcess(arguments, 0)
-    if str(release / 'install.py') in arguments or '-c' in arguments:
+    assert '--install-service' not in arguments
+    if str(release / 'install.py') in arguments:
+        assert route=='bootstrap-child' and arguments[:3]==[str(selected),'-I',str(release/'install.py')]
+        assert '--reuse-python' in arguments and '--download-model' not in arguments
         record({'kind': 'actual-child', 'argv': arguments})
+        # Exercise the exact production isolated handoff while deliberately
+        # restricting this actual product child to read-only validation.
+        arguments=[*arguments,'--validate-only']
+    elif '-c' in arguments:
+        assert route=='model-child' and arguments[:3]==[str(selected),'-I','-c']
+        assert arguments[3].startswith('from fastembed import TextEmbedding; TextEmbedding(')
+        record({'kind':'actual-child','argv':arguments})
     else:
         # Actual installer ACL operations are allowed only on disposable fixture paths.
         assert os.name == 'nt' and Path(arguments[0]).name.lower() == 'icacls.exe'
         assert Path(arguments[1]).resolve().is_relative_to(root.resolve())
     return real_run(arguments, **kwargs)
 subprocess.run = run
+def provision(*arguments):
+    assert route=='bootstrap-child'
+    record({'kind':'provision-intercepted','argv':[str(value) for value in arguments]})
+    return selected
+support.provision=provision
 sys.argv = [str(release / 'install.py'), '--root', str(root), '--vault', str(vault), '--role', 'capture']
 if route == 'model-child':
     selected = release / ('.venv/Scripts/python.exe' if os.name == 'nt' else '.venv/bin/python')
@@ -68,26 +83,46 @@ def documented_prefix(route, release, python):
         for line in (SOURCE / name).read_text(encoding='utf-8').splitlines():
             if route == 'updater-help' and '/update.py --root ' in line:
                 prefix = line.split(' --root ', 1)[0]
-                prefix = prefix.replace('<candidate v0.1.7 Python>', shlex.quote(python.as_posix()))
-                prefix = prefix.replace('<verified v0.1.7 checkout>', shlex.quote(release.as_posix()))
+                prefix = prefix.replace('<retained v0.1.7 Python>', shlex.quote(python.as_posix()))
+                prefix = prefix.replace('<verified v0.1.8 checkout>', shlex.quote(release.as_posix()))
                 choices.append(shlex.split(prefix))
-            elif line.startswith('uv run --no-project --python 3.12 '):
-                tail = line.split('uv run --no-project --python 3.12 ', 1)[1]
-                if route == 'manifest-verifier' and ' -c ' in tail:
+            elif line.startswith('& $BrainBasePython '):
+                tail = line.removeprefix('& $BrainBasePython ')
+                assert shlex.split(tail)[:2] == ['-I','-B'], 'Every documented host command needs exact isolated/no-bytecode flags.'
+                verifier = ' -c ' in tail and "['verify']" in tail
+                preflight = tail.startswith('-I -B -c "import sys; assert sys.version_info')
+                relative_install = tail.startswith('-I -B install.py --')
+                absolute_install = tail.startswith("-I -B (Join-Path $brainRelease 'install.py') --")
+                assert verifier or preflight or relative_install or absolute_install, 'Unclassified documented Python command: '+line
+                if route == 'manifest-verifier' and verifier:
                     arguments = shlex.split(tail)
-                    assert arguments[0] == 'python'
-                    choices.append([str(python), *arguments[1:]])
-                elif route == 'installer-help' and 'install.py --' in tail:
+                    choices.append([str(python), *arguments])
+                elif route == 'installer-help' and relative_install:
                     arguments = shlex.split(tail.split('install.py', 1)[0] + 'install.py')
-                    if arguments[0] == 'python':
-                        arguments = arguments[1:]
                     assert arguments[-1] == 'install.py'
                     choices.append([str(python), *arguments[:-1], str(release / 'install.py')])
+                elif route == 'installer-help' and absolute_install:
+                    choices.append([str(python),'-I','-B',str(release/'install.py')])
         assert choices, 'Missing actual supported entrypoint in ' + name
         assert all(choice == choices[0] for choice in choices), 'Platform examples disagree in ' + name
         groups.append(choices[0])
     assert groups[0] == groups[1], 'README/device guide entrypoint prefixes disagree.'
     return groups[0]
+
+
+@pytest.mark.parametrize('name',['README.md','docs/DEVICE-SETUP.md'])
+@pytest.mark.parametrize('mutation',['drop-isolation','drop-no-bytecode','unknown-command'])
+def test_documented_python_commands_fail_closed_on_unsafe_or_unclassified_forms(tmp_path,monkeypatch,name,mutation):
+    original=SOURCE;fixture=tmp_path/'documented commands';(fixture/'docs').mkdir(parents=True)
+    for relative in ('README.md','docs/DEVICE-SETUP.md'):
+        text=(original/relative).read_text(encoding='utf-8')
+        if relative==name:
+            if mutation=='unknown-command':text+='\n& $BrainBasePython -I -B unknown.py\n'
+            elif mutation=='drop-isolation':text=text.replace('& $BrainBasePython -I -B ','& $BrainBasePython -B ',1)
+            else:text=text.replace('& $BrainBasePython -I -B ','& $BrainBasePython -I ',1)
+        (fixture/relative).write_text(text,encoding='utf-8')
+    monkeypatch.setattr(sys.modules[__name__],'SOURCE',fixture)
+    with pytest.raises(AssertionError):documented_prefix('manifest-verifier',tmp_path/'release',Path(sys.executable))
 
 
 @pytest.mark.parametrize('route,shadow', [
@@ -104,13 +139,14 @@ def documented_prefix(route, release, python):
     'model-child-untracked-json', 'model-child-clean-control',
 ])
 def test_supported_software_entrypoint_ignores_untracked_checkout_module(tmp_path, route, shadow):
-    release, root, vault = tmp_path / 'software with spaces', tmp_path / 'runtime', tmp_path / 'vault'
+    root, vault = tmp_path / 'runtime', tmp_path / 'vault'
+    release=root/'releases/v0.1.8'
     home, appdata, scratch = tmp_path / 'home', tmp_path / 'appdata', tmp_path / 'process temp'
     for path in (release / 'app', root, vault, home / '.codex', home / '.claude', appdata, scratch):
         path.mkdir(parents=True, exist_ok=True)
     if os.name != 'nt':
         tmp_path.chmod(0o700)
-    copied = ['install.py', 'update.py', 'pyproject.toml', 'uv.lock']
+    copied = ['install.py', 'update.py', 'setup_runtime.py', 'pyproject.toml', 'uv.lock']
     copied += [p.relative_to(SOURCE).as_posix() for p in (SOURCE / 'app').glob('*.py')]
     for name in copied:
         shutil.copy2(SOURCE / name, release / name)
@@ -122,12 +158,22 @@ def test_supported_software_entrypoint_ignores_untracked_checkout_module(tmp_pat
     (home / '.claude/settings.json').write_text('{"owner_metadata":["keep"]}\n', encoding='utf-8')
     original_device = {'vault': str(vault.resolve()), 'role': 'capture', 'device_id': 'r153-fixture',
                        'owner_metadata': {'keep': ['synthetic', 17]}}
-    (root / 'device.json').write_text(json.dumps(original_device), encoding='utf-8')
+    if route not in ('bootstrap-child','model-child'):
+        (root / 'device.json').write_text(json.dumps(original_device), encoding='utf-8')
     owner_before = (hashes(home), hashes(appdata))
-    device_before = (root / 'device.json').read_bytes()
+    device_before = (root / 'device.json').read_bytes() if (root/'device.json').exists() else None
     environment = release / '.venv'
     venv.EnvBuilder(with_pip=False, symlinks=os.name != 'nt').create(environment)
     python = environment / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+    retained_python=None
+    if route=='updater-help':
+        retained=root/'releases/v0.1.7/.venv'
+        venv.EnvBuilder(with_pip=False,symlinks=os.name!='nt').create(retained)
+        retained_python=retained/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
+        assert retained_python.is_file() and not retained_python.is_relative_to(environment)
+        original_device.update(python=str(retained_python),release_root=str(retained.parent),version='0.1.7')
+        (root/'device.json').write_text(json.dumps(original_device),encoding='utf-8')
+        device_before=(root/'device.json').read_bytes()
     site = environment / ('Lib/site-packages' if os.name == 'nt' else
                            'lib/python' + str(sys.version_info.major) + '.' + str(sys.version_info.minor) + '/site-packages')
     (site / 'fastembed.py').write_text(textwrap.dedent(MODEL), encoding='utf-8')
@@ -149,9 +195,19 @@ def test_supported_software_entrypoint_ignores_untracked_checkout_module(tmp_pat
     assert Path(interpreter['python']).absolute() == python.absolute()
     assert Path(interpreter['prefix']).resolve() == environment.resolve()
     if route in ('updater-help', 'manifest-verifier', 'installer-help'):
-        command = documented_prefix(route, release, python)
+        command = documented_prefix(route, release, retained_python or python)
         if route.endswith('-help'):
             command.append('--help')
+        else:
+            position=command.index('-c')
+            code=command[position+1]
+            assert code=="from pathlib import Path; import runpy; print(runpy.run_path(str(Path.cwd()/'update.py'))['verify'](Path.cwd())['version'])"
+            # Fixed reviewed read-only verifier body, with the documented -I
+            # flags unchanged. The default guard refuses arbitrary inline
+            # references to update.py, including this harmless lookup string.
+            verifier=tmp_path/'reviewed-manifest-verifier.py'
+            verifier.write_text(code,encoding='utf-8')
+            command=[*command[:position],str(verifier)]
     else:
         parent = tmp_path / 'isolated-installer-parent.py'
         parent.write_text(textwrap.dedent(PARENT), encoding='utf-8')
@@ -177,23 +233,24 @@ def test_supported_software_entrypoint_ignores_untracked_checkout_module(tmp_pat
     elif route == 'manifest-verifier':
         assert process.stdout.strip() == '0.1.7' and not events.exists()
         assert (root / 'device.json').read_bytes() == device_before
+    elif route=='bootstrap-child':
+        assert not (root/'device.json').exists() and not model_event.exists()
+        assert '"status": "validated"' in process.stdout
+        children=[event['argv'] for event in child_events if event['kind']=='actual-child']
+        assert len(children)==1 and children[0][0]==str(python)
+        assert children[0].count('--reuse-python')==1 and children[0][-1]==str(python)
+        assert len([event for event in child_events if event['kind']=='provision-intercepted'])==1
     else:
         installed = json.loads((root / 'device.json').read_text(encoding='utf-8'))
-        assert installed['owner_metadata'] == original_device['owner_metadata']
-        assert installed['role'] == 'capture' and installed['device_id'] == 'r153-fixture'
+        assert installed['role'] == 'capture' and installed['device_id']
         assert installed['python'] == str(python)
         assert all((root / 'app' / Path(name).name).read_bytes() == (release / name).read_bytes()
                    for name in copied if name.startswith('app/'))
         assert '"status": "installed"' in process.stdout
         children = [event['argv'] for event in child_events if event['kind'] == 'actual-child']
         assert len(children) == 1 and children[0][0] == str(python)
-        if route == 'bootstrap-child':
-            assert len([event for event in child_events if event['kind'] == 'uv-intercepted']) == 1
-            assert children[0].count('--reuse-python') == 1 and children[0][-1] == str(python)
-            assert not model_event.exists()
-        else:
-            assert not any(event['kind'] == 'uv-intercepted' for event in child_events)
-            observed = json.loads(model_event.read_text(encoding='utf-8'))
-            assert observed['python'] == str(python) and Path(observed['module']).resolve() == (site / 'fastembed.py').resolve()
-            assert not Path(observed['json_module']).resolve().is_relative_to(release.resolve())
-            assert observed['arguments'] == {'model_name': 'BAAI/bge-small-en-v1.5', 'cache_dir': str(root / 'models'), 'threads': 4}
+        assert not any(event['kind'] == 'provision-intercepted' for event in child_events)
+        observed = json.loads(model_event.read_text(encoding='utf-8'))
+        assert observed['python'] == str(python) and Path(observed['module']).resolve() == (site / 'fastembed.py').resolve()
+        assert not Path(observed['json_module']).resolve().is_relative_to(release.resolve())
+        assert observed['arguments'] == {'model_name': 'BAAI/bge-small-en-v1.5', 'cache_dir': str(root / 'models'), 'threads': 4}

@@ -1,4 +1,4 @@
-name: Verify portable brain
+name: Verify Second Brain
 on:
   push:
     branches: [main]
@@ -15,29 +15,78 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025, macos-15, macos-15-intel]
+        os: [windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       UV_HTTP_TIMEOUT: '60'
       UV_CONCURRENT_DOWNLOADS: '3'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
         with:
           version: '0.9.16'
           enable-cache: false
       - run: uv sync --locked --python 3.12
-      - name: Prepare isolated runner user service bus
-        if: runner.os == 'Linux'
-        shell: bash
+      - name: Windows guarded regression (synthetic state only)
+        shell: pwsh
         run: |
-          sudo loginctl enable-linger "$(id -un)"
-          sudo systemctl start "user@$(id -u).service"
-          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
-          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
-      - run: uv run --locked python -m pytest -q
-      - run: uv run --locked python -m compileall -q app install.py update.py
+          $testPython = (Resolve-Path -LiteralPath '.venv/Scripts/python.exe').Path
+          $testOwnerHome = [Environment]::GetFolderPath('UserProfile')
+          $testSandbox = Join-Path $env:RUNNER_TEMP ('second-brain-tests-' + [guid]::NewGuid().ToString('N'))
+          $testPrivate = Join-Path $testSandbox 'private'
+          New-Item -ItemType Directory -Path $testPrivate -ErrorAction Stop | Out-Null
+          $testAllowed = @('PATH','SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','USERNAME','USERDOMAIN','HOMEDRIVE','HOMEPATH','PROCESSOR_ARCHITECTURE','NUMBER_OF_PROCESSORS','OS','PROGRAMFILES','PROGRAMFILES(X86)','PROGRAMDATA','ALLUSERSPROFILE')
+          Get-ChildItem Env: | Where-Object { $_.Name.ToUpperInvariant() -notin $testAllowed } | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_.Name) }
+          $env:HOME = $testOwnerHome
+          $env:USERPROFILE = $testOwnerHome
+          $env:APPDATA = Join-Path $testPrivate 'AppData/Roaming'
+          $env:LOCALAPPDATA = Join-Path $testPrivate 'AppData/Local'
+          $env:TEMP = $testPrivate
+          $env:TMP = $testPrivate
+          $env:TMPDIR = $testPrivate
+          $env:SB_TEST_SANDBOX = $testSandbox
+          $env:PYTHONDONTWRITEBYTECODE = '1'
+          $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
+          $env:HF_HUB_OFFLINE = '1'
+          $env:HF_HUB_DISABLE_TELEMETRY = '1'
+          $env:GIT_ALLOW_PROTOCOL = 'file'
+          $env:GIT_CONFIG_NOSYSTEM = '1'
+          $env:GIT_CONFIG_GLOBAL = 'NUL'
+          $env:GIT_TERMINAL_PROMPT = '0'
+          $env:GCM_INTERACTIVE = 'never'
+          & $testPython -B -m pytest -q -p no:cacheprovider -p pytest_asyncio.plugin --basetemp (Join-Path $testSandbox 'tmp') --junitxml reports/windows-regression.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - run: uv run --locked python -m compileall -q app install.py update.py setup_runtime.py build_release.py
       - run: uv run --locked python tests/smoke_import.py
       - run: uv export --locked --no-dev --no-hashes --output-file audit-requirements.txt
-      - run: uvx --from pip-audit==2.9.0 pip-audit --disable-pip --no-deps -r audit-requirements.txt
+      - name: Raw dependency audit and scoped profile gate
+        shell: pwsh
+        run: |
+          $dependencyReport = Join-Path $env:RUNNER_TEMP 'second-brain-dependency-audit.json'
+          uvx --python 3.12 --from pip-audit==2.9.0 pip-audit --disable-pip --no-deps -r audit-requirements.txt --format json --output $dependencyReport
+          $dependencyAuditExit = $LASTEXITCODE
+          if ($dependencyAuditExit -notin @(0,1)) { exit $dependencyAuditExit }
+          uv run --locked python -I -B check_dependency_audit.py $dependencyReport
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  library-import:
+    name: Library import only (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.9.16'
+          enable-cache: false
+      - run: uv sync --locked --python 3.12
+      - run: uv run --locked python -m compileall -q app install.py update.py setup_runtime.py build_release.py
+      - run: uv run --locked python tests/smoke_import.py

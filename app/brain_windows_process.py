@@ -104,10 +104,10 @@ def _checked(result):
 class _LifetimeTracker:
     """Require object-lifetime evidence, not only Job accounting, for release.
 
-    One coverage slot per PID deliberately undercounts ambiguous PID reuse.
     Positive member handles remain open until completion, preventing their PID
-    from being recycled. A trusted NEW_PROCESS notice whose valid OpenProcess
-    lookup returns87 may fill one already-gone slot; snapshots alone may not.
+    from being recycled. A trusted NEW_PROCESS notice plus valid absence proof
+    may fill one already-gone slot; snapshots alone may not. If a later positive
+    member reuses that gone PID, its row also retains the proven prior lifetime.
     Missing notifications or uncertain identity reduce availability, never the
     amount of evidence required before caller locks can be released.
     """
@@ -136,10 +136,19 @@ class _LifetimeTracker:
         _checked(self.api.GetProcessTimes(handle,ctypes.byref(created),ctypes.byref(exited),ctypes.byref(kernel),ctypes.byref(user)))
         return int(created.dwLowDateTime)+(int(created.dwHighDateTime)<<32)
 
-    def _member(self,handle):
+    def _in_job(self,handle):
         belongs=wt.BOOL()
         _checked(self.api.IsProcessInJob(handle,self.job,ctypes.byref(belongs)))
-        if not belongs.value:raise OSError('Owned Job process identity is uncertain.')
+        return bool(belongs.value)
+
+    def _member(self,handle):
+        if not self._in_job(handle):raise OSError('Owned Job process identity is uncertain.')
+
+    def _gone(self,pid,proof):
+        if pid not in self._seen_new:raise OSError('A snapshot alone cannot prove a gone Job birth.')
+        self._members.setdefault(pid,{'handle':None,'owned':False,'creation_time':None,
+            'signaled':True,'gone':True,'proof':proof})
+        self._pending.pop(pid,None)
 
     def _attach_root(self,handle):
         if self._root_handle is not None:
@@ -173,16 +182,20 @@ class _LifetimeTracker:
                 # Windows, this infers absence of a process object at lookup.
                 # It is not an exit-code or ActiveProcesses inference. Count
                 # this trusted Job birth at most once, including repeat notices.
-                self._members.setdefault(pid,{'handle':None,'owned':False,'creation_time':None,
-                    'signaled':True,'gone':True,'proof':'job-new-process-and-OpenProcess87'})
-                self._pending.pop(pid,None)
+                self._gone(pid,'job-new-process-and-OpenProcess87')
                 return
             raise ctypes.WinError(error)
         accepted=False
         try:
-            self._member(handle)
-            # A later live member after a gone slot is retained, but its PID
-            # slot never inflates coverage: TotalProcesses mismatch holds safely.
+            if not self._in_job(handle):
+                # A successful non-membership query on this opened object,
+                # following a trusted Job birth, proves the original PID's
+                # object is gone. Never inspect, wait on or signal the foreign
+                # object; the finally closes only this query handle.
+                self._gone(pid,'job-new-process-and-confirmed-nonmember')
+                return
+            # A positive member after a proved gone slot is a distinct birth.
+            # The retained handle prevents any further reuse of this PID.
             self._members[pid]={'handle':handle,'owned':True,'creation_time':None,
                                 'signaled':False,'gone':False,'proof':'positive-job-member-handle',
                                 'prior_gone_slot':prior is not None}
@@ -271,7 +284,8 @@ class _LifetimeTracker:
         total=int(accounting.TotalProcesses)
         if total<self._maximum_total:self._coverage_invalid=True
         self._maximum_total=max(self._maximum_total,total)
-        return not self._coverage_invalid and accounting.ActiveProcesses==0 and total==len(self._members)
+        covered=len(self._members)+sum(row.get('prior_gone_slot') is True for row in self._members.values())
+        return not self._coverage_invalid and accounting.ActiveProcesses==0 and total==covered
 
     def close(self):
         for row in self._members.values():
@@ -342,7 +356,7 @@ def _output(stream,destination,text,encoding):
 
 
 def run(command,*,input=None,capture_output=False,stdout=None,stderr=None,text=False,
-        encoding=None,env=None,timeout=90,on_cleanup_wait=None):
+        encoding=None,env=None,timeout=90,on_cleanup_wait=None,on_tick=None,direct_output=False):
     """Run current Git call shapes, with one deadline for direct + descendant work.
 
     Regular temporary files replace all pipe ends, including stdin. The only
@@ -361,6 +375,8 @@ def run(command,*,input=None,capture_output=False,stdout=None,stderr=None,text=F
     for destination in (stdout,stderr):
         if destination not in (subprocess.PIPE,subprocess.DEVNULL) and not (hasattr(destination,'write') and hasattr(destination,'fileno')):
             raise ValueError('Git output requires capture, discard or a binary file.')
+    if direct_output and any(not (hasattr(stream,'fileno') and hasattr(stream,'write')) for stream in (stdout,stderr)):
+        raise ValueError('Direct process output requires private binary log files.')
     if not isinstance(timeout,(int,float)) or not math.isfinite(timeout) or timeout<=0:
         raise ValueError('A positive finite Git deadline is required.')
     arguments=[os.fsdecode(value) for value in command]
@@ -375,7 +391,7 @@ def run(command,*,input=None,capture_output=False,stdout=None,stderr=None,text=F
     if input is not None and text and not isinstance(input,str):raise TypeError('Text Git input must be text.')
     api=_kernel();process=_ProcessInformation();job=None;tracker=None;attributes=None;attributes_initialized=False
     inherited=[];verified_empty=False;deadline=time.monotonic()+timeout
-    root_finished_at=None;root_exit_code=None
+    root_finished_at=None;root_exit_code=None;next_tick=0
     with tempfile.TemporaryFile(mode='w+b') as incoming, tempfile.TemporaryFile(mode='w+b') as outgoing, tempfile.TemporaryFile(mode='w+b') as errors:
         if input is not None:
             if text:
@@ -391,7 +407,7 @@ def run(command,*,input=None,capture_output=False,stdout=None,stderr=None,text=F
             tracker=_LifetimeTracker(api,job)
             tracker.associate()
             owner=api.GetCurrentProcess()
-            for stream in (incoming,outgoing,errors):
+            for stream in ((incoming,stdout,stderr) if direct_output else (incoming,outgoing,errors)):
                 handle=wt.HANDLE()
                 _checked(api.DuplicateHandle(owner,wt.HANDLE(msvcrt.get_osfhandle(stream.fileno())),owner,ctypes.byref(handle),0,True,2))
                 inherited.append(handle)
@@ -440,12 +456,20 @@ def run(command,*,input=None,capture_output=False,stdout=None,stderr=None,text=F
                     time.sleep(min(0.005,max(0.0,deadline-time.monotonic())))
                 elif state==0xffffffff:raise ctypes.WinError(ctypes.get_last_error())
                 elif state!=258:raise OSError('Unexpected owned process wait result.')
+                elif on_tick is not None and time.monotonic()>=next_tick:
+                    try:on_tick()
+                    except Exception:
+                        # A completion that wins this narrow race takes priority
+                        # over a late progress/stall diagnostic.
+                        if api.WaitForSingleObject(process.hProcess,0)!=0:raise
+                    next_tick=time.monotonic()+1
             verified_empty=True
             if root_exit_code is None:
                 code=wt.DWORD();_checked(api.GetExitCodeProcess(process.hProcess,ctypes.byref(code)))
                 root_exit_code=int(code.value)
             return subprocess.CompletedProcess(arguments,root_exit_code,
-                _output(outgoing,stdout,text,encoding),_output(errors,stderr,text,encoding))
+                None if direct_output else _output(outgoing,stdout,text,encoding),
+                None if direct_output else _output(errors,stderr,text,encoding))
         finally:
             # PROCESS_INFORMATION is filled atomically by CreateProcess. Inspect
             # its live handle even if interruption arrived immediately afterward.

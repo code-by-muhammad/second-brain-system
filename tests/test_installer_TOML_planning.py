@@ -48,6 +48,9 @@ def inputs(tmp_path,monkeypatch,text,platform='linux'):
     home=tmp_path/'fake home';home.mkdir();(home/'.codex').mkdir();(home/'.claude').mkdir()
     appdata=tmp_path/'fake appdata';(appdata/'Claude').mkdir(parents=True)
     monkeypatch.setenv('APPDATA',str(appdata));monkeypatch.setattr(Path,'home',classmethod(lambda cls:home));monkeypatch.setattr(sys,'platform',platform)
+    support=installer.setup_helpers()
+    monkeypatch.setattr(support,'desktop_busy',lambda:False)
+    monkeypatch.setattr(installer,'setup_helpers',lambda:support)
     def refused(*args,**kwargs):raise AssertionError('Planner must not write clients or execute commands.')
     monkeypatch.setattr(installer,'atomic',refused);monkeypatch.setattr(installer,'clients',refused);monkeypatch.setattr(installer.subprocess,'run',refused);monkeypatch.setattr(installer.subprocess,'Popen',refused)
     path=home/'.codex/config.toml';path.write_bytes(text.encode('utf-8'))
@@ -59,7 +62,10 @@ def inputs(tmp_path,monkeypatch,text,platform='linux'):
 
 def expected_state(data,root,python):
     expected=copy.deepcopy(data)
-    expected.setdefault('mcp_servers',{})['second-brain']={'command':str(python),'args':[str(root/'app/brain_client.py')],'startup_timeout_sec':60,'tool_timeout_sec':120}
+    servers=expected.setdefault('mcp_servers',{})
+    prior=servers.get('second-brain',{})
+    if not isinstance(prior,dict):prior={}
+    servers['second-brain']={'startup_timeout_sec':60,'tool_timeout_sec':120,**prior,'command':str(python),'args':[str(root/'app/brain_client.py')]}
     return expected
 
 def planned_toml(home,root,python):
@@ -67,6 +73,10 @@ def planned_toml(home,root,python):
     return next(value for path,value in plan if path==home/'.codex/config.toml')
 
 def check_case(tmp_path,monkeypatch,name,text,platform='linux'):
+    # All equivalent managed-key spellings must traverse the real ownership
+    # gate. A command may be stale; the exact same runtime client path proves
+    # that the entry belongs to this synthetic installation.
+    text=text.replace('"old.py"',json.dumps(str(tmp_path/'synthetic runtime/app/brain_client.py')))
     original=tomllib.loads(text)
     assert isinstance(original,dict) and isinstance(original.get('mcp_servers',{}),dict)
     home,appdata,root,python,path=inputs(tmp_path,monkeypatch,text,platform)
@@ -93,6 +103,15 @@ def check_case(tmp_path,monkeypatch,name,text,platform='linux'):
 @pytest.mark.parametrize('name,text',SHAPES,ids=[name for name,_ in SHAPES])
 def test_valid_TOML_managed_server_spellings_replace_same_logical_path_without_writes(tmp_path,monkeypatch,name,text):
     check_case(tmp_path,monkeypatch,name,text)
+
+@pytest.mark.parametrize('name,text',SHAPES,ids=[name for name,_ in SHAPES])
+def test_foreign_runtime_is_refused_for_every_logical_TOML_spelling(tmp_path,monkeypatch,name,text):
+    text=text.replace('"old.py"',json.dumps('C:/foreign/app/brain_client.py'))
+    home,appdata,root,python,_=inputs(tmp_path,monkeypatch,text)
+    before=(tree_bytes(home),tree_bytes(appdata))
+    with pytest.raises(ValueError,match='another or unknown runtime'):
+        planned_toml(home,root,python)
+    assert (tree_bytes(home),tree_bytes(appdata))==before and not root.exists()
 
 @pytest.mark.parametrize('name,text',PRESERVATION,ids=[name for name,_ in PRESERVATION])
 def test_TOML_owner_literals_comments_and_other_servers_remain_intact(tmp_path,monkeypatch,name,text):

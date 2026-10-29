@@ -50,12 +50,13 @@ def release_case(tmp_path, monkeypatch):
                   for p in repo.rglob('*') if p.is_file() and '.git' not in p.relative_to(repo).parts
                   and p.name != 'release-manifest.json'}
         (repo / 'release-manifest.json').write_text(json.dumps({'version': '0.1.7',
-            'repository': 'code-by-muhammad/second-brain-system', 'sha256': hashes}),
+            'repository': 'code-by-muhammad/second-brain-system',
+            'capabilities':['sealed-client-refresh-v1','owned-service-control-v1'],'sha256': hashes}),
             encoding='utf-8', newline='\n')
 
     def make(repo, origin=REMOTE, annotated=False):
         repo.mkdir(parents=True)
-        for name in ('install.py', 'update.py', 'pyproject.toml', 'uv.lock', 'app/brain_cli.py'):
+        for name in ('install.py', 'setup_runtime.py', 'update.py', 'pyproject.toml', 'uv.lock', 'app/brain_cli.py'):
             path = repo / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b'# synthetic release bytes; never executed\n')
@@ -101,6 +102,15 @@ def release_case(tmp_path, monkeypatch):
         nonlocal clone_source
         clone_source = seed
         monkeypatch.setattr(updater.subprocess, 'run', run)
+        helper=updater.installer();support=helper.setup_helpers()
+        def provision(*args):
+            effects.append('uv')
+            raise ReachedDependencyPreparation('Synthetic dependency preparation intercepted.')
+        monkeypatch.setattr(support,'provision',provision)
+        monkeypatch.setattr(support,'run',run)
+        monkeypatch.setattr(helper,'setup_helpers',lambda:support)
+        monkeypatch.setattr(updater,'installer',lambda:helper)
+        monkeypatch.setattr(updater,'__file__',str(release/'update.py'))
         monkeypatch.setattr(updater, 'update_lock', lambda _: contextlib.nullcontext())
         monkeypatch.setattr(sys, 'argv', ['update.py', '--root', str(root), '--version', VERSION])
         monkeypatch.setenv('GIT_DIR', str(tmp_path / 'unrelated git directory'))

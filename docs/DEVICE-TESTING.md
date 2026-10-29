@@ -1,52 +1,37 @@
-# Set up and test another device
+# Verification and device acceptance
 
-This is the short handover for the owner's Mac/Linux device. The v0.1.7 branch is a **device-testing candidate**, not a production release or proof that this physical device is already installed. Windows production stays v0.1.6 until explicit release acceptance. The dated shared `02-Areas/AI-Memory/Second-Brain-System.md` supplies the exact candidate commit, manifest SHA256 and current acceptance status. Use those pins; do not silently select a newer branch tip or an old installation example.
+Revision: 29 October 2026. The v0.1.8 candidate's native qualification is Windows only. Accepted v0.1.7 remains the Mac/Linux onboarding baseline. Never turn a library import, configuration entry or historical test into a new physical-device claim.
 
-## What is shared
+## Automated regression boundary
 
-`code-by-muhammad/second-brain` contains the notes, captures and wiki. `code-by-muhammad/second-brain-system` distributes software. Each device has its own native Python environment, local index, model cache, credentials, device ID and MCP connection. Never copy Windows environments, live SQLite/WAL files or another device's tokens. Notes synchronize through the private GitHub repository; another laptop does not remotely mount the Windows PC.
+Windows lifetime controls test trusted-birth/foreign-PID refusal, distinct gone-to-member reuse, duplicate notices, denied/missing membership evidence, unsignaled handles and contradictory accounting. The actual nested-Job probe separately qualifies membership on the tested Windows build. Neither establishes reliable notification delivery or a finite kernel cleanup bound. Missing lifetime proof keeps caller locks and needs scoped operator diagnosis; it must never be called a successful timeout or empty-count acceptance.
 
-New devices use **capture** role. Windows remains the sole wiki compiler and daily aggregator. The local service owns Git synchronization; do not add a cron, compiler schedule or second sync loop. Local search/capture can work while Windows is off; wiki compilation waits for its designated host. Internet is needed for GitHub synchronization and cloud AI calls. Same-note conflicts pause for owner review.
+The default pytest suite uses disposable synthetic roots outside the checkout and real HOME, an explicit `SB_TEST_SANDBOX` plus child `--basetemp`, private client/config/temp paths, local-only Git fixtures, offline model flags and a process guard. The guard always refuses Scheduler/launchd/systemd mutations, uv provisioning, production identities/paths and service-capable inline/module routes. There is no `--run-native` escape.
 
-## Give this to the device's local Codex or Claude Code agent
+Windows CI supplies an allowlisted process environment before pytest, keeps real HOME only until conftest establishes private fixture HOME, disables plugin autoload and explicitly loads `pytest_asyncio.plugin`. Checkout credentials are not persisted. CI invokes the full regression with JUnit; compile/import checks follow. The pinned dependency audit runs in the Windows job. Ubuntu/macOS jobs compile/import libraries only; they do not install or accept the v0.1.8 service. A hosted run is a pass only after it actually completes; billing/unavailable runners remain unverified.
 
-> Set up my shared Second Brain on this actual device for testing. First read this document and the current shared System/Device-Setup pages. Inspect existing repositories, runtime and client settings. Use my authenticated private repositories and the exact commit/manifest SHA recorded in the current handover. Never paste tokens, overwrite existing notes or select an unapproved release. Use a new checkout and separate synthetic verification paths. Verify the manifest before executing downloaded code. Run the locked native checks below; keep failure receipts. Ask before major architecture changes, new external services or new recurring AI costs. If native verification passes and no existing installation would be replaced, install this explicitly authorized testing candidate into its own new runtime, using capture role and the packaged per-user service. Configure my installed local clients, install the supplied skill and managed instruction blocks as described below, then verify real MCP retrieval, one labeled onboarding capture, synchronization and restart. Preserve production installations. Stop and report any failure; do not start broad repeated model reviews or automatic wiki compilation. Record the exact commit, OS/architecture, native checks and actual connection/save receipts. This testing installation does not approve a production tag or transfer wiki ownership.
+Inspect failures, exact source hashes, skips and async results. No raw environment/credentials, private notes or installed SQLite should enter the test fixtures or shared report. A test guard is a tripwire, not an OS security sandbox.
 
-## Verify, then install
+The audit gate reconciles all 160 packages in the qualified Windows runtime graph. It retains raw findings and separately applies only the exact, source-bound and time-limited FastMCP OAuth exception in [the security profile](../SECURITY.md). Missing/unscanned packages, other advisories, protected source changes and expiry fail the gate. LiteLLM exclusion, provider/reranker refusal, static-token routing, native lock contention and the patched embedding/model behavior need their own tests; package resolution is insufficient.
 
-Use official [Git](https://git-scm.com/downloads), [GitHub CLI](https://cli.github.com/) and [uv](https://docs.astral.sh/uv/getting-started/installation/) distributions. Use this device's `gh auth login` if needed. Git must be at least 2.38. Clone the two private repositories into NEW paths, or carefully reuse an existing vault without resetting local edits. Checkout the exact supplied software commit with LF bytes preserved.
+## Native Windows fixture proof
 
-Before executing the candidate, independently compare all entries in `release-manifest.json` with the downloaded files using trusted Python standard-library hashing; require the handover's manifest hash, version and exact tracked file set. Do not run the downloaded verifier to establish its own trust. Then follow the locked commands in `.github/workflows/verify.yml`: native Python 3.12 dependency sync, full pytest/JUnit, compile/import checks and pinned dependency audit. Use separate synthetic runtime/state/vault/config paths outside the checkout, offline model settings and local-only Git fixtures. Clear inherited BRAIN_/BASIC_MEMORY_/GIT_/PYTEST overrides before providing the controlled fixture configuration. Never use real notes or authentication in test fixtures.
+Native service qualification is a separately reviewed artifact harness, not the default pytest suite or an automatic CI gate. It uses a unique non-synced synthetic boundary, one positively absent UUID task with ZERO triggers, a non-production random port, private environment/data, bounded own children, retained birth-verified handles and exact cleanup. It measures actual install/start, authenticated health/read, writer refusal, verified stop, explicit-stop persistence, external End/Job cleanup, real stdio proxy refusal of a foreign listener without a request, and exact UUID fresh-start/finish archival.
 
-Inspect the actual skips. The host's native lifecycle test must pass: macOS `test_native_mac_stop_start_registration`, Linux `test_native_linux_unit_stop_start`, or Windows `test_native_windows_task_stop_start`. Linux requires a working existing systemd user bus; Mac requires the intended user's actual GUI launchd session. Do not change session settings just to conceal a skipped check. Rehash source afterward. Actual Apple Silicon results do not prove native Intel Mac execution, and vice versa. No paid CI runner is required.
+Record the actual source map/driver hashes, version, task absence, empty port/tree, source/live metadata invariance and any failed earlier runs. A success on pre-bump source does not validate a later release automatically. Tagged fresh-install/forward-upgrade/rollback/interruption/recovery and subsequent-upgrade receipts are separate requirements.
 
-On a NEW Mac/Linux installation, after successful verification and path selection, invoke from the verified checkout:
+The old native sleeper fixtures were retired because a sleeper cannot satisfy current ownership/heartbeat/authentication and their cached-PID/substring cleanup was unsafe. Their historical source is preserved in the audit archive/Git history; they are not replaced by fake passing E2E tests.
 
-```sh
-uv run --no-project --python 3.12 python -I -B -c 'import runpy; runpy.run_path("install.py", run_name="__main__")' --root "$brain_root" --vault "$brain_vault" --role capture --configure-clients --download-model --install-service
-```
+## Index proof
 
-`brain_root` and `brain_vault` must be the actual chosen absolute paths, not values copied from Windows. For an existing installation, stop before replacing it and follow the updater's exact accepted-release procedure. An unreleased candidate is not an accepted updater tag.
+Use only synthetic notes and a copied local model cache. Keep original model bytes and source bytes/mtimes unchanged; never copy owner auth/index/vault inputs. Check starter coverage, an approved late import, preserved-size/mtime stale detection, normal retry control, full repair, original-row chunk/vector coherence and actual indexed FTS/vector retrieval under the configured threshold. Query setup can write derived DB tables, so label that phase as a writer; the read-only status phase must not repair the main DB. Record SQLite sidecars separately. A Python network detector is not a native-code network sandbox.
 
-## Skill and instruction files
+Counts alone cannot establish all-file coverage. File fallback/read alone cannot establish indexed retrieval. Unsupported metadata remains reviewable rather than silently normalized or discarded.
 
-The portable skill is `skills/second-brain/SKILL.md`. Install a copy under the user's skill directory, preserving any existing custom skill of the same name until its differences are reviewed:
+## Mac/Linux follow-up before a future native release
 
-- Codex: `~/.agents/skills/second-brain/SKILL.md` (or the discoverable user skill root explicitly configured by that installed client).
-- Claude Code: `~/.claude/skills/second-brain/SKILL.md`.
+Keep accepted v0.1.7 on owner devices. A future reviewed harness must use exact owned process identities, real launchd GUI/session or systemd user-bus evidence and safe retained cleanup. On Mac, prove bootout absence and re-bootstrap/start in the intended user's GUI domain on each architecture claimed. On Linux, prove the actual escaped ExecStart, daemon-reload/enable/start/stop with an existing user bus; a required CI bus missing is a failure, not a skipped pass. Do not mutate an owner's session or use cached PID plus command-line substring matching to manufacture acceptance.
 
-The canonical always-on protocol is `docs/AI-PROTOCOL.md`. The installer already merges it into `~/.codex/AGENTS.md` between `<!-- BEGIN SECOND-BRAIN -->` and `<!-- END SECOND-BRAIN -->`. The onboarding agent should merge that SAME block into `~/.claude/CLAUDE.md`, preserving all content outside it. Replace an existing complete managed block rather than appending duplicates; stop on malformed/duplicate markers. Back up the file locally before editing. Do not copy private project instructions between devices.
+## Target device remains a separate gate
 
-Restart the relevant client and check skill discovery (`$second-brain` in Codex, `/second-brain` in Claude Code). A skill/instruction file does not grant access by itself: verify the actual `second-brain` MCP tools in a NEW chat. Claude web/Cowork and ChatGPT cloud chats may have different connector/skill scope; local CLI success is not proof that those interfaces are connected.
-
-## Acceptance on this device
-
-1. Confirm health, the new unique device ID and capture role.
-2. In each intended local AI client, actually call `brain_context`, search a known note and read its dated source through MCP.
-3. Save one explicitly labeled onboarding capture with a stable per-device event ID; report its real path/hash receipt. Verify it reaches Windows through the existing maintenance sync, without running a competing sync.
-4. Restart the service/client, repeat a read, and verify again after the owner next reboots. Mark reboot verification pending until it is actually done.
-5. Report current limitations honestly. Do not compile temporary handoff/research imports, infer profile facts, or claim every GUI/cloud client works from configuration alone.
-
-For later updates, pull notes through the existing sync owner. Software is updated separately from an explicitly accepted release after preserving local work. Reinstall the packaged skill/protocol when their reviewed versions change. Keep runtime databases and authentication local.
-
-Official format references: [Codex skills](https://learn.chatgpt.com/docs/build-skills), [Claude Code skills](https://code.claude.com/docs/en/skills), [Claude Code memory](https://code.claude.com/docs/en/memory).
+Follow [device setup](DEVICE-SETUP.md). Verify each requested named client with actual tool results, the existing maintenance-owned Git round trip, and reboot/login only when actually performed. A library import or test on this Windows host cannot establish Raza's repaired PC, another team member's device, Desktop Chat/Code/Cowork/web connectivity or reboot acceptance. Preserve failures and publish actual concise receipts only.

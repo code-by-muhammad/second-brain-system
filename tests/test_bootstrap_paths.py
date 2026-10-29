@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 import brain_settings as cfg
 import brain_index_bootstrap as bootstrap
+from test_index_coverage import config
 
 
 @pytest.mark.parametrize('suffix', ['#review', '?review'])
@@ -13,6 +14,8 @@ def test_bootstrap_readonly_uri_encodes_runtime_path(brain, monkeypatch, suffix)
     state = cfg.STATE.parent / ('state' + suffix)
     state.mkdir()
     monkeypatch.setattr(cfg, 'STATE', state)
+    config()
+    (cfg.VAULT/'Fixture.md').write_text('Synthetic fixture.',encoding='utf-8')
     connection = sqlite3.connect(state / 'memory.db')
     try:
         for table in ('entity', 'search_vector_chunks', 'search_vector_embeddings_rowids'):
@@ -21,7 +24,7 @@ def test_bootstrap_readonly_uri_encodes_runtime_path(brain, monkeypatch, suffix)
         connection.commit()
     finally:
         connection.close()
-    monkeypatch.setattr(bootstrap.subprocess, 'run', lambda *args, **kwargs: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(bootstrap, '_run_reindex', lambda *args, **kwargs: SimpleNamespace(returncode=0))
     result = bootstrap.main()
-    assert result['status'] == 'verified'
+    assert result['status'] == 'needs attention'  # Count-only legacy schema cannot establish coverage.
     assert result['counts'] == {table: 1 for table in ('entity', 'search_vector_chunks', 'search_vector_embeddings_rowids')}

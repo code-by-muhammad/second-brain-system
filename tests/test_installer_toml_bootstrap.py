@@ -6,11 +6,13 @@ import math
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import tomllib
 from types import SimpleNamespace
 
 import pytest
+from test_portable_remediation import portable
 
 SOURCE=Path(os.environ.get('R133_SOURCE',Path(__file__).resolve().parents[1])).resolve()
 spec=importlib.util.spec_from_file_location('r133_bootstrap_installer',SOURCE/'install.py')
@@ -33,13 +35,16 @@ def context(tmp_path,monkeypatch,text='model = "owner"\n'):
     root=tmp_path/'synthetic runtime'
     python=tmp_path/'selected environment with spaces'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
     python.parent.mkdir(parents=True);python.write_bytes(b'fixture executable never launched')
+    support=installer.setup_helpers()
+    monkeypatch.setattr(support,'host_context',lambda:None)
+    monkeypatch.setattr(installer,'setup_helpers',lambda:support)
     def forbidden(*args,**kwargs):raise AssertionError('Unexpected client/runtime write or process.')
     for name in ('atomic','private_dir','backup','clients'):monkeypatch.setattr(installer,name,forbidden)
     return home,appdata,vault,root,python,forbidden
 
 
 def planned(home,root,python):
-    return next(value for path,value in installer.client_plan(root,python,home) if path==home/'.codex/config.toml')
+    return next(row['after'] for row in installer.sealed_client_plan(root,python,home,selected=['codex'])['files'] if Path(row['path'])==home/'.codex/config.toml')
 
 
 def missing_parser(monkeypatch,mode):
@@ -90,11 +95,14 @@ def test_nonmapping_owner_mcp_parent_is_rejected_without_overwrite(tmp_path,monk
 
 
 @pytest.mark.parametrize('value',['"obsolete"','12','["obsolete"]'],ids=['string','integer','array'])
-def test_whole_managed_scalar_value_is_replaced_while_sibling_is_preserved(tmp_path,monkeypatch,value):
+def test_unknown_scalar_is_refused_but_low_level_parser_preserves_sibling(tmp_path,monkeypatch,value):
     text='mcp_servers.second-brain = '+value+'\nmcp_servers.other.command = "keep"\n'
     home,appdata,_,root,python,forbidden=context(tmp_path,monkeypatch,text)
     monkeypatch.setattr(installer.subprocess,'run',forbidden);before=(tree(home),tree(appdata))
-    output=tomllib.loads(planned(home,root,python))
+    with pytest.raises(ValueError,match='another or unknown runtime'):
+        planned(home,root,python)
+    specs={'command':str(python),'args':[str(root/'app/brain_client.py')]}
+    output=tomllib.loads(installer._codex_toml_plan(text,specs))
     assert output['mcp_servers']['other']=={'command':'keep'}
     assert output['mcp_servers']['second-brain']=={'command':str(python),'args':[str(root/'app/brain_client.py')],'startup_timeout_sec':60,'tool_timeout_sec':120}
     assert (tree(home),tree(appdata))==before
@@ -110,7 +118,7 @@ def test_unavailable_locked_parser_is_a_controlled_no_write_preflight_error(tmp_
 
 
 def normal_args(monkeypatch,root,vault,*extra):
-    argv=['install.py','--root',str(root),'--vault',str(vault),'--configure-clients',*extra]
+    argv=['install.py','--root',str(root),'--vault',str(vault),'--configure-clients','--client','codex',*extra]
     monkeypatch.setattr(sys,'argv',argv)
     return argv
 
@@ -122,35 +130,37 @@ def test_normal_bootstrap_hands_off_original_arguments_once_before_deploy(tmp_pa
     python=release/('.venv/Scripts/python.exe' if os.name=='nt' else '.venv/bin/python')
     argv=normal_args(monkeypatch,root,vault,'--download-model','--role','capture')
     calls=[];before=(tree(home),tree(appdata));monkeypatch.setattr(installer,'deploy',forbidden)
+    def provision(*args):
+        calls.append(('provision',args));python.parent.mkdir(parents=True);python.write_bytes(b'prepared only');return python
+    monkeypatch.setattr(installer.setup_helpers(),'provision',provision)
     def run(args,**kwargs):
         calls.append((args,kwargs))
-        if args[0]=='uv':python.parent.mkdir(parents=True);python.write_bytes(b'prepared only')
-        else:
-            assert args==[str(python),'-I',str(release/'install.py'),*argv[1:],'--reuse-python',str(python)]
-            if child_fails:raise subprocess.CalledProcessError(23,args)
+        assert args==[str(python),'-I',str(release/'install.py'),*argv[1:],'--reuse-python',str(python)]
+        if child_fails:raise subprocess.CalledProcessError(23,args)
         return subprocess.CompletedProcess(args,0)
     monkeypatch.setattr(installer.subprocess,'run',run)
     with pytest.raises(SystemExit) as error:installer.main()
     assert error.value.code==(23 if child_fails else 0)
-    assert len(calls)==2 and all(kwargs=={'check':True} for _,kwargs in calls)
-    assert calls[0][0]==['uv','sync','--locked','--no-dev','--project',str(release),'--python','3.12']
+    assert len(calls)==2 and calls[0]==('provision',(release,root,None)) and calls[1][1]=={'check':True}
     assert (tree(home),tree(appdata))==before and not root.exists()
 
 
 def test_sync_failure_never_hands_off_or_deploys(tmp_path,monkeypatch):
     home,appdata,vault,root,_,forbidden=context(tmp_path,monkeypatch)
     normal_args(monkeypatch,root,vault);monkeypatch.setattr(installer,'deploy',forbidden);calls=[]
-    def run(args,**kwargs):calls.append(args);raise subprocess.CalledProcessError(7,args)
-    monkeypatch.setattr(installer.subprocess,'run',run);before=(tree(home),tree(appdata))
+    def provision(*args):calls.append(args);raise subprocess.CalledProcessError(7,['synthetic-provision'])
+    monkeypatch.setattr(installer.setup_helpers(),'provision',provision)
+    monkeypatch.setattr(installer.subprocess,'run',forbidden);before=(tree(home),tree(appdata))
     with pytest.raises(subprocess.CalledProcessError):installer.main()
-    assert len(calls)==1 and calls[0][0]=='uv' and (tree(home),tree(appdata))==before and not root.exists()
+    assert len(calls)==1 and (tree(home),tree(appdata))==before and not root.exists()
 
 
 def test_missing_selected_bootstrap_python_stops_before_handoff(tmp_path,monkeypatch):
     home,appdata,vault,root,_,forbidden=context(tmp_path,monkeypatch)
     release=tmp_path/'missing prepared interpreter';release.mkdir();monkeypatch.setattr(installer,'REPO',release)
     normal_args(monkeypatch,root,vault);calls=[];monkeypatch.setattr(installer,'deploy',forbidden)
-    monkeypatch.setattr(installer.subprocess,'run',lambda args,**kw:(calls.append(args) or subprocess.CompletedProcess(args,0)))
+    monkeypatch.setattr(installer.setup_helpers(),'provision',lambda *args:(calls.append(args) or release/'missing-python'))
+    monkeypatch.setattr(installer.subprocess,'run',forbidden)
     before=(tree(home),tree(appdata))
     with pytest.raises(SystemExit) as error:installer.main()
     assert error.value.code==2 and len(calls)==1 and (tree(home),tree(appdata))==before and not root.exists()
@@ -159,22 +169,23 @@ def test_missing_selected_bootstrap_python_stops_before_handoff(tmp_path,monkeyp
 @pytest.mark.parametrize('configure',[False,True])
 def test_reuse_python_keeps_lexical_selected_path_without_sync_or_handoff(tmp_path,monkeypatch,configure):
     home,appdata,vault,root,python,forbidden=context(tmp_path,monkeypatch)
-    monkeypatch.setattr(sys,'argv',['install.py','--root',str(root),'--vault',str(vault),'--reuse-python',str(python),*(['--configure-clients'] if configure else [])])
+    monkeypatch.setattr(sys,'argv',['install.py','--root',str(root),'--vault',str(vault),'--reuse-python',str(python),*(['--configure-clients','--client','codex'] if configure else [])])
     monkeypatch.setattr(installer.subprocess,'run',forbidden);calls=[]
-    def deploy(*args):calls.append(args);return {'status':'synthetic-no-write'}
+    def deploy(*args,**kwargs):calls.append((args,kwargs));return {'status':'synthetic-no-write'}
     monkeypatch.setattr(installer,'deploy',deploy);before=(tree(home),tree(appdata))
     installer.main()
-    assert len(calls)==1 and calls[0]==(root,python.absolute(),vault,'capture',configure)
+    assert len(calls)==1 and calls[0][0]==(root,python.absolute(),vault,'capture',False)
+    assert (calls[0][1]['client_value'] is not None)==configure
     assert (tree(home),tree(appdata))==before and not root.exists()
 
 
 def test_validate_only_reuse_invokes_preflight_without_sync_handoff_or_deploy(tmp_path,monkeypatch):
     home,appdata,vault,root,python,forbidden=context(tmp_path,monkeypatch)
-    monkeypatch.setattr(sys,'argv',['install.py','--root',str(root),'--vault',str(vault),'--reuse-python',str(python),'--configure-clients','--validate-only'])
+    monkeypatch.setattr(sys,'argv',['install.py','--root',str(root),'--vault',str(vault),'--reuse-python',str(python),'--configure-clients','--client','codex','--validate-only'])
     monkeypatch.setattr(installer.subprocess,'run',forbidden);monkeypatch.setattr(installer,'deploy',forbidden);calls=[]
     monkeypatch.setattr(installer,'validate',lambda *args:calls.append(args))
     before=(tree(home),tree(appdata));installer.main()
-    assert calls==[(root,vault,python.absolute(),True)] and (tree(home),tree(appdata))==before and not root.exists()
+    assert calls==[(root,vault,python.absolute(),False)] and (tree(home),tree(appdata))==before and not root.exists()
 
 
 def test_handoff_reuse_flag_terminates_a_simulated_child_without_a_loop(tmp_path,monkeypatch):
@@ -182,16 +193,18 @@ def test_handoff_reuse_flag_terminates_a_simulated_child_without_a_loop(tmp_path
     release=tmp_path/'verified child project';release.mkdir();monkeypatch.setattr(installer,'REPO',release)
     python=release/('.venv/Scripts/python.exe' if os.name=='nt' else '.venv/bin/python')
     normal_args(monkeypatch,root,vault);calls=[];deployed=[]
-    monkeypatch.setattr(installer,'deploy',lambda *args:(deployed.append(args) or {'status':'synthetic'}))
+    monkeypatch.setattr(installer,'deploy',lambda *args,**kwargs:(deployed.append(args) or {'status':'synthetic'}))
+    (release/'docs').mkdir();(release/'docs/AI-PROTOCOL.md').write_bytes((SOURCE/'docs/AI-PROTOCOL.md').read_bytes())
+    def provision(*args):
+        calls.append('provision');python.parent.mkdir(parents=True);python.write_bytes(b'fixture only');return python
+    monkeypatch.setattr(installer.setup_helpers(),'provision',provision)
     def run(args,**kwargs):
         calls.append(args)
         assert len(calls)<=2,'Bootstrap handoff loop.'
-        if args[0]=='uv':python.parent.mkdir(parents=True);python.write_bytes(b'fixture only')
-        else:
-            saved=sys.argv
-            assert args[:3]==[str(python),'-I',str(release/'install.py')]
-            try:sys.argv=[args[2],*args[3:]];installer.main()
-            finally:sys.argv=saved
+        saved=sys.argv
+        assert args[:3]==[str(python),'-I',str(release/'install.py')]
+        try:sys.argv=[args[2],*args[3:]];installer.main()
+        finally:sys.argv=saved
         return subprocess.CompletedProcess(args,0)
     monkeypatch.setattr(installer.subprocess,'run',run);before=(tree(home),tree(appdata))
     with pytest.raises(SystemExit) as error:installer.main()
@@ -201,26 +214,16 @@ def test_handoff_reuse_flag_terminates_a_simulated_child_without_a_loop(tmp_path
 
 
 @pytest.mark.parametrize('mode',['missing','wrong-version'])
-def test_candidate_update_parser_preflight_failure_preserves_old_runtime_and_never_stops(tmp_path,monkeypatch,mode):
-    home,appdata,vault,root,python,forbidden=context(tmp_path,monkeypatch)
-    (root/'state').mkdir(parents=True);(root/'app').mkdir()
-    (root/'app/original.py').write_bytes(b'original runtime bytes')
-    (root/'device.json').write_text(json.dumps({'vault':str(vault),'python':str(python),'release_root':'synthetic-old-release','version':'0.1.6','role':'capture'}),encoding='utf-8')
-    release=root/'releases/v0.1.7';release.mkdir(parents=True)
-    monkeypatch.setattr(updater,'verify',lambda path,**kwargs:{'version':'0.1.7'})
-    monkeypatch.setattr(updater,'snapshot',forbidden);monkeypatch.setattr(updater,'restore',forbidden)
-    missing_parser(monkeypatch,mode);calls=[]
-    def run(args,**kwargs):
-        calls.append(args)
-        if args[0]=='uv':return subprocess.CompletedProcess(args,0)
-        if '--validate-only' in args:
-            installer.validate(root,vault,python,True)
-            return subprocess.CompletedProcess(args,0)
-        raise AssertionError('No stop, install, start or rollback is allowed after failed preflight.')
-    monkeypatch.setattr(updater.subprocess,'run',run);before=(tree(home),tree(appdata),tree(root))
-    with pytest.raises(ValueError):updater.perform(root,'v0.1.7')
-    assert len(calls)==2 and '--validate-only' in calls[1]
-    assert (tree(home),tree(appdata),tree(root))==before
+def test_candidate_update_parser_preflight_failure_preserves_old_runtime_and_never_stops(portable,monkeypatch,mode):
+    from upgrade_fixture import prepare
+    h=prepare(portable,monkeypatch)
+    (h.home/'.codex').mkdir()
+    (h.home/'.codex/config.toml').write_text('[mcp_servers.second-brain]\ncommand='+json.dumps(sys.executable)+'\nargs=['+json.dumps(str(h.root/'app/brain_client.py'))+']\n')
+    before=(tree(h.home),tree(h.root))
+    missing_parser(monkeypatch,mode)
+    with pytest.raises(ValueError,match='locked tomlkit'):h.updater.perform(h.root,'v0.1.6')
+    assert not any(event['kind']=='controller' for event in h.events)
+    assert (tree(h.home),tree(h.root))==before
 
 
 @pytest.mark.parametrize('mode,trailing,empty_reuse,expected_exit',[
@@ -234,9 +237,13 @@ def test_actual_synthetic_bootstrap_cli_preserves_child_exit_and_accepted_argv(t
     import venv
     home,appdata,vault,root,_,_=context(tmp_path,monkeypatch)
     release=tmp_path/'synthetic verified CLI project';release.mkdir()
+    (release/'docs').mkdir();(release/'docs/AI-PROTOCOL.md').write_bytes((SOURCE/'docs/AI-PROTOCOL.md').read_bytes())
     venv.EnvBuilder(with_pip=False,symlinks=os.name!='nt').create(release/'.venv')
     selected=release/('.venv/Scripts/python.exe' if os.name=='nt' else '.venv/bin/python')
     assert selected.is_file()
+    import tomlkit
+    site=release/('.venv/Lib/site-packages' if os.name=='nt' else '.venv/lib/python'+str(sys.version_info.major)+'.'+str(sys.version_info.minor)+'/site-packages')
+    shutil.copytree(Path(tomlkit.__file__).parent,site/'tomlkit',ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
     if os.name!='nt':assert selected.is_symlink()
     observation=tmp_path/'cli-events.jsonl'
     # This exact-source wrapper leaves main()/its SystemExit unguarded. The
@@ -257,15 +264,21 @@ def forbidden(*args,**kwargs):raise AssertionError('Fixture must not apply runti
 for name in ('atomic','private_dir','backup','clients'):setattr(module,name,forbidden)
 real_run=subprocess.run
 def run(args,**kwargs):
-    if args[0]=='uv':
-        assert not child,'Bootstrap must not loop after an empty original reuse value.'
-        record('uv',argv=args)
-        return subprocess.CompletedProcess(args,0)
+    assert not child and args[:3]==[str(selected),'-I',str(module.REPO/'install.py')]
+    assert '--install-service' not in args and '--download-model' not in args
     env=os.environ.copy();env['R133_FIXTURE_CHILD']='1'
     return real_run(args,env=env,**kwargs)
 module.subprocess.run=run
-def deploy(root,python,vault,role,configure):
-    record('deploy-stub',argv=sys.argv,python=str(python),role=role,configure=configure)
+selected=module.REPO/('.venv/Scripts/python.exe' if os.name=='nt' else '.venv/bin/python')
+support=module.setup_helpers()
+support.host_context=lambda:None
+def provision(*args):
+    assert not child,'Bootstrap must not loop after an empty original reuse value.'
+    record('provision',argv=[str(value) for value in args]);return selected
+support.provision=provision
+module.setup_helpers=lambda:support
+def deploy(root,python,vault,role,configure,**kwargs):
+    record('deploy-stub',argv=sys.argv,python=str(python),role=role,configure=kwargs.get('client_value') is not None)
     return {'status':'synthetic-no-installation'}
 module.deploy=deploy
 if child and os.environ['R133_FIXTURE_MODE']=='exit23':
@@ -274,7 +287,8 @@ if child and os.environ['R133_FIXTURE_MODE']=='exit23':
 module.main()
 '''.replace('SOURCE_LITERAL',repr(str(SOURCE)))
     (release/'install.py').write_text(wrapper,encoding='utf-8',newline='\n')
-    arguments=['--root',str(root),'--vault',str(vault),'--configure-clients']
+    launcher=release/'reviewed-bootstrap-fixture.py';launcher.write_text(wrapper,encoding='utf-8',newline='\n')
+    arguments=['--root',str(root),'--vault',str(vault),'--configure-clients','--client','codex']
     if empty_reuse:arguments.extend(['--reuse-python',''])
     if trailing:arguments.append('--')
     expected_arguments=list(arguments)
@@ -287,7 +301,7 @@ module.main()
                R133_FIXTURE_HOME=str(home),R133_FIXTURE_OUTPUT=str(observation),R133_FIXTURE_MODE=mode)
     env.pop('R133_FIXTURE_CHILD',None)
     before=(tree(home),tree(appdata))
-    process=subprocess.run([sys.executable,'-I',str(release/'install.py'),*arguments],env=env,
+    process=subprocess.run([sys.executable,'-I',str(launcher),*arguments],env=env,
                            capture_output=True,text=True,encoding='utf-8',timeout=30)
     assert process.returncode==expected_exit,process.stderr
     assert 'Traceback' not in process.stderr
@@ -298,7 +312,7 @@ module.main()
         assert (tree(home),tree(appdata))==before and not root.exists()
         return
     events=[json.loads(line) for line in observation.read_text(encoding='utf-8').splitlines()]
-    assert len(events)==2 and events[0]['kind']=='uv' and events[0]['child'] is False
+    assert len(events)==2 and events[0]['kind']=='provision' and events[0]['child'] is False
     assert events[1]['child'] is True and events[1]['argv'][1:]==expected_arguments
     assert events[1]['python']==str(selected)
     assert events[1]['kind']==('child-exit' if mode=='exit23' else 'deploy-stub')

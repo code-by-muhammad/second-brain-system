@@ -9,6 +9,9 @@ if PILOT:
     cfg.VAULT=(ROOT/'pilot/vault').resolve()
     cfg.STATE=(ROOT/'pilot/state').resolve()
     cfg.PORT=8767
+for key in list(os.environ):
+    if key.startswith('BASIC_MEMORY_'): os.environ.pop(key)
+os.environ.update(cfg.environment())
 os.environ['BRAIN_VAULT']=str(ROOT/'pilot/vault') if PILOT else str(cfg.VAULT)
 os.environ['BRAIN_STATE']=str(ROOT/'pilot/state') if PILOT else str(cfg.STATE)
 os.environ['BASIC_MEMORY_CONFIG_DIR']=os.environ['BRAIN_STATE']
@@ -21,6 +24,7 @@ os.environ['HF_HUB_DISABLE_TELEMETRY']='1'
 os.environ['HF_HUB_OFFLINE']='1'
 os.environ['DO_NOT_TRACK']='1'
 os.environ['LOGFIRE_IGNORE_NO_CONFIG']='1'
+cfg.require_local_search_runtime()
 from basic_memory.config import init_mcp_logging
 init_mcp_logging()
 import basic_memory.mcp.tools
@@ -95,7 +99,7 @@ async def brain_search(query:str,english_query:str='',limit:int=8) -> dict:
 
 @mcp.tool(annotations={'readOnlyHint':True,'openWorldHint':False})
 def brain_read(path:str,start_line:int=1,max_lines:int=160) -> dict:
-    """Read a current vault-relative Markdown source, with line numbers and a revision hash."""
+    """Read an exact vault-relative Markdown path or wikilink, with line numbers and a current hash. No basename guessing."""
     return store.read(path,start_line,max_lines)
 
 @mcp.tool(annotations={'readOnlyHint':False,'destructiveHint':False,'idempotentHint':True,'openWorldHint':False})
@@ -115,6 +119,8 @@ def brain_health() -> dict:
     health={'status':'running','time':store.stamp(),'vault_exists':store.VAULT.is_dir(),
             'database_exists':(store.STATE/'memory.db').exists(),'mode':'local','version':cfg.VERSION,
             'retrieval_version':'basic-memory 0.23.2','device_id':cfg.DEVICE_ID,'device_role':cfg.ROLE}
+    health['current_index_coverage']={'status':'not checked','command':'brain_cli.py index status',
+                                    'guidance':'Run the read-only current coverage check after imports; cached bootstrap is historical.'}
     try:
         from brain_wiki import status as wiki_status
         health['wiki']=wiki_status()
@@ -131,7 +137,8 @@ def brain_health() -> dict:
             'status':'needs attention','error':'Initial index status is unavailable or invalid; inspect local logs.'}
     try:
         import sqlite3
-        with sqlite3.connect((store.STATE/'memory.db').resolve().as_uri()+'?mode=ro',uri=True,timeout=2) as conn:
+        from contextlib import closing
+        with closing(sqlite3.connect((store.STATE/'memory.db').resolve().as_uri()+'?mode=ro',uri=True,timeout=2)) as conn:
             health['index']={t:conn.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in ('entity','search_vector_chunks','search_vector_embeddings_rowids')}
     except Exception: health['index']={'status':'initializing or unavailable'}
     return health

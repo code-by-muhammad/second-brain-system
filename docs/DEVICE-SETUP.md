@@ -1,229 +1,142 @@
-# Second Brain setup and updates on another device
+# Set up or update a Second Brain device
 
-## Current combined candidate preparation — 2026-10-17
+Workflow revision: **29 October 2026**. Windows v0.1.8 is a hardening candidate, not automatic deployment approval. Use the trusted handover's exact commit, manifest SHA256 and qualification report. Mac/Linux stay on accepted v0.1.7; do not clone or provision v0.1.8 on an owner device. Current dated deployment decisions take precedence over historical preparation notes.
 
-This private v0.1.7 source extends frozen4093d59 with validation of raw shared-derived paths before reads, a bounded ownership-Control reader, cross-device receipt of one owner filename repair, and device-aware Windows Git checkout path-length refusal. Existing owner staging, case-only rename, new candidate and unsafe incoming-tree safeguards remain requirements of this preparation. Actual scoped BEFORE/AFTER receipts are external evidence for their exact components, not approval of this combined source. Combined full tests, the cross-device workflow, fresh Codex/Claude reviews, required native Mac evidence and release/deployment acceptance remain pending at this preparation. Production remains v0.1.6. Exact source inventory and full case identities are bound by external freeze/vector/run receipts. The intended payload has 176 tracked files/175 manifest entries/14 app modules/136 test-support files and 2595 test cases. Windows requires 2559 passes/36 exact platform skips; native Linux requires 2557 passes/38 exact platform skips. These are requirements, not passing results. All earlier preparation counts, current/final statements and scoped results below retain only their dated historical meaning for their original exact source.
+## Choose a route and protect the inputs
 
-## Historical4093d59 source preparation — 2026-10-17
+| Situation | Route |
+| --- | --- |
+| No existing brain | Create a blank starter and the person's own private notes repo. |
+| Adding the same owner's device | Reuse that owner's notes history; create a new capture-only runtime. |
+| Importing an existing vault/library | Inventory and back up outside the destination; approve the mapping before copying. |
+| Runtime already installed | Inspect it; use the forward updater. Client-only refresh below applies to an existing v0.1.8 runtime. |
 
-This private v0.1.7 source extends frozen cf8c318 with bounded wiki source-inventory, shared source-policy and existing legacy-receipt reads, and validates the actual discovered filesystem path before reading it. An oversized capped policy reports no full-file SHA; ordinary source identity and public separator-alias behavior remain covered by component requirements. Actual scoped BEFORE/AFTER receipts are external evidence for their exact components, not approval of this combined source. Combined full tests, the cross-device workflow, fresh Codex/Claude reviews, required native Mac evidence and release/deployment acceptance remain pending at this preparation. Production remains v0.1.6. Exact source inventory and full case identities are bound by external freeze/vector/run receipts. The intended payload has 168 tracked files/167 manifest entries/14 app modules/130 test-support files and 2543 test cases. Windows requires 2519 passes/24 exact platform skips; native Linux requires 2520 passes/23 exact platform skips. These are requirements, not passing results. All earlier preparation counts, current/final statements and scoped results below retain only their dated historical meaning for their original exact source.
+Resolve account, actual vault/runtime/checkout paths, Git identity, timezone and selected clients in one short intake. A new independent first maintainer needs an explicit ownership choice; another device of an existing shared brain is capture-only. No automatic wiki model schedule or new paid provider is enabled by this guide.
 
-## Historical cf8c318 source preparation — 2026-10-17
+Keep kit, software, runtime and vault separate. Runtime and vault cannot be nested. Prefer short Windows paths such as `C:/SB-Kit` and `C:/Second-Brain`; inspect actual final import paths and traversal errors. Do not silently rename originals, overlay an occupied folder, enable global long-path policy, copy a whole repository or move a Git vault into another sync system. Backups and scoped inventory precede changes; Git sync is not a complete backup.
 
-This private v0.1.7 source adds Windows-compatible Markdown sync preflight, bounded store note reads, literal POSIX source-identity attention and the corrected isolated update/acceptance documentation to the previously reviewed294c08e fixes. Actual scoped BEFORE/AFTER evidence is recorded externally; it does not approve the combined source. Combined full tests, the cross-device workflow, fresh Codex/Claude reviews, required native Mac evidence and release/deployment acceptance remain pending at this preparation. Production remains v0.1.6. Exact source inventory and full case identities are bound by the external freeze/vector/run receipts. The intended payload has 165 tracked files/164 manifest entries/14 app modules/127 test-support files and 2525 test cases. Windows requires 2509 passes/16 exact platform skips; native Linux requires 2502 passes/23 exact platform skips. These are requirements, not passing results. All older counts and pending statements below retain only their dated historical meaning.
+Review nested `AGENTS.md`/`CLAUDE.md`, duplicate groups, attachments, runtime outputs, case collisions, credentials and ignored-but-already-tracked files before any bulk import. A pattern scan is limited evidence, not a clean bill of health. Exclusion from wiki compilation does not exclude a note from Git publication. Preserve accepted source-selection decisions; do not infer exclusions from words such as research or handoff.
 
-## Historical294c08e source preparation — 2026-10-17
+## Windows host preflight
 
-This private v0.1.7 candidate combines the verified authentication recovery, wiki path preflight, maintenance status restoration and isolated software entrypoint fixes. Component tests are scoped evidence. Combined full tests, cross-device workflow, fresh reviews, required native Mac/CI and deployment acceptance remain pending. Production remains v0.1.6. The intended full suite contains 2,455 cases; Windows requires 2,447 passes/eight platform skips and Linux 2,432 passes/23 platform skips. These are requirements, not passing results. The complete source has 160 tracked files, 159 manifest entries, 14 app modules and 122 test/support files. The dated preparations below are historical.
+Use the intended user's ordinary host PowerShell, outside a packaged or restricted app surface. Record app/surface/version and confirm files and interpreter paths from that independent host terminal. A child shell and a successful package-identity check alone do not prove all host visibility.
 
-## Historical R153 software-entrypoint preparation — 2026-10-17
-
-**HOLD — source-only successor, not an approved release.** Actual synthetic BEFORE10 recorded five named untracked-module import failures and five clean controls (receipt cd73d1b1). The repair requests isolated Python mode for software verification, fresh installation, updater entry, selected-environment bootstrap and model download. It preserves the two existing cached-installer isolated launches and trusted installed-app sibling imports. The ten-case AFTER, final combined inventory, full tests, reviews and device/release gates remain pending; no final counts are guessed here.
-
-Production remains v0.1.6. All earlier preparation sections below retain their dated historical meaning; none approves this successor for installation.
-
-
-## Historical R150 authentication-recovery preparation — 2026-10-17
-
-**HOLD — source-only successor, not an approved release.** Installation now validates existing client/server authentication before changing runtime or client settings. A missing server hash can be recovered from the existing valid client token; missing client credentials, malformed JSON, invalid UTF-8 tokens and mismatched hashes cause refusal. Existing credential bytes and additional valid JSON metadata are preserved. No token format migration or credential rotation is introduced.
-
-Actual scoped Windows evidence is 23 named failures/four controls on frozen `d5770ac`, followed by 27 passes on the R150 patch (paired receipt `49f99609`). This includes interruption between the two auth publications, retry continuity and read-only validation. The base `d5770ac` full Windows run passed 2,396 cases with seven expected skips (receipt `235e86c3`). Its native Linux run remains failed: 2,377 passes, 23 skips and three async cases invalidated by the launcher's disabled plugin loading (receipt `893188d7`, author disposition `2f93f750`). Those failures and original results are preserved; no Linux full pass is claimed.
-
-The successor requires 157 tracked files, 156 manifest entries, 14 app modules and 119 test/support files. Its prospective 2,430-case vectors require Windows 2,423 passes/seven expected skips and native Linux 2,407 passes/23 expected skips, with locked async plugin loading restored for that run. These are requirements, not successor results. Production remains v0.1.6; native Mac/CI, final-source full tests, cross-device workflow, reviews and release approval remain pending. All preparation sections below retain their dated historical meaning.
-
-## Historical R142 preparation — 2026-10-17
-
-**HOLD.** R142 changes the Windows synchronization command runner; it does not change device roles, shared notes, ownership, MCP configuration or the verified-tag installation procedure below. The Windows runtime receives one additional standard-library app module through the normal installer. POSIX devices receive the same release files but keep the existing `subprocess.run` synchronization path; no new POSIX process-tree guarantee is claimed.
-
-On Windows, each synchronization Git command has a 90-second execution deadline and uses temporary files for stdin/stdout/stderr. The owning pass releases its locks only after actual retained process handles are signaled and fresh Job accounting verifies complete lifetime coverage. If that evidence is unavailable, health can show `needs attention` with stage `Git cleanup pending`; the pass deliberately keeps ownership while retrying verification. The 90-second command deadline does not guarantee lock release after 90 seconds. Preserve local changes and diagnostic evidence, have the agent inspect the owning pass, and do not run competing synchronization or force-release locks merely to clear this attention state. Git/Git Credential Manager prompts are disabled in synchronization, so complete any necessary official login interactively on that device before retrying.
-
-The planned release inventory is 150 tracked files / 149 manifest entries / 112 test-support files, with 2,333 full case identities (2,316 prior + 17 R142). These are pending freeze and acceptance targets, not a claim that any device or final release already passed. Production v0.1.6 and PRIMARY0ed remain unchanged; use the commands below only after the exact release and manifest are approved. Earlier preparation sections are historical.
-
-## Historical R138–R141 preparation — 2026-10-17
-
-**HOLD.** This candidate adds owned asynchronous maintenance, bounded pinned ordinary staged-object reads, capture source_app producer/consumer alignment, and contained optional health-cache failures. The prior frozen193 full runs were nonpassing; source193 and every earlier receipt remain preserved. Actual scoped results bind their recorded private source only. Final combined full Windows/native Linux checks, exact replay/binders, fresh authenticated integration and final-source reviews remain required. Native Mac, hosted CI, tag, deployment and physical-client/reboot acceptance remain pending. Production v0.1.6 and PRIMARY0ed remain unchanged.
-
-The final critical maintenance regression uses a qualified base interpreter/filelock path to avoid the Windows venv redirector PID assumption. Its original v1 Windows failure is fixture-invalid; native v1 observed the actual direct-parent timeout/lock-release defect. Existing supervisor and Git fixture transports retain their case identities/oracles; the authenticated MCP health case is strengthened with seven real health calls. These qualifications are not native process-tree cleanup claims.
-
-Static targets are148 tracked files/147 manifest entries/111 test-support files and2316 full cases. Replay requires746 executions/734 distinct contracts/19 aliases; the exact-ID binder requires72 families/1894 complete cases/2076 selected identities. These counts are requirements, not passing results. Earlier sections below retain their dated source-stage meaning.
-
-## Historical R133 v3 static preparation — 2026-10-17
-
-**HOLD. At this static preparation stage (2026-10-17T04:09:05.172669+00:00), this revised source is prepared for review; actual R133 v3 scoped evidence and final combined acceptance evidence remain pending.** Consult the current shared Second-Brain-System page and actual dated receipts for later state. Production remains v0.1.6 and PRIMARY remains 0ed unchanged. The previous v2 candidate, its proof12d5/map9ebd and the sealed original coalescing folder remain preserved.
-
-Actual R133 v2 AFTER57 was nonpassing on both operating systems: six failures/51 passes each, with zero errors/skips and all 138 source hashes stable. Windows receipt r133-remediation/scoped-v2/windows/after-shipping57/receipt.json has SHA256 6e9cdf30f60ef347fa03b9b284d872cbefaf982b29ccad8e3e9649a0443e1576; native Linux receipt r133-remediation/scoped-v2/native-linux/after-shipping57/receipt.json has SHA256 51274f6a95c41fb5cfd4db1cf5fd42a21556a247936020cf557771d6561663ca. Four failures establish real TOML replacement defects: a root dotted assignment and the three scalar managed-child forms. The other two are invalid trailing-terminator acceptance oracles, not two more product defects. Actual unchanged a6 and v2 reject the trailing -- at initial argparse with exit2 before uv/handoff. The earlier static P3 accepted-terminator claim is explicitly **dismissed** by this dynamic evidence; original reports and failed receipts remain preserved.
-
-R133 v3 adds one public deletion-before-reinsertion statement for an existing logical managed child in _codex_toml_plan, preserving the strict parsed expected-semantics guard. Saved bounded parser diagnosis SHA256 01ce98bf4861a4e4213033786ac062d71d1f442e66599fc66c0ea558858dcbca supports that proposed repair; it is not a v3 scoped pass. Installer SHA256 is e15658d749eb0419536584b460e185821a75b65fb154ff6f2878596b2d482a85 and bootstrap29 SHA256 is ac11e11df28fb0efd3f5db4e7220ed654f920ae15bc90f2d6a27a0169e132280. Planner29 bf44aecdc4587f576ec9f4dbe8612922322f5ccd5a0cc5745e9180b49954fbe1, project 8f0e and lock e1bf remain exact from the prior source; the 182-package lock retains all 180 old nonproject blocks and the earlier qualified official TomlKit 0.15.1 provenance.
-
-The corrected R133 inventory is 58, not 57: 55 original IDs remain, two invalid acceptance IDs are renamed to rejection controls, and one accepted empty-reuse control without a terminator is added. The actual-child-exit23 case and its oracle remain unchanged. This corrects the test contract without broadening CLI acceptance. Static receipt r133-remediation/static-draft-v3-receipt.json has SHA256 80a88bd82a1411c10db11b4a11d05e891939d2439d7866fdaf430f5c4a2ec1a3. Narrow static v3 review reported no findings (report SHA256 299200086c4cd55bf1378b8d6fc30de1f30376bf8ed3e90b390326c2d8369d8c; receipt SHA256 3fe474166b41cb9f3d9e55e4b42110d77d09ceb145f6160f6b978f90805a5361); static review does not replace actual scoped tests.
-
-The new selected source remains 143 canonical files/106 test-support files, with 142 prospective manifest entries after regeneration. Static AST identities derive 173 new shipping cases: R133 58 + R132 17 + R134 33 + R135/R136 29 + R137 36. The full actual baseline 2065 vector is retained, yielding a disjoint 2,238-case target. Independently derived requirements receipt r137-v3-replay-derived-requirements-20261017.json, SHA256 9fe259ddb1da1b69918b3c57136b3e80edb6e0b62ac7044d2cf6384dc836cbb3, requires root 668 executions/656 distinct contracts/19 explicit aliases and binder 67 families/1,816 complete cases/1,998 exact IDs. These are requirements and static identities, not passing executions, an executed final collection or counts obtained by adding duplicated authored AFTER totals.
-
-Only installer/bootstrap source and these three documentation qualifications differ from the prior combined static payload. Wiki bb09b4ef, R132/R135/R136/R137 scoped evidence, the separate old79 qualification, base3ee fixture history, generic decoded-context guard704485, exact e021 names-only Python lookup fence and upstream MIT noticebf725 remain exact. At this preparation stage R134 has no recorded AFTER pass; portable 33 await ordinary final combined regressions, without retrying the rejected plan or host-depth AFTER tests. Full Windows/native Linux checks, final freeze/regenerated manifest/snapshot, exact root replay, binders, fresh actual integration and fresh final-source Codex R30/Claude R26 reviews remain acceptance requirements. Native Mac, hosted CI, tag, deployment and physical-client/reboot acceptance remain unwaived. Setup/update instructions require explicit approval of the exact release and manifest.
-
-The v2 and earlier sections below are dated history. Their former pending/current wording is explicitly qualified where later evidence superseded it; old receipts are not relabeled.
-
-
-## Historical R132–R137 v2 static preparation — 2026-10-17
-
-**Historical v2 preparation, 2026-10-17: at that static stage, source had been copied for review and this coalescing work had performed no product execution. The subsequent actual R133 v2 nonpasses are recorded in the latest section above.** Production remains v0.1.6 and PRIMARY remains 0ed unchanged. The frozen starting source is a6dec03071170af5996cefaefe1f852a9f6b6a33; snapshot SHA256 743e53f92a67c7d2a8ef6bc7a806715f39e458ae6a5a7fff9dd07656588dd650 binds 136 canonical files/135 manifest entries/99 test-support files/2,065 collected cases.
-
-Actual a6dec03 Windows checks recorded 2,059 passes/six expected skips (receipt SHA256 60e1833e9ec4971e0c3b1784a77bb664ecffd3063e969e0896d0f62236444a94); native Linux recorded 2,060 passes/five expected skips (1486c40197f25034f038651952ef254e5e0d55f349d4e2af37ed7e762947c970). Both actual logs report uv 0.9.16, superseding conflicting old uv footnotes. Historical actual integration recorded two model calls/zero lint issues on disposable synthetic evidence (2ac47bd3b6ed2cf50d7c84f940c3aa58152caaa3697dcb627e958f77b9ca78a2). These receipts validate that starting source only.
-
-Claude R25 reported no findings after 47 tools/zero permission denials; Codex R29 nevertheless found five gaps and the later R137 audit found another source-evidence gap. The next exact combined source requires a new freeze/manifest, actual full Windows/native Linux checks, actual integration, exact original-contract root replay, evidence binders and fresh final-source Codex R30/Claude R26 reviews. At the earlier v2 static stage, R134 had no AFTER pass and R133 v2 execution was pending. Later actual R133 v2 nonpasses and the corrected v3 preparation are recorded above; R134 portable33 still require ordinary combined evidence. Those v2 preparation counts were provisional; the latest section above gives the derived v3 static identity and acceptance targets, whose actual execution evidence remains pending. Native Mac, hosted CI, tag, deployment and physical-client/reboot acceptance remain pending and unwaived.
-
-R132 has sealed scoped recovery evidence for malformed bootstrap status and same-process owned child handles. R135 bounds ordinary file reads before allocation, R136 refuses CR/LF/comment-terminator capture markers before writing, and R137 retains selected raw evidence when known scalar-consuming mapped constructors fail. Their scoped results do not approve a new combined installation. R134 only proposes adding OverflowError/RecursionError to the existing private worker-state catch; its portable33 cases still require ordinary final combined verification. The rejected delegated scoped plan and host-depth AFTER tests are excluded.
-
-Historical R133 v2 source was included after narrow static review. Subsequent actual scoped execution was nonpassing at6F/51P on each OS, as recorded above; four real TOML failures remain distinct from two invalid terminator acceptance oracles. V3 now supplies the proposed repair and corrected58-case inventory, with actual v3 scoped evidence pending at this static preparation stage. Dependency/provenance verification remains separate from installer behavior. See the [latest remediation record](REMEDIATION-v0.1.7.md#latest-r133-v3-static-preparation--2026-10-17) for source and receipt qualifications.
-
-Use the retained setup/update examples only after explicit approval of the exact release and manifest. The exact e021 names-only Python lookup fence below and upstream MIT notice are unchanged. Dated a6dec03 history and guidance below are retained; former current-state and preparation wording is explicitly labeled historical, with every exact change recorded in the static preparation proof.
-
-
-Use this guide with a local Codex agent on Windows, macOS or Linux. The notes repository shares knowledge; the software repository shares tested releases. Each device installs its own runtime, credentials, index and local MCP connection. The Windows maintainer compiles the shared wiki. New devices use capture/search mode.
-
-Release covered: **v0.1.7**. Check the shared `02-Areas/AI-Memory/Second-Brain-System.md` for a newer explicitly approved release before starting. Do not install an arbitrary branch or silently select the newest internet release.
-
-Historical R130/R131 pre-a6dec03 status, 2026-10-17 (this paragraph predates the later baseline receipts above): **HOLD — v0.1.7 is a candidate, not an approved installation.** R126–R129 retain their dated scoped Windows/native Linux evidence. R130 and R131 now have sealed scoped passes on the same reviewed combined source, plus an independent postvalidation review with no findings. These receipts do not approve this newly coalesced final candidate: its freeze, regenerated manifest, complete Windows/native Linux suites, exact original-contract replay, evidence binder, actual integration and fresh final-source Codex/Claude reviews remain pending. Native Mac, hosted CI, tag, deployment and physical-client acceptance remain pending and unwaived. The earlier b258 Linux full run remains nonpassing (1,942 passes, one legacy fixture assertion failure, five expected skips and zero errors). The approved node-cap fixture passed as an exact private test copy in R130's scoped checks on both OSes; this new candidate now coalesces those same approved bytes, without relabeling b258 or claiming a new full run. Production remains v0.1.6 and PRIMARY remains `0ed` unchanged. Use setup/update examples only after the shared system status explicitly approves v0.1.7. Older dated pending statements below describe their historical source phases and are superseded only by explicit later receipts.
-
-## Give this prompt to the other device's Codex agent
-
-Use this prompt only after the shared system status approves the exact release and its manifest; it is not permission to install the current held candidate.
-
-> Set up my existing shared Second Brain on this device using the private code-by-muhammad/second-brain notes repository and the approved code-by-muhammad/second-brain-system release v0.1.7. Follow docs/DEVICE-SETUP.md and the shared AI-Context and wiki Control pages. Inspect existing installation and client settings first. Reuse an existing vault; preserve notes, local edits, credentials and unrelated settings. Verify the release manifest before running the installer. Use capture/search role; do not transfer wiki ownership or create a compiler schedule. Install native locked dependencies, configure supported local MCP clients, download the local embedding model and register the per-user service. Test authenticated health, tools, source search/read and a single clearly labeled onboarding capture; verify that capture reaches the Windows vault through the existing maintenance sync. Test service restart and verify again after reboot. Report actual receipts and remaining failures. If GitHub authentication needs me, show the official device login flow; never ask me to paste tokens or copy another device's auth files.
-
-## Inspect before installing
-
-Find the existing vault, runtime `device.json` and clients. If already installed, use the update procedure below. An existing runtime cannot be redirected to another vault: installation rejects that change before editing settings. For another vault, use a separate runtime and rebuild its native index explicitly. Do not clone over an existing directory or overwrite uncommitted work. Use the current device's login and Git identity.
-
-Required tools: Git 2.38 or newer ([Git](https://git-scm.com/downloads)), [GitHub CLI](https://cli.github.com/) and [uv](https://docs.astral.sh/uv/getting-started/installation/) from their official distributions. The installer obtains Python 3.12 through uv and uses the checked-in dependency lock. Do not copy the Windows virtual environment onto another OS. Installing Codex or Claude is separate from installing this service; the local clients must already be installed and authenticated for their own use.
-
-Run `git --version` and confirm Git 2.38 or newer, then run `gh auth status`. If authentication is missing, use `gh auth login` on that device. Private repository access is required. Do not print or paste tokens.
-
-## Validate the downloaded release on this OS
-
-After cloning the approved tag and verifying its manifest, run the target OS checks before executing the installer. Record `git rev-parse HEAD`, the manifest SHA256, Python version, `platform.platform()` and `platform.machine()` in a private validation receipt. Use the exact same commit for all checks; a newer branch or an older Mac result does not validate this download.
-
-Before test imports, temporarily set `BRAIN_SYSTEM_ROOT`, `BRAIN_STATE`, `BRAIN_VAULT` and `BASIC_MEMORY_CONFIG_DIR` to new disposable validation directories outside the checkout. Restore any earlier environment values afterward. Never use an installed runtime, live vault or its auth files as these paths.
-
-From the verified release directory, run the test and audit commands in `.github/workflows/verify.yml`: locked `uv sync --locked --python 3.12`, full `uv run --locked python -m pytest -q --junitxml reports/preinstall.xml`, compileall, `tests/smoke_import.py`, the locked non-dev requirements export and pinned pip-audit 2.9.0. The `reports/` directory is ignored by Git; keep its receipt and logs private. Tests use disposable synthetic vaults and unique test service names. Do not supply real notes, auth files or model credentials to them.
-
-Inspect every skip in JUnit. On macOS, `test_native_mac_stop_start_registration` must actually pass in the intended user's logged-in GUI launchd domain. On Linux, `test_native_linux_unit_stop_start` must pass with an existing working user service bus. On Windows, `test_native_windows_task_stop_start` must pass. A green command with that host's native lifecycle skipped is incomplete validation. Record the actual host architecture; Rosetta execution is extra compatibility evidence, not a native Intel Mac host result. Never change the owner's startup/session settings merely to hide a skipped check.
-
-As of 2026-10-15, the final v0.1.7 candidate's native Mac execution remains pending because hosted CI did not start. Follow the dated shared system status for subsequent evidence. Download/setup instructions and Windows/WSL results do not claim that this physical Mac is already tested. Keep its status pending until these checks and the device acceptance steps below actually pass.
-
-## New Mac or Linux installation
-
-These commands assume there is no vault or runtime at the chosen paths. Change the vault path to reuse existing notes.
-
-```sh
-brain_vault="$HOME/Documents/Second-Brain"
-brain_root="$HOME/.local/share/second-brain"
-brain_release="$brain_root/releases/v0.1.7"
-
-gh repo clone code-by-muhammad/second-brain "$brain_vault"
-gh repo clone code-by-muhammad/second-brain-system "$brain_release" -- --branch v0.1.7 --depth 1
-cd "$brain_release"
-uv run --no-project --python 3.12 python -I -c "from pathlib import Path; import runpy; print(runpy.run_path(str(Path.cwd()/'update.py'))['verify'](Path.cwd())['version'])"
-uv run --no-project --python 3.12 python -I install.py --root "$brain_root" --vault "$brain_vault" --configure-clients --download-model --install-service
-
-brain_python="$brain_release/.venv/bin/python"
-"$brain_python" "$brain_root/app/brain_cli.py" service start
-"$brain_python" "$brain_root/app/brain_cli.py" health
-```
-
-The manifest check must report `0.1.7` without an exception. macOS uses a per-user LaunchAgent, consistent with [Apple's launchd documentation](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html). Linux uses a systemd user service; a working systemd user session is required. A machine without one needs an explicit startup decision, not a false success claim. Run under the intended normal user. Keep the user session available while testing; sleep/offline is not continuous service availability.
-
-## New Windows installation
-
-Use PowerShell as the intended normal user. These example paths are for another Windows installation; reuse the real vault if present.
+Install official Git (2.38+), GitHub CLI and **uv 0.9.16+**. Prepare Python once, serially:
 
 ```powershell
-$brainVault = Join-Path $env:USERPROFILE 'Documents\Second-Brain'
-$brainRoot = Join-Path $env:LOCALAPPDATA 'Second-Brain-System'
-$brainRelease = Join-Path $brainRoot 'releases\v0.1.7'
+$BrainUv = (Get-Command uv -ErrorAction Stop).Source
+& $BrainUv python install 3.12
+if ($LASTEXITCODE -ne 0) { throw 'Python preparation failed' }
+$BrainBasePython = (& $BrainUv python find --managed-python 3.12).Trim()
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $BrainBasePython)) { throw 'Host Python missing' }
+& $BrainBasePython -I -B -c "import sys; assert sys.version_info[:2]==(3,12); print(sys.executable)"
+if ($LASTEXITCODE -ne 0) { throw 'Host Python cannot run' }
+```
 
-gh repo clone code-by-muhammad/second-brain $brainVault
-gh repo clone code-by-muhammad/second-brain-system $brainRelease -- --branch v0.1.7 --depth 1
+Reopen stale terminals if tool paths changed. Keep absolute uv/Python paths; do not rewrite global PATH to repair one process. Change into the verified software checkout before running setup so the trusted tool is outside the checkout/current directory. Use PowerShell for native Windows switches; Git Bash can translate `/TN` and `/PID`.
+
+GitHub authentication is attended: the user runs `gh auth login --web`, completes account/browser choices, then checks `gh auth status`. Never collect tokens or device codes in shared receipts. Public software access and the person's private notes access are separate.
+
+## Verify the software before execution
+
+Clone the exact approved tag into a NEW plain checkout, with LF Git bytes. For an upgrade the location must be `<runtime>/releases/v0.1.8`. Reuse an existing cache only after verification; never reset/delete it to conceal a failure. The handover's trusted helper checks expected HTTPS origin, tag/HEAD commit, manifest SHA256, staged/tracked file set, payload bytes and unexpected files before any downloaded Python runs. The document/helper itself must come from a trusted handover.
+
+The following standalone consistency check is useful AFTER that independent pin check. It cannot authenticate itself:
+
+```powershell
+& $BrainBasePython -I -B -c "from pathlib import Path; import runpy; print(runpy.run_path(str(Path.cwd()/'update.py'))['verify'](Path.cwd())['version'])"
+```
+
+Isolated Python prevents caller/checkout import injection; it is not an OS sandbox or a guarantee about an untrusted executable/environment. Preserve rejected caches for inspection. Never re-author or encode a refused operation to bypass automatic approval.
+
+## Fresh Windows runtime
+
+The vault must already exist and contain only the approved material. Launch Obsidian normally at least once and choose **Open folder as vault**. Prefer that supported GUI flow over editing `obsidian.json`; failed URI launch is not proof the app is absent. If GUI access is unavailable, leave GUI acceptance pending for the user.
+
+Set `$brainRoot`, `$brainVault` and `$brainRelease` to the inspected absolute paths. `$brainRelease` is the independently verified checkout. From that directory:
+
+```powershell
 Set-Location -LiteralPath $brainRelease
-uv run --no-project --python 3.12 python -I -c "from pathlib import Path; import runpy; print(runpy.run_path(str(Path.cwd()/'update.py'))['verify'](Path.cwd())['version'])"
-uv run --no-project --python 3.12 python -I install.py --root $brainRoot --vault $brainVault --configure-clients --download-model --install-service
-
-$brainDevice = Get-Content -LiteralPath (Join-Path $brainRoot 'device.json') -Raw | ConvertFrom-Json
-$brainCli = Join-Path $brainRoot 'app\brain_cli.py'
-& $brainDevice.python $brainCli service start
-& $brainDevice.python $brainCli health
+& $BrainBasePython -I -B (Join-Path $brainRelease 'install.py') --root $brainRoot --vault $brainVault --role capture --uv $BrainUv --download-model --install-service
+if ($LASTEXITCODE -ne 0) { throw 'Setup did not complete; preserve its private receipts' }
 ```
 
-The service is the limited-user `SecondBrainLocalService` task. Do not install this example over the existing Windows maintainer at `E:/Second-Brain-System`.
+The model is local; its first download needs Internet and local CPU/storage. No cloud language-model key is needed for retrieval. Add selected client options to this SAME initial command before running it. For example, `--configure-clients --client claude-code --client codex` selects those two. Desktop requires an explicitly selected/discovered config path; hooks additionally require `--include-hooks`. The default leaves client files alone and does not install hooks.
 
-## Verify before declaring the device ready
+Use the verified locked profile: FastEmbed only, with reranking disabled. LiteLLM SDK/proxy is deliberately absent even though upstream Basic Memory still declares it in metadata; do not reinstall it to silence a generic dependency warning. The server refuses unsupported provider/reranker settings or an environment containing that SDK. Read the [security profile and scoped advisory exception](../SECURITY.md) before rollout; the audit is not represented as clean.
 
-1. Health reports `running`, the approved version, the correct vault and role `capture`. Each device has a different device ID and fresh local auth.
-2. Restart the AI client and create a new local session. Verify actual exposure of `brain_context`, `brain_search`, `brain_read`, `brain_capture`, `brain_update_current` and `brain_health`. A capture device must reject derived-page writes even though the tool is listed.
-3. Ask the agent to call `brain_context`, search for a known source, and open that original note with `brain_read`. A list of configured servers alone does not establish a working connection. The first local embedding index can take time; use health and actual retrieval results.
-4. Save one clearly labeled onboarding milestone through `brain_capture`, with a stable event ID containing this device's ID. Do not invent work/profile facts. Retrying must return a duplicate receipt rather than create another event.
-5. Let the existing maintenance service synchronize. It checks every 15 minutes while running and online. On Windows, search/read that capture through MCP and compare the actual path and SHA. Then verify a Windows-originated note on the new device. Do not start a second Git synchronization process.
-6. Stop/start the registered service using `brain_cli.py service stop` and `service start`, then recheck authenticated health and retrieval. Repeat after the owner reboots/signs in. Physical-device acceptance is complete only when these steps actually pass.
+The same isolated entrypoint, using the already recorded absolute host executables:
 
-The installer configures Claude Code, Claude Desktop and Codex settings where applicable, preserving backups and unrelated settings. Test each requested client in its actual session. Configuration does not establish ordinary web ChatGPT/Claude or Cowork connectivity. Do not expose a public endpoint or install a tunnel to make an unsupported client work without a separate design decision. This guide covers the local MCP installation.
+```powershell
+& $BrainBasePython -I -B install.py --root <new runtime> --vault <existing vault> --role capture --uv $BrainUv --download-model --install-service
+```
 
-## Keep notes and software current
+Before service startup, read `device.json`; from ordinary host PowerShell verify that exact lexical `.venv/Scripts/python.exe`, its sibling `pythonw.exe`, absolute `pyvenv.cfg` base home and base executables exist and run. Do not replace the venv path with the resolved base path. Store/AppData-only visibility failures leave startup pending; do not repeatedly rebuild in the same invisible location.
 
-| Shared through notes Git | Shared through software releases | Kept separately on every device |
-| --- | --- | --- |
-| Original notes, captures, wiki pages, index, history, Control and explicit wiki source policy | Python code, installers, lock file, client templates, tests and this guide | device.json, paths, auth, SQLite/WAL, embedding model, environments, logs, backups and pending queue |
+Then use that recorded Python with `<runtime>/app/brain_cli.py service start`, authenticated `health`, and `index status`. The owned task is `SecondBrainLocalService`, limited to the intended interactive user. An existing task for another root/owner is preserved and refused. Never install over the existing maintainer merely because an example path looks convenient.
 
-Notes synchronize automatically through the existing per-device maintenance service. Same-note conflicts, staged edits and deletions require review; never force-push or discard the user's work. A laptop can capture/read locally while another laptop is off. Synchronization catches up when it returns online.
+## Client configuration and proof
 
-Software updates are explicit. Read the approved version from the shared system status. For the first upgrade from v0.1.5, **use the verified new v0.1.7 updater**, because the old updater does not contain the rollback and preflight fixes. Download the approved tag into `<runtime>/releases/v0.1.7` with `gh repo clone code-by-muhammad/second-brain-system <candidate directory> -- --branch v0.1.7 --depth 1`. If that directory already exists, verify it and reuse it; do not clone over it or change its files. Before dependency preparation or executing the installer/updater, change into the verified candidate directory and use the same isolated standard-library manifest check as fresh installation. Do not import `update` through the cached checkout on `sys.path`:
+Back up host-visible settings and preserve unrelated entries, environment values and options. Client plans compare hashes before each write. Fresh selection adds only chosen integrations; updater refresh changes only exact existing owned entries. Malformed or ambiguous ownership requires review. Close/checkpoint Desktop through its own UI before selecting its config. Do not kill all Claude processes or the host running this setup. If it must remain open, explicitly skip Desktop refresh; a reopened/concurrently edited config is deferred and must be checked later.
+
+If an existing `second-brain` entry points at a different or unknown runtime, preserve the refusal. Back up that exact host-visible settings file, inspect its command/args and the previous target, and establish whether it is still used. With the client closed or through its supported settings UI, the owner may remove or rename only a confirmed obsolete entry, then re-plan the selected integration. If its ownership or purpose remains uncertain, leave it intact and omit that client until resolved. Do not remove the whole config, alter unrelated entries, guess a new path, or repeatedly reinstall over it. A scalar/malformed managed entry also needs this attended inspection.
+
+For an existing **v0.1.8** runtime, its own verified v0.1.8 checkout's `install.py --reuse-python <recorded Python> --refresh-clients --refresh-only --client <chosen client> --root <root> --vault <vault>` refreshes owned entries without deploying software or creating missing integrations. Inspect a read-only `--validate-only` plan first. The v0.1.7 installer does not support these refresh flags: existing entries refresh during the first forward upgrade. To add a missing integration on either version, use that client's supported MCP settings with backup/merge and a real invocation; do not rerun fresh configuration over an installed runtime.
+
+```json
+{"mcpServers":{"second-brain":{"command":"<recorded absolute venv Python>","args":["<runtime>/app/brain_client.py"]}}}
+```
+
+Claude Code and Desktop use their actual discovered JSON settings; Codex uses the `mcp_servers.second-brain` TOML table with startup/tool timeouts 60/120 seconds. Preserve other tables and managed environment/options. Skills and the managed protocol do not grant MCP access. Restart/checkpoint the named client and open a fresh chat, then call `brain_context`, search and read. A process ancestor, config/menu screenshot, tools/list or standalone adapter harness is insufficient proof of Desktop Chat, Code, Cowork, a web chat or another client.
+
+`brain_read` accepts exact vault-relative Markdown paths with optional `.md`, or full-path wikilinks such as `[[Maps/AI-Context|label]]`. It handles selectors inside wikilinks and preserves literal `#` in plain filenames. A bare basename such as `Device-Setup.md` is not resolved across the vault; search for the real path first. Preserve original notes rather than globally rewriting their links.
+
+## Approved import and current index acceptance
+
+If service Git publication is already active, obtain a verified stopped window before an approved import. `service stop` disables the owned Windows task, admits only after active writers finish, drains verified processes and publishes an empty receipt. Automatic clients cannot override an explicit stop. A busy refusal preserves work and restores prior enabled state; it does not prove an empty runtime. Never copy a library during an assumed 15-minute review window.
+
+Run `index status` after copying approved material. It checks current eligible paths/raw SHA, normalized indexed body and persisted vector metadata, not just counts. A starter-only or historical bootstrap `verified` result does not cover a late import. Use one `index retry` for missing files; use `index retry --full` for a stale checksum or preserved-size/mtime edit. Do not edit note mtimes, rewrite line endings, reset SQLite, delete the DB, copy WAL files or set a status file to verified.
+
+The defaults allow eight hours overall with a 30-minute no-observable-row-count-progress budget; explicit CLI budgets are bounded. The signal is whole-DB counts, not proof a particular process is alive or that a same-count re-embed stalled. Retain elapsed time, exit/status/history, current file coverage and indexed retrieval receipts. A nonzero exit, timeout, source change, missing vector or uncertain metadata remains needs attention/review. Do not start overlapping reindexes or retry indefinitely. Standard YAML/BOM/CRLF bodies are covered; unusual frontmatter parser differences can require review and must not be silently declared complete.
+
+Verify a late-imported known source in the indexed arm of search and through an exact read. Fresh-file fallback/read alone is not index or semantic coverage. Record model, counts and hashes without copying note bodies into a team report.
+
+## Forward Windows update: v0.1.7 to v0.1.8
+
+Keep the existing service healthy during preflight. Read `device.json` and require the retained Python to match the accepted v0.1.7 release's `.venv/Scripts/python.exe`. Check its host-visible absolute non-Store base and Python 3.12, plus `import filelock, psutil` in isolated mode. If this cannot be established, preserve the installation and obtain a reviewed recovery path; do not substitute a bare host Python, a new unpinned environment or the target venv.
+
+The updater inspects task ownership before creating a hold. A missing or explicitly disabled task is refused; it does not silently override an owner's stop. Inspect and deliberately restore/start the intended existing service before requesting the forward update. A foreign or unreadable transaction remains preserved for inspection, with no guessed recovery UUID.
+
+Place the independently verified new source at EXACTLY `<runtime>/releases/v0.1.8`. Change into it and run its NEW updater with the RETAINED installed Python:
 
 ```text
-uv run --no-project --python 3.12 python -I -c "from pathlib import Path; import runpy; print(runpy.run_path(str(Path.cwd()/'update.py'))['verify'](Path.cwd())['version'])"
+<retained v0.1.7 Python> -I <verified v0.1.8 checkout>/update.py --root <runtime root> --version v0.1.8
 ```
 
-```text
-<candidate v0.1.7 Python> -I <verified v0.1.7 checkout>/update.py --root <runtime root> --version v0.1.7
-```
+Do not manually run `uv sync` first. The updater rebuilds the target `.venv` itself, preserving a cached one by quarantine. Running the updater from that same target Python is refused before stopping. Running a different checkout's updater is also refused before state/provisioning. Do not use the old v0.1.7 updater; its legacy configure-client preflight is intentionally refused before service stop. Mac/Linux must not attempt this upgrade, including its old clone/sync path.
 
-Before the update command, prepare the verified candidate environment with `uv sync --locked --no-dev --project <verified v0.1.7 checkout> --python 3.12`. Use `<candidate>/.venv/bin/python` on Mac/Linux or `<candidate>/.venv/Scripts/python.exe` on Windows to run the updater and migration dry run. This matters when a v0.1.5 POSIX installation recorded the faulty base interpreter: that old interpreter cannot import the updater dependencies. Manifest verification itself uses only the standard library and can run before environment creation.
+The new flow seals client/device hashes and a verified prior-app snapshot before stop, uses the verified new controller for both forward and rollback actions, releases parent writer locks before any stop, and requires a fresh birth/heartbeat plus authenticated expected-version health before releasing the exact hold. It preserves notes, local index, credentials, identity, role and accepted source policy. Client edits/reopened Desktop are preserved and reported as deferred. Configuration checks do not prove every GUI client has reconnected.
 
-Capture/search devices use that command without migration flags. Before dependency preparation or cached Python execution, the updater verifies a standalone Git checkout with an approved GitHub origin, the requested local tag resolving to HEAD, and exact committed index/worktree bytes including the manifest. HTTPS and normal GitHub SSH origins, annotated and lightweight tags are supported. The manifest must describe the entire committed payload. Missing/unverified identity or modified tracked bytes refuse without deleting or replacing the cache; preserve it for inspection. Unrelated untracked files and ignored native environments do not become release payload. The standalone `update.verify(path)` command checks manifest consistency only; the updater additionally checks Git release identity.
+## Recovery
 
-An offline cache relies on trusted owner-controlled Git metadata from the earlier approved download: the recorded origin, tag commit, index/worktree and manifest must agree. This is local provenance evidence, not a fresh remote lookup or a signed-tag authenticity guarantee. The updater records this identity in its success result. Ignored native environments and untracked uv configuration remain owner-controlled; the manifest does not authenticate their contents. Isolated Python mode excludes checkout/caller-directory imports and Python environment injection, but it is not an OS sandbox and does not make an untrusted tool or environment trustworthy. It prepares native locked dependencies and preflights client settings while the old service remains healthy, serializes the switch against compilation and maintenance, preserves identity/auth/role, and polls authenticated versioned health. Failure restores exact software/device/client snapshots without invoking the old faulty installer; original notes, tokens and SQLite are not rolled back.
+Read private `state/upgrade-status.json` and `service recover` first. Keep the original verified new checkout, snapshot, UUID and retained/new environments. Do not clear a transaction file, delete a cache, reuse a completed UUID or kill whichever PID owns a port. An unverified partial stop leaves the hold for diagnosis. A positively refused pre-End stop may be cancelled only after unchanged-state proof; it is not a successful shutdown.
 
-A designated maintainer upgrading from v0.1.5 or an older release also needs a legacy-publication migration. Its agent must use the candidate Python to run the new checkout's `app/brain_cli.py wiki migrate` with `BRAIN_SYSTEM_ROOT` set to the existing runtime. This defaults to a dry run. Unlike the isolated software verifier/updater, this installed-app-style CLI intentionally imports trusted sibling modules from the checkout app directory. The manifest check does not authenticate untracked package directories, sourceless bytecode or ignored caches there. Use a fresh owner-controlled approved checkout for this dry run, or stop for local inspection if a reused app directory contains unexpected importable entries; do not run the migration merely because its tracked file hashes match. The native environment and its importable dependencies must also remain owner-trusted. Inspect verified and unverified source parts first; a Source note alone is not proof that all parts completed. Then invoke the new updater with `--migrate-wiki --requeue-unverified`. It migrates exact per-part proofs and repairs source navigation while holding the compiler lock, and leaves unproved parts queued for a normal bounded worker batch. The Windows maintainer performs this once; new capture devices do not compile or migrate shared wiki state.
+Use the EXACT original new checkout's `update.py --root <root> --recover --hold-id <recorded UUID>`. A verified retained Python or the recorded new controller Python can launch recovery; the actual children use the recorded new environment, which must still be intact. Recovery acquires the update lock, checks snapshot/source identity, stops safely before restoring exact app/device bytes, preserves concurrent client edits, reinstalls the task and verifies old-version health. Legacy heartbeat availability is reported honestly; a restored old listener is not new-release acceptance.
 
-New shared `Wiki/Receipts/` pages contain source/chunk and claim hashes plus explicit per-part dispositions. Another designated maintainer can verify them and hydrate its own local queue without copying a live SQLite database or repeating the entire backlog. Historical journals and claims remain preserved. The general `brain_update_current` tool cannot replace compiler-owned wiki or Control pages.
+After verified recovery, inspect receipts before a new update. Do not loop upgrades to hide an unchanged failure. Share only concise event/count/hash receipts; private snapshots, sealed plans, credentials, raw logs and note bodies stay local.
 
-An existing v0.1.6 device uses the normal verified v0.1.7 updater without legacy-migration flags. v0.1.7 verifies unchanged canonical source parts across equivalent Git LF/CRLF/BOM representations while keeping raw file SHA checks for writes. Do not rewrite an existing vault's line endings to force receipt matches. Changed parts remain queued even if they still contain an old quoted sentence.
+## Acceptance before sharing with the team
 
-## Select temporary sources without losing retrieval
+1. Correct paths, role, identity, expected version and host-visible interpreter.
+2. Authenticated context/search/read and one labeled capture with a stable device event ID; actual path/SHA receipt.
+3. Current file/body/vector coverage and indexed late-note retrieval after the approved import.
+4. Verified stop/empty state, fresh start identity/heartbeat and authenticated version/read.
+5. Per-client persistence and actual tool calls in each requested fresh named surface.
+6. Existing maintenance-owned Git publication and round trip, without another sync loop.
+7. Actual reboot/login and other-device checks when performed; otherwise explicitly pending.
 
-Source inventory and fresh-file fallback recognize .md, .MD and .Md consistently on supported operating systems. Keep each original filename's exact casing: paths identify source parts, receipts and owner policy. A committed rename does not require rewriting original content or copying another device's index.
+Do not infer team members' physical-device acceptance, GUI/cloud connectivity or personal facts from this host's tests. Keep original notes and current source exclusions unchanged. [Verification boundaries](DEVICE-TESTING.md) distinguish automated regression, native fixture proof and target-device acceptance.
 
-The optional shared `02-Areas/AI-Memory/Wiki-Source-Policy.md` contains one JSON fenced object with `version: 1`, `exclude_paths` and `exclude_prefixes` arrays. Exact paths identify Markdown originals; explicit directory prefixes end with `/`. Paths use forward slashes under existing source roots. Absolute paths, traversal, hidden/derived paths, wildcards, duplicates and unknown keys are rejected. An absent policy preserves normal ingestion; an invalid policy stops compilation for review. Do not treat words such as "research" or "handoff" as automatic exclusions.
-
-Exact exclusions require a lowercase .md suffix. For an uppercase original, an explicit folder-prefix rule excludes the source notes in that folder; keep that wider scope intentional.
-
-The owner has selected temporary session documents to remain searchable without future permanent wiki compilation. Excluded files and parts are reported separately from eligible completion. Original notes, existing historical claims and receipts remain preserved. Policy changes sync through the notes repository and require v0.1.7 or later on the maintainer; notes synchronization does not upgrade older software. Change this derived policy only from explicit owner evidence with its current SHA256.
-
-An unused saved publication plan is superseded when its source becomes excluded. If actual derived-note publication has already started, a fully validated plan may repair that partial publication without another model call. Merely saving a plan or finding an unchanged planned file does not qualify as progress. Invalid policy stops further writes until repaired.
-
-Historical verification has bounded object/command work and a cooperative 15-second history budget checked between operations, including historical metadata parsing and cached-history traversal. An operation already running is not preempted. Each fetched revision's metadata is parsed once; missing or budget-exhausted historical evidence stays unresolved. Bounded current-file byte/quote verification stays available independently of this history budget, so valid current claims keep their anchors. Parsed headers and claim content are private cache data, never public proof fields.
-
-Explicit malformed source origins require integrity repair; they are never treated as absent legacy metadata or silently rebound. The worker stops with a controlled page/claim diagnostic and preserves the notes, without charging source or processing retry strikes. Repair the derived metadata from actual evidence before explicitly requesting a retry.
-
-During manual repair, keep origin dates quoted as strings, for example `date: "2026-10-01"`, and use safe vault-relative `.md` source paths. Read the current derived-note SHA before saving a repair, then explicitly run `wiki retry`; the next preparation takes a fresh snapshot. Relevant malformed claims stop before any model call. A malformed target reached only during merging stops immediately after that call, without repeated requests. A safely named historical source may be absent locally if its actual prior Git evidence can still be verified; do not replace its attribution with a guessed current source.
-
-Explicit topic titles must also be strings; quote a date-like title rather than saving a YAML date, number or null. A missing legacy title keeps its existing path fallback. Context that exceeds the model budget is omitted before claim validation, while all catalog titles remain subject to the type check.
-
-An unused pending packet cannot retain topic context from before an owner edit or repair. The worker checks stored topic hashes and full catalog identity before resuming it, preserves the old artifacts, and prepares a current snapshot. A validated plan that has actually changed a derived note may instead finish its partial publication from saved output without another model request.
-
-Agents should save one concise evidence-backed `brain_capture` milestone after meaningful work. The existing maintenance service links it into daily notes. Do not save raw session transcripts, manually append parallel daily logs, delete handoffs for the owner or create another schedule. Other devices keep capture/search role; compilation remains with the designated maintainer.
-
-Historical evidence checks require the actual earlier source revision. Keep the notes repository's history available; do not make a shallow notes clone or discard history to reduce storage without reviewing that consequence. Missing history remains an integrity issue. A verified old quotation does not establish a current fact. Normal new ingestion can remain on the existing hourly worker; report its actual pending count separately from installation and audit-fix readiness.
-
-Never replace a healthy runtime by copying folders or running `git pull` inside its active release. A change on Windows is shared as a tested tagged software release; each device installs that verified tag explicitly. Ownership transfer still requires disabling the previous writer first; shared receipts are replay evidence, not a distributed lock.
 
 ## Troubleshooting
 
@@ -233,12 +146,14 @@ Never replace a healthy runtime by copying folders or running `git pull` inside 
 - Git fsmonitor: core.fsmonitor=false is a per-command override for synchronization and staged-object commands routed through brain_git._run_git. It does not rewrite owner Git settings, apply to other clients or claim to cover separate read-only wiki-history operations.
 - Oversized operational logs: a service-*.log above 5,000,000 bytes remains preserved and reports attention on every maintenance pass while it grows. There is no automatic bounded rotation. Stop the registered service, then positively verify that every writer to the exact log, including already-running maintenance/children, has exited. A stop command alone is insufficient proof. Only after verified quiescence, move the exact file with its bytes and permissions into an owner-private dated archive outside the active service-*.log set, then restart and verify new logging and health. If writer identity or cleanup is uncertain, preserve the original and attention; do not truncate/delete/rotate a live log or force-release locks.
 - Search not ready: check local index progress and model download. Do not copy another OS's SQLite/WAL while it is live.
-- Index bootstrap needs attention: have the agent diagnose the private bootstrap log and fix the cause first. With the registered service stopped, it can reset the local `state/index-bootstrap-status.json` marker and start the service to retry. Preserve the actual retrieval database and model cache, then verify indexing and known-source retrieval again.
+- Index bootstrap needs attention: diagnose the private receipt and fix the cause. Use the supported `index retry` or `index retry --full` workflow above; preserve status/history, the retrieval database and model cache. Do not reset the marker or start overlapping reindexes.
 - Sync paused: preserve all files and staged changes; inspect the conflict. The service must remain the only sync owner.
 - Wiki compilation: the designated Windows maintainer owns it. Do not run `wiki run`, `wiki retry` or create a schedule on a capture device.
 - Wiki worker needs attention: the maintainer inspects `wiki status` and the controlled private failure receipt, repairs the cause and explicitly runs `wiki retry`. Pending sources and historical publication proofs remain preserved. Transport/timeouts and invalid model output must not cause unlimited scheduled model calls or blame unrelated sources.
 
-Reference: [v0.1.7 source and installer](https://github.com/code-by-muhammad/second-brain-system/tree/v0.1.7), [operating README](../README.md), and the shared vault's `Maps/AI-Context.md` and `02-Areas/AI-Memory/Wiki/Control.md`.
+- Native child cleanup still waiting: a command deadline does not guarantee a finite Windows kernel cleanup time. The runner retains ownership and caller locks until known process lifetimes and the private Job are verified complete. PID reuse has explicit evidence rules; absent notifications, denied queries or unresolved birth coverage can still keep an unverified hold. Preserve transaction UUID, status and private diagnostics; do not mark success, delete locks, reset state, kill cached PIDs or repeatedly restart the updater. An operator must inspect exact retained process/Job/task identities and arrange scoped cleanup before the recorded forward-controller UUID recovery. An empty process count alone is diagnostic, not permission to release this hold. This is a known availability limit, not evidence that original notes changed.
+
+Reference: [retained v0.1.7 source and installer (historical baseline)](https://github.com/code-by-muhammad/second-brain-system/tree/v0.1.7), [operating README](../README.md), and the shared vault's `Maps/AI-Context.md` and `02-Areas/AI-Memory/Wiki/Control.md`.
 
 Lint now reports malformed topic titles and JSON/UTF-8 claim metadata with controlled field/page/claim diagnostics. Rendering stops for malformed catalog/source-record fields without retry strikes. If an older source becomes undecodable or oversized, publication uses bounded current reads and exact historical Git evidence; unavailable proof requires owner repair and explicit `wiki retry`. The compiler never guesses an encoding or rewrites the source.
 
@@ -352,96 +267,6 @@ print('Matching local paths:', matches)
 ```
 
 No match can mean the file or folder was renamed, moved, removed, has not synchronized to this device, or its parent cannot be listed. Hidden and linked directory entry names can match, but their descendants are deliberately not traversed. Inspect the affected device's current paths and preserved local journal deliberately; do not guess a replacement or overwrite Index because it is the generic public locator. Git failure diagnostics screen raw filenames before JSON escaping and use the same opaque locator when needed. This changes displayed diagnostics, not which otherwise valid note filenames may synchronize.
-
-
-Maintenance source-review warnings cover central AI-Memory pages, reserved project AI-Memory summaries and Maps/AI-Context, including case-renamed reserved filenames. Central Markdown suffixes match case-insensitively on every OS, with hidden and linked directories pruned before traversal and enumeration failures reported through a safe locator. Source changes and review age use the existing recorded SHA256/30-day checks. Ordinary neighboring originals and immutable compiler receipt/Log/archive history are excluded from summary-age review; receipt integrity remains checked by wiki status, and claim/source integrity by wiki lint. Control retains its existing age review and ownership guard. A warning requests evidence-based review; it does not rewrite a current label, infer profile facts or modify original notes. Keep canonical shared folder/file casing and use the current SHA before an authorized derived update.
-
-Fresh publication and resumed recovery now use the same bounded JSON packet values, including numeric metadata keys. The first saved input stays stable through publication; caller types, fitting aliases and existing owner claims remain preserved. Already-stranded older noncanonical plans remain held for conservative recovery review. Never rewrite their private hashes or fabricate evidence; this correction does not automatically repair those journals.
-
-Lint checks decoded potential selected context with the existing page/field/index guard: the last twelve claims of a page within the compact budget. Older unselected and compact-omitted claims retain ordinary graph/provenance checks. Enumeration warnings retain a safe failed-subtree identity or fall back to its namespace; the names-only lookup above resolves files, folders and vault root (`.`). Healthy review and the existing Git stage continue.
-
-Undecodable Control refuses maintainer-only work through the existing permission guard. Maintenance reports that shared ownership could not be verified, skips aggregation and still attempts its existing Git stage under normal content checks. Preserve Control and repair UTF-8 deliberately from owner evidence; never guess an encoding or infer a handoff. The last authorized worker-success receipt stays historical, not proof that a refused attempt ran. Missing-Control bootstrap and explicit owner matching remain unchanged.
-
-Memory writes screen capture evidence paths, derived-page source paths and dynamic destination paths with the existing credential/NUL guard and 400-character limit before writing. Original filenames and notes remain preserved and available through existing read/search; this does not rewrite historical metadata.
-
-A derived update needs evidence distinct from its destination's actual file. Alternate separators, filesystem case aliases and hard links to the same existing file cannot supply independent evidence. Genuinely distinct files remain valid, including differently cased files on a case-sensitive device; a missing destination can still be created from genuinely distinct existing sources. Stored path strings are not rewritten.
-
-For the R112–R118 candidate, the lookup above also identifies hidden note names and link entry names without reading their contents or traversing hidden/linked directories. Central AI-Memory review uses a pruned walk and reports enumeration failures. If the in-vault `02-Areas` parent is linked, review stops at that entry and its opaque locator identifies `02-Areas`, rather than a child that the safe lookup cannot reach. Preserve the original layout and review the link deliberately; a diagnostic does not authorize deleting it or following its target.
-
-Immutable compiler receipt records do not acquire current-summary age reminders. Their optional proof integrity remains visible in `wiki status`, and claim/source evidence remains subject to `wiki lint`. Ordinary derived summaries and Control keep the existing 30-day review policy; Control's maintainer guard is unchanged.
-
-An aggregate structural limit in optional compact topic context now omits that context only after its raw individual claims pass the existing guards. Character-based omission, malformed graph refusal, decoded checks for included context, whole-packet limits and publication authority stay unchanged. An omitted page is preserved; it is not silently repaired or granted more capacity.
-
-Source-specific path/content attention identifies the screened source when possible. Cached public worker status may instead show the safe Index locator and `integrity_page_sha256`; use that digest with the local lookup above. An invalid source date or other selected source metadata remains pending with its original bytes intact. Inspect the actual source and repair only from owner evidence before an explicit `wiki retry`; do not overwrite Index or guess a replacement date from the generic locator.
-
-Before unused work reaches a provider, the compiler also screens known standard YAML frontmatter after parsing its scalar values, keys and associations. It rereads each selected source within the existing byte bound and verifies the selected raw SHA256 before this check, so metadata beyond the first source chunk cannot bypass it. This parses known local frontmatter only; it does not decode arbitrary body text. A possible credential produces controlled source/content attention with no provider request or raw value in diagnostics. A changed source snapshot remains a transient refusal; original notes and saved inputs are not rewritten.
-
-Selected-context claim diagnostics retain the original zero-based claim index when a valid full claim count is available, including a legacy/manual topic already above capacity. Invalid count types keep the existing safe fallback. The 120-claim publication limit is unchanged; bounded public status may omit an index outside its existing range, so inspect the controlled local attention receipt rather than guessing a window-relative index. No claims are deleted automatically to clear capacity or attention.
-
-R119 extends only the known parsed source-frontmatter screen. Standard YAML tags can produce sets, binary bytes and ordered key/value pairs, so the candidate source-only walker covers those values as well as ordinary dictionaries, sequences, tuples and nested aliases. It also handles frozenset containers without changing the generic selected-model-context guard. Strings still require strict UTF-8 and the established credential/NUL checks. Known binary values receive a bounded byte-level version of the same detector with ASCII token boundaries and NUL refusal; benign opaque non-UTF-8 bytes do not require guessed decoding.
-
-This screen inspects already parsed local metadata and its key/value associations under the existing graph/text bounds. It does not try arbitrary base64, string or body decoders, decrypt data, or guarantee discovery of every secret. The complete-source byte bound and selected raw SHA check, safe source-specific attention, pending evidence, transient owner-race refusal and verified partial-publication rules remain unchanged. Preserve original metadata and use explicit owner review for any genuine detected credential; do not disable the guard or rewrite saved hashes to force progress.
-
-### Candidate source-screen work bounds and review priority
-
-R120 supports valid parsed YAML nonfinite floats, such as infinity and NaN, in original source metadata. Their local association-detector representation does not make them valid generic model JSON: selected-claim and generic JSON guards retain strict nonfinite refusal. The [YAML float definition](https://yaml.org/type/float.html) includes these values, while [Python's JSON documentation](https://docs.python.org/3.12/library/json.html#json.dump) distinguishes strict `allow_nan=False` from local permissive rendering. This compatibility change does not rewrite original source values.
-
-R124 defers each source-metadata key/value association check until its normal child checks consume the existing semantic budgets. R125 additionally limits one source-metadata screening call to 8,000,000 detector/render work units and caches numeric renderings by `(type, id)`, retaining each actual scalar object. Work is reserved before a bounded numeric render or association scan; strict UTF-8 string sizes are cached for mixed string/binary associations. This source-only counter is not a global packet byte cap or an elapsed-time guarantee. The separate 2,000,000 semantic text limit, 100,000-node/depth-128 envelope, known credential patterns, NUL checks, active-cycle refusal and supported aliases remain. No arbitrary body/string decoding, new credential heuristic or complete secret-discovery guarantee is introduced.
-
-A controlled source/content attention result can mean metadata exceeded a work or structural bound; it does not by itself prove that a credential was found. Preserve the source, pending work, selected raw-SHA evidence and private saved inputs. Inspect the affected source locally, repair only with owner evidence and use explicit `wiki retry` after repair. Complete-source rereading/raw-SHA checks, transient owner-race refusal and verified partial-publication authority remain unchanged; never edit saved hashes to force progress.
-
-R121 places actionable, uncertain or mixed source-review reasons before pure age reminders in the public bounded review list, preserving stable order within each group. The full private receipt order, total/truncation counts and diagnostic screening remain unchanged. Ordinary generated summaries and Control still receive the existing 30-day review policy; only the previously excluded immutable receipt/Log/archive history remains exempt. R122 also reports a direct linked `02-Areas/AI-Memory` root by its own opaque path hash, or the linked `02-Areas` parent when that is the first boundary. Review does not traverse either target; the unchanged names-only lookup resolves the entry from its safe parent listing. A linked child remains pruned without target traversal.
-
-These are candidate behaviors with phase-specific evidence, not installation approval. R123's directory fixtures use actual private Windows junctions/native Linux symlinks with nonrecursive cleanup; only an explicit Windows file-symlink error1314 can produce the conditional capability skip, while unrelated errors propagate. Genuine unprivileged Windows hardware has not been tested. The deliberately corrected central-root warning oracle is recorded in the [remediation history](REMEDIATION-v0.1.7.md#r120-to-r125-source-screen-and-maintenance-follow-ups). R125 and all combined full-suite/review/platform/deployment gates remain pending at this documentation revision.
-
-### R126 mixed source metadata follow-up — 2026-10-16
-
-The existing source detector distinguishes known Unicode strings from opaque binary bytes. R126 repairs mixed key/value associations: a known Unicode string keeps its established case/whitespace semantics when paired with already parsed YAML binary. The binary fragment receives only a bounded ASCII inspection view, retaining high octets as replacement markers; it is not interpreted as UTF-8 or used to decode arbitrary source text. All-binary associations keep their existing ASCII detector, and all-string behavior is retained. [Python's regular-expression documentation](https://docs.python.org/3.12/library/re.html#re.ASCII) explains the Unicode/bytes distinction that made the old mixed conversion incomplete.
-
-The proposed source-only repair caches that binary inspection view while retaining the actual object, charges its construction and association screening to the existing work ledger, and preserves strict string UTF-8, mixed-association size, 2,000,000 semantic text, 8,000,000 work, 100,000-node and depth-128 bounds. Complete-source raw-SHA binding, pending evidence, generic JSON/context guards, safe attention and verified recovery authority remain unchanged. This is a conservative check of known parsed metadata, not arbitrary decoding or a guarantee that every secret can be discovered. A bound-triggered attention result is not proof of a credential; preserve originals and use owner-evidenced repair before explicit retry.
-
-The evidence is synthetic: two independently failed root contracts reached a fake provider, with four passing controls and no actual external transmission. The authored Windows before run has 38 cases, comprising 16 privacy/context failures, four additional cache-work failures and 18 controls; its 20 failures must not all be described as privacy transmissions. That before-phase description is historical: the sealed R12638 before/after receipt records passes on both Windows and the new E-hosted native Linux host; it does not approve a later combined source. The Mac/Linux installation, capture/maintainer roles and exact local lookup above need no new setup for this source-guard correction; native Mac acceptance remains separate. See the dated [remediation record](REMEDIATION-v0.1.7.md#r126-mixed-unicode-and-binary-source-associations--2026-10-16) for historical gates and remaining acceptance.
-
-### R127 original YAML evidence — scoped verification, 2026-10-16
-
-The source-header event screen now preserves evidence that ordinary YAML construction can discard: overwritten/merged values, set/null contents, scalar aliases, direct key/value associations and bounded standard binary values. Lexical evidence is checked before loss; known primitive association views are normalized with bounded standard constructors and cached per scalar definition. No arbitrary string/body decoder or new model authority is introduced. The exact R126 constructed-metadata helper and generic JSON/context checks remain preserved. [PyYAML documents events separately from constructed objects](https://pyyaml.org/wiki/PyYAMLDocumentation#events).
-
-One complete-header event pass has a cumulative 8,000,000 detector/render work limit. The separate constructed-metadata pass retains its own 8,000,000 limit, so their combined limit is 16,000,000; neither pass can borrow the other's unused budget. These are work estimates, not elapsed-time promises or a larger packet allowance. Existing source reads remain at 2,000,000 raw bytes, semantic text at 2,000,000 characters, and source/context graphs at their existing 100,000-node/depth-128 bounds. Strict strings, the established conservative credential detector, original SHA binding, transient source-race handling, pending evidence and verified partial-publication authority remain unchanged.
-
-Only exactly recognized closed frontmatter is event-parsed. Missing or unterminated opening fences remain ordinary Markdown. Closed nonmapping headers are screened before the usual empty metadata result. Closed syntax errors, unknown/ambiguous alias bindings and depth overflow produce controlled source/content attention. Parser-valid harmless invalid standard constructors retain safe fallback after lexical screening. A 500- or 1,000-deep source remains fully inventoried with its original body/hash and unknown metadata date, but compilation can refuse at depth128, preserving the pending source and writing no input packet. Original notes are not rewritten to satisfy a bound.
-
-R127's sealed scoped receipt is `r127-remediation/frozen-after-receipt.json`, SHA256 `2914592fe048c13432418443ef45109b454273776ca90436e75598e1543fc53d`. The same64 author cases have28 failures/36 controls before, then64 passes on both Windows and native Linux. The28 include22 privacy/context/typed-normalization contracts and6 explicit new policy/resource contracts; they are not28 demonstrated transmissions. Root17, retained root6/root12, corrected prior groups and focused266 also pass on those recorded source phases. Three existing shipping-module exceptions are explicit: a valid parsed Unicode-key fixture replaces an old overlong-key fallback fixture; work counters attribute event/constructed phases without changing their literal aggregate; and the old deep500 acceptance oracle now checks documented depth attention while preserving source evidence. See the [remediation record](REMEDIATION-v0.1.7.md#r127-original-yaml-event-evidence--scoped-verification-2026-10-16) for exact pins and preserved failed phases.
-
-### R128/R129 common frontmatter construction — candidate follow-up
-
-Source screening happens after the common frontmatter loader may already have constructed metadata. R128 therefore bounds aggregate mapping visits, merge copies and dictionary population at 100,000 reserved work units in a private SafeLoader subclass, before those operations. This separate construction budget is not the graph-node cap. Valid fitting merge order, duplicate-key behavior, standard tags and aliases remain supported; strict derived parsing reports controlled invalid-frontmatter errors while non-strict source metadata can fall back without deleting original body evidence. R128's same30 authored cases pass after seven before failures/23 controls on each OS; its scoped receipt is `r128-remediation/frozen-after-receipt.json`, SHA256 `9295b1fe11b8030af875b7494ee95c5b5e3b644d95c1fae00baae0795fb53dca`.
-
-R129 adds a separate cumulative 8,000,000-unit integer-construction estimate to that common loader. It reserves before the standard integer constructor, including conservative sexagesimal growth, and reuses the loader's normal alias cache; it does not change another PyYAML consumer's constructors. This is additional to the mapping budget and the two source-screen budgets. R129's same35 authored cases record10 failures/25 controls before, then35 passes on each OS; root8, prior mapping30, parser39 and focus266 also pass. Its scoped receipt is `r129-remediation/frozen-after-receipt.json`, SHA256 `3a5a314dad3764313b17ba6db07553e38942cbae43d773647425c2f14fe86f48`. These are recorded-source results, not full combined validation. The adapted pinned PyYAML merge algorithm will ship with its exact MIT notice in `THIRD-PARTY-NOTICES.md`. Do not describe these limits as a complete CPU/memory sandbox or a guarantee of all-secret detection.
-
-The new E-hosted `Second-Brain-Tests` distro is the isolated native test host, with Python3.12.12; Windows uses Python3.12.8. Old Debian remains stopped, unrepaired and registered on C; no verified backup/move or Docker repair is claimed. The setup/roles/connectors and exact names-only lookup above require no new configuration for these candidate guards. Native Mac and the final frozen-source release gates remain separate. **HOLD.**
-
-### Final combined fixture qualification — node cap
-
-The common mapping-work bound is intentionally earlier than source graph screening. The existing known-YAML-types35 module's100,000-set fixture now verifies empty metadata fallback, followed by the unchanged full-source inventory, content attention, zero-provider-call, original-byte and pending-work checks. Its depth and binary cases still require their actual constructed types. Only one test function/preassertion changes; fixture size,35 parameter identities and downstream privacy/queue oracles remain unchanged. This is the fifth current existing-module exception, additional to the parsed Unicode fixture, phase counter, deep500 policy and fatal-error injection hook. Current type35 module SHA256 is `0bb94522a75b381d9abf53df1751b8dee103bacf98631e3aa14a90137c78b098`.
-
-Exactly88 of the93 test/support files in base3ee remain byte-identical after those five exceptions; the historical central-history38 correction was already present in3ee and remains separately preserved. R127's earlier91/94 scoped identity statement remains a truthful historical scope, not the final combined identity claim. The exact corrected35 copy now passes on Windows/native Linux in R130 scoped phases; those runs used a private external test copy, and this new final candidate coalesces its same approved bytes. The whole coalesced candidate has no new full-source pass yet. Final counts and all source-bound acceptance gates remain pending; **HOLD**.
-
-### R130/R131 scoped follow-up — final installation still held, 2026-10-17
-
-The source-header check now handles standard scalar value-key mappings and nonspecific `!` scalar tags with their bounded known constructor views, including aliases, first-selector ordering and safe invalid-constructor fallback. It keeps raw evidence until outer associations have been checked; it does not decode arbitrary body text or invoke unknown constructors. The common loader and SOURCE primitive fallback also contain the pinned standard float constructor's OverflowError locally, while unrelated/fatal and rendering errors retain their previous behavior. Setup, capture/maintainer ownership, sync and connector configuration do not change for these guards.
-
-R130's scoped receipt is `b8ff1b8e134962c9a4c739781bf2791df082d4bcd844039036a9f432555ed476`: same79 cases pass after on both OSes, with original21 and required prior suites also passing. R131's receipt is `d70c30f53900752df3c91ba9d187dbb151b49405379b47599bef64882a29ed1d`: same38 author and accepted16 original cases pass on each OS; the two original before-only observations are excluded. Independent narrow postvalidation reports no findings (`60d644927b5243b399f7481328f076260feb931f51261213f753de5698dc25b0`). See the [dated remediation record](REMEDIATION-v0.1.7.md#r130-value-key-mappings-and-nonspecific-tags--scoped-verification-2026-10-17) for exact phases and limits. These are synthetic scoped passes, not authorization to install this staged candidate.
-
-| Final requirement | Staged derivation; final checks pending |
-| --- | --- |
-| Planned tracked source files / regenerated manifest entries | 136 / 135 |
-| Test/support files / derived full case identities | 99 / 2,065 |
-| Exact root platform executions / distinct contracts required | 495 / 483 |
-| Binder families / complete module cases / mandatory exact IDs required | 60 / 1,643 / 1,825 |
-
-Historical R130/R131 preparation requirements, recorded on 2026-10-17 before a6dec03: these figures were staged targets, not execution receipts. The planned source inventory was b258's 134 files plus two test modules, with the manifest excluding itself. The full identity target was the prior actual 1,948-case collection plus the disjoint 79- and 38-case authored JUnit sets. Root requirements then added R130's original21 and R131's accepted16 to 458/446; two stale before-only R131 observations were excluded. Binder targets then added two families/117 cases to 58/1,526/1,708. Later actual a6dec03 Windows/Linux and integration receipts are listed above. These historical preparation figures do not establish this R132–R137 candidate's final root/binder counts or passing gates.
-
-The exact names-only lookup fence above and upstream MIT notice stay unchanged. Event8M and constructed8M screening remain independent (aggregate16M), alongside source-byte2M/semantic2M/node100k/depth128 and separate common mapping100k/integer8M construction bounds. Preserve source originals and pending evidence; bound-triggered attention is not proof that a credential exists. The new E-hosted test distro uses Python3.12.12, while Windows uses3.12.8. Old Debian is still stopped/unrepaired on C, no verified move/backup or Docker repair is claimed. Native Mac, hosted CI, tagged release, deployment and real client acceptance remain unwaived; productionv0.1.6 and PRIMARY0ed are unchanged. **HOLD.**
 
 ## Current refusal recovery
 

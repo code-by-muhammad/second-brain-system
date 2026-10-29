@@ -65,6 +65,8 @@ with FileLock(str(state / 'maintenance.lock'), timeout=0):
 
 
 def test_maintenance_keeps_lock_while_its_bounded_descendant_is_live(brain, monkeypatch):
+    from supervisor_fixture import install
+    install(monkeypatch,supervisor)
     _, state = brain
     app = cfg.ROOT / 'app'
     app.mkdir()

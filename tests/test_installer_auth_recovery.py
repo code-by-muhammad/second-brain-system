@@ -99,7 +99,7 @@ def test_validate_only_does_not_write_or_repair_auth(auth_install,monkeypatch,st
     before=(tree_bytes(root),tree_bytes(home))
     no_rotation(monkeypatch,installer)
     monkeypatch.setattr(sys,'argv',['install.py','--root',str(root),'--vault',str(vault),
-        '--reuse-python',sys.executable,'--configure-clients','--validate-only'])
+        '--reuse-python',sys.executable,'--configure-clients','--skip-desktop-refresh','--validate-only'])
     installer.main()
     assert (tree_bytes(root),tree_bytes(home))==before
     if state=='fresh': assert not root.exists()

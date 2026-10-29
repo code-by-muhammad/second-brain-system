@@ -57,26 +57,42 @@ def test_updater_children_use_utf8_for_both_output_streams(pipe_environment, mon
     root, app, vault = pipe_environment
     # This child deliberately leaves its streams untouched, proving the updater
     # supplies UTF-8 before Python starts, including for an older rollback CLI.
-    (app/'brain_cli.py').write_text(
+    stub=app/'pipe_stub.py'
+    stub.write_text(
         'import json, os, sys\n'
-        'source = json.loads(os.environ["BRAIN_TEST_PATH"])\n'
+        'source = json.loads(os.environ["PIPE_TEST_PATH"])\n'
         'result = {"path": source, "status": "running", "version": "0.1.6",\n'
         '          "stdout_encoding": sys.stdout.encoding, "stderr_encoding": sys.stderr.encoding,\n'
-        '          "marker": os.environ["BRAIN_TEST_MARKER"]}\n'
+        '          "marker": os.environ["PIPE_TEST_MARKER"]}\n'
         'if sys.argv[1] == "wiki":\n'
         '    result.update(root=os.environ["BRAIN_SYSTEM_ROOT"], state=os.environ["BRAIN_STATE"],\n'
         '                  vault=os.environ["BRAIN_VAULT"], action=sys.argv[2], flags=sys.argv[3:])\n'
         'sys.stderr.write(source)\n'
         'print(json.dumps(result, ensure_ascii=False))\n', encoding='utf-8')
-    monkeypatch.setenv('BRAIN_TEST_PATH', json.dumps(source))
+    monkeypatch.setenv('PIPE_TEST_PATH', json.dumps(source))
+    monkeypatch.setenv('PIPE_TEST_MARKER','inherited-synthetic-value')
+    (root/'state').mkdir()
+    (root/'device.json').write_text(json.dumps({'vault':str(vault),'port':61234,'python':sys.executable}))
     updater = updater_module()
+    installer=updater.installer();support=installer.setup_helpers();real_run=support.run
+    def pipe_child(arguments,**options):
+        # Intercept only the service-capable inline entrypoint, replacing its
+        # program body with a fixed stdlib-only stub. Preserve the REAL Python
+        # flags, canonical environment, captured native Job and both byte pipes.
+        assert arguments[1:4]==['-I','-B','-X'] and 'utf8' in arguments
+        position=arguments.index('-c')
+        actual=[*arguments[:position],str(stub),*arguments[position+2:]]
+        return real_run(actual,**options)
+    monkeypatch.setattr(support,'run',pipe_child)
+    monkeypatch.setattr(installer,'setup_helpers',lambda:support)
+    monkeypatch.setattr(updater,'installer',lambda:installer)
     if command == 'wiki':
         result = updater.wiki_command(Path(sys.executable), root, vault, 'migrate', '--apply')
         assert (result['root'], result['state'], result['vault']) == (str(root), str(root/'state'), str(vault))
         assert result['action'] == 'migrate' and result['flags'] == ['--apply']
     else:
         monkeypatch.setattr(updater.time, 'sleep', lambda delay: None)
-        result = updater.wait_health(Path(sys.executable), root, '0.1.6', timeout=0.5)
+        result = updater.wait_health(Path(sys.executable), root, '0.1.6', timeout=3)
     assert result['path'] == source
     assert result['stdout_encoding'].lower().replace('_', '-') == 'utf-8'
     assert result['stderr_encoding'].lower().replace('_', '-') == 'utf-8'

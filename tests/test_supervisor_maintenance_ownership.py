@@ -14,6 +14,8 @@ class EndObservation(BaseException):
 
 @pytest.fixture
 def lifecycle(brain, monkeypatch):
+    from supervisor_fixture import install
+    install(monkeypatch,supervisor)
     _, state = brain
     (state / 'index-bootstrap-status.json').write_text('{"status":"pending"}', encoding='utf-8')
     h = SimpleNamespace(owned={}, processes=[], snapshots=[], now=1000,

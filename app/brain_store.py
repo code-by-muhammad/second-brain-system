@@ -61,7 +61,8 @@ def note_link(relative: str, from_path: str) -> str:
     target=safe_path(relative).relative_to(VAULT).as_posix()
     safe_path(from_path)
     if not any(c in relative for c in '[]#^%\\'):
-        return '[['+relative[:-3]+']]'
+        target=relative if relative[:-3].lower().endswith('.md') else relative[:-3]
+        return '[['+target+']]'
     # Obsidian 1.12.7 does not resolve the tested literal-# Markdown URL.
     # Use one conservative display policy for these selectors, not a link claim.
     fence='`'*(1+max((len(run) for run in re.findall(r'`+',target)),default=0))
@@ -92,8 +93,38 @@ def _note_bytes(path):
     if len(raw)>NOTE_LIMIT: raise ValueError(_NOTE_LIMIT_ERROR)
     return raw
 
+def _read_reference(relative: str) -> Path:
+    """Resolve an exact read reference; writes still require safe_path directly."""
+    if not isinstance(relative,str) or not relative or len(relative)>1000 or '\x00' in relative:
+        raise ValueError('Provide an exact vault-relative Markdown path or wikilink.')
+    # An explicit filename can contain a literal selector character. Never
+    # reinterpret an existing exact Markdown path as a heading reference.
+    if not relative.startswith('[['):
+        try: exact=safe_path(relative)
+        except ValueError: pass
+        else:
+            if exact.is_file(): return exact
+        target=relative
+        if any(mark in target for mark in ('[[',']]', '![')):
+            raise ValueError('Malformed note reference; use the exact path from brain_search.')
+    else:
+        if not relative.endswith(']]'):
+            raise ValueError('Malformed wikilink; use the exact path from brain_search.')
+        # Aliases can themselves contain pipes/brackets in generated titles.
+        # Only the first target field has path authority.
+        target=relative[2:-2].split('|',1)[0]
+        for selector in ('#','^'): target=target.split(selector,1)[0]
+        if not target or '[' in target or ']' in target:
+            raise ValueError('Wikilink needs an exact vault-relative target.')
+    if not target.lower().endswith('.md'): target+='.md'
+    return safe_path(target)
+
+
 def read(relative: str, start_line=1, max_lines=160):
-    p=safe_path(relative)
+    p=_read_reference(relative)
+    # Windows resolves case aliases to the on-disk spelling. Re-authorize the
+    # resolved target so receipts carry a portable exact path, never an escape.
+    p=safe_path(p.resolve(strict=True).relative_to(VAULT).as_posix())
     raw=_note_bytes(p)
     lines=raw.decode('utf-8-sig').splitlines()
     start_line=max(1,int(start_line)); max_lines=max(1,min(int(max_lines),250))

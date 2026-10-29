@@ -33,6 +33,8 @@ CASES = [
 
 @pytest.mark.parametrize('label,raw,fault', CASES, ids=[row[0] for row in CASES])
 def test_actual_supervisor_recovery_keeps_owned_children(brain, monkeypatch, label, raw, fault):
+    from supervisor_fixture import install
+    install(monkeypatch,supervisor)
     _, state = brain
     progress = state / 'index-bootstrap-status.json'
     if raw is not None:
@@ -112,5 +114,7 @@ def test_actual_supervisor_recovery_keeps_owned_children(brain, monkeypatch, lab
     assert registry['bootstrap'] == (None if terminal else processes[1].pid)
     assert (progress.read_bytes() if progress.exists() else None) == original
     assert failures == ([fault] if fault else [])
-    assert len(connections) == 3 and len(sleeps) == 3
+    # Ownership now requires publishing this supervisor before looking at a
+    # listener. A registry failure therefore precedes that iteration's query.
+    assert len(connections) == (2 if fault=='registry' else 3) and len(sleeps) == 3
     assert all(process.poll() is None for process in processes)
