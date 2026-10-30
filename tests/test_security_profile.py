@@ -13,6 +13,39 @@ import brain_settings as cfg
 import brain_client as client
 
 
+def test_patched_joserfc_checks_compact_size_before_materializing_segments():
+    from importlib.metadata import version
+    from joserfc import jws
+    from joserfc.errors import ExceededSizeError
+    from joserfc.jws import JWSRegistry
+    assert version('joserfc')=='1.7.7'
+    calls=[]
+    class SplitTrap(bytes):
+        def split(self,*args,**kwargs):
+            calls.append(True)
+            raise AssertionError('Oversized JWS must be rejected before segment copies')
+    probe=SplitTrap(b'A'*1024+b'.'+b'B'*1024+b'.'+b'C'*1024)
+    assert type(probe).split is not bytes.split
+    registry=JWSRegistry(algorithms=['HS256'])
+    registry.max_header_length=16;registry.max_payload_length=32;registry.max_signature_length=16
+    assert len(probe)>registry.max_header_length+registry.max_payload_length+registry.max_signature_length
+    with pytest.raises(ExceededSizeError):jws.deserialize_compact(probe,None,registry=registry)
+    assert not calls
+
+
+def test_patched_joserfc_valid_signature_roundtrip_and_wrong_key_refusal():
+    from importlib.metadata import version
+    from joserfc import jws
+    from joserfc.errors import BadSignatureError
+    from joserfc.jwk import OctKey
+    assert version('joserfc')=='1.7.7'
+    key=OctKey.import_key(b'synthetic-qualification-key-only-'+b'x'*32)
+    wrong=OctKey.import_key(b'different-qualification-key-only-'+b'y'*32)
+    token=jws.serialize_compact({'alg':'HS256'},b'synthetic bounded payload',key,algorithms=['HS256'])
+    assert jws.deserialize_compact(token,key,algorithms=['HS256']).payload==b'synthetic bounded payload'
+    with pytest.raises(BadSignatureError):jws.deserialize_compact(token,wrong,algorithms=['HS256'])
+
+
 @pytest.mark.parametrize('change',[{'semantic_embedding_provider':'litellm'}, {'semantic_embedding_provider':'openai'},
                                    {'reranker_enabled':True}, {'reranker_enabled':None}])
 def test_server_refuses_unsupported_provider_or_reranker_before_upstream_imports(brain,monkeypatch,change):

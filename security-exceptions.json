@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "reviewed_on": "2026-10-29",
+  "reviewed_on": "2026-10-31",
   "platform": "win32",
   "expected_audit_versions": {
     "agent-detector": "2.0.0",
@@ -61,7 +61,7 @@
     "jaraco-functools": "4.6.0",
     "jinja2": "3.1.6",
     "jiter": "0.17.0",
-    "joserfc": "1.7.5",
+    "joserfc": "1.7.7",
     "jsonref": "1.1.0",
     "jsonschema": "4.26.0",
     "jsonschema-path": "0.5.0",
@@ -183,11 +183,11 @@
     "app/brain_windows_process.py": "27ef89605d0e472f8efdbb859e835b3bb55c71d060e73549ad10560d3f2b2de3",
     "check_dependency_audit.py": "65c02303e242c8f72b2b65c21942f4b584f250a97304b173f18decd049364a0a",
     "install.py": "ded29b419edda69f2406072f1bfee7bd2c9b4388985b8a8d0ee9fb92888432eb",
-    "pyproject.toml": "15fc16dfef0e252676c7053eaf37ed647a999e1257f8b7c222aaabf5d9c9a194",
+    "pyproject.toml": "ed20ab54011fcd64b20715ffa4768850906291323bf8fb12789d17514a957308",
     "setup_runtime.py": "ef477ad7a174c563d34d2c0c8a281d6ade259405033b6da9e36839f3fb428f47",
-    "tests/test_security_profile.py": "1b26b5b7fdace73566ab48033221167feb694d6662a604494f6b128096de7c20",
+    "tests/test_security_profile.py": "f12a8faa872e75bc3522e2efd37db32102f5d91a355076718ef129a574a3c988",
     "update.py": "33cf407c4d1a1109b5fc012fc611f5517c3aad6b54fcba08c380f03471c6b221",
-    "uv.lock": "0e7c17c2f92c1ed6d44b6f83b90c2142fc55310d1573a08fa9e1f8f9fb200743"
+    "uv.lock": "f34f81dad324a199e3b3b86d120125dfd218d8dc2f20498ed9ad44d0629b6e76"
   },
   "exceptions": [
     {

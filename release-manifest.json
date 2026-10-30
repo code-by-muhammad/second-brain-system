@@ -13,7 +13,7 @@
     ".github/workflows/verify.yml": "e38cadb1ca808bc39fbe35b1450fa193a4af70407f8ca1557ebbd167cfca6590",
     ".gitignore": "a8310700b84bec5ae67c7e698127aa63f1b7bb6c6994e5fb940cd0f01c8b3f34",
     "README.md": "de1e7b4a3c1ecf9fa0e7848a83276ef80e26c1b5cea58a5e8d0142b11aad4112",
-    "SECURITY.md": "904fc6ccb08dcdbb54e447fe7586641e1ce900601b94ac6c556d1fd0692ecc5a",
+    "SECURITY.md": "1267cf897d11702bffef051a85048ef72384ed572d72182f88a643ed77355a8a",
     "THIRD-PARTY-NOTICES.md": "bf725b1445743d0ee61d59656f1633c0477d18d72fdab018b0f2944c098c9340",
     "app/brain_cli.py": "993ea30591be6a3ccdcb9dd31392ae980ec953ff0d7e6d26c92f61c5874cb905",
     "app/brain_client.py": "dc890bdf9122992003a699a51be5fc3b32d98edd040b3a44f5aa358487a3119c",
@@ -44,13 +44,13 @@
     "docs/RELEASE-v0.1.5.md": "a89908bab870c8a5542c936d41ce8e9d246c4f10c8131c6ee277173849a36fe3",
     "docs/RELEASE-v0.1.6.md": "18267728c1bf61f71edcad60e56d6834fdbd14b4186af580ef17b94dceddd562",
     "docs/RELEASE-v0.1.7.md": "2c9c81c1dce1852964027d244648f187aad85003f76ec299f73bcae540ce6bc8",
-    "docs/RELEASE-v0.1.8.md": "bef328eb17b25936b23678135ad08574ad6bb0816706494f4a883720aa9db4a4",
+    "docs/RELEASE-v0.1.8.md": "63746a1ae721f4fad48fcc0f6001a3f4dda5a07d8b435c953a63ea368a63d596",
     "docs/REMEDIATION-v0.1.6.md": "fc9b7179fa84224b733bef7b4878400d740d0315db6f701f033d24de074431a8",
     "docs/REMEDIATION-v0.1.7.md": "8798907f8205bbc27724584cfc25f940ebf75bd0e628622863670aa54c3cafdb",
     "docs/RESEARCH-AND-PLAN.md": "04f0a2ac1a18051687e65bad2f599b144e3ecfac800e4b34d9ee599b5dc7370d",
     "install.py": "ded29b419edda69f2406072f1bfee7bd2c9b4388985b8a8d0ee9fb92888432eb",
-    "pyproject.toml": "15fc16dfef0e252676c7053eaf37ed647a999e1257f8b7c222aaabf5d9c9a194",
-    "security-exceptions.json": "aef39592a5c462c01579247a901c309111f83c95baa5a4452f713c8a232bda16",
+    "pyproject.toml": "ed20ab54011fcd64b20715ffa4768850906291323bf8fb12789d17514a957308",
+    "security-exceptions.json": "8f713a708e654594c8d2ebd9e4967d74463976abc5b8ff6bd96b923b0e79e16a",
     "setup_runtime.py": "ef477ad7a174c563d34d2c0c8a281d6ade259405033b6da9e36839f3fb428f47",
     "skills/second-brain/SKILL.md": "8585b0c3b6f943bfefdbba57cb6ec49d333c285a58a838ad9114c45af56e5aa2",
     "tests/conftest.py": "5b890573f31d023cd2a54c2d9432e954d8bd6d67a7749b88da457049c0b4ebed",
@@ -103,7 +103,7 @@
     "tests/test_portable_remediation.py": "b2fc79e99a22477fab15536083cca4dc76a33fefc5e8129dc5ff500b60bde4b9",
     "tests/test_read_references.py": "73931831a2b5eca57a256be2fd1499a8ae4644c5e12ed855fd18283983b89b3c",
     "tests/test_release_candidate.py": "5ecac98c90976bf92bc5ad30d3568dffa9fa7afa7aab466a5231234545663237",
-    "tests/test_security_profile.py": "1b26b5b7fdace73566ab48033221167feb694d6662a604494f6b128096de7c20",
+    "tests/test_security_profile.py": "f12a8faa872e75bc3522e2efd37db32102f5d91a355076718ef129a574a3c988",
     "tests/test_service_control_guards.py": "caa225f846680dca2478f0546c0c7f1945c3d7d450e40d515ec6e60d1e94774b",
     "tests/test_service_process_identity.py": "a01b14e190242b6286e7aab1f74e5434b8116a42fb9b7e3366d3701014922736",
     "tests/test_setup_sealed_plans.py": "f525912abc22e79b7d804f68f9b09c83b1c98ac62e77b4692a983f9ff954f0a2",
@@ -206,6 +206,6 @@
     "tests/test_yaml_float_constructor_containment.py": "85730d5832db0158ec8d6e76841ef34d4a2911af5407f24020ff2b9187cb96bb",
     "tests/upgrade_fixture.py": "93c34ca69ea040abd83e0462d03fcecd5b48656ef645a25007df4340eb13dffe",
     "update.py": "33cf407c4d1a1109b5fc012fc611f5517c3aad6b54fcba08c380f03471c6b221",
-    "uv.lock": "0e7c17c2f92c1ed6d44b6f83b90c2142fc55310d1573a08fa9e1f8f9fb200743"
+    "uv.lock": "f34f81dad324a199e3b3b86d120125dfd218d8dc2f20498ed9ad44d0629b6e76"
   }
 }

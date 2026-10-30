@@ -10,7 +10,7 @@ Use the verified NEW updater from exactly `<runtime>/releases/v0.1.8/update.py`,
 
 The manifest's capabilities describe source support; `qualified_service_platforms` is advisory metadata. Literal setup/update guards enforce Windows-only mutating workflows. Read-only planning is not POSIX service acceptance. No writer ownership, recurring AI schedule, accepted source exclusions or original-note policy changes are part of this release.
 
-Security composition patches filelock/certifi/FastEmbed/Pillow and excludes the unused LiteLLM SDK/proxy. The server admits only FastEmbed with reranking disabled. Basic Memory stays at 0.23.2 to preserve the tested data/rollback contract. One exact FastMCP OAuth advisory remains under the documented, source-bound exception; see [SECURITY.md](../SECURITY.md), including its review deadline and raw audit distinction.
+Security composition patches filelock/certifi/FastEmbed/Pillow, constrains joserfc to 1.7.7 for the compact-JWS allocation advisory, and excludes the unused LiteLLM SDK/proxy. The server admits only FastEmbed with reranking disabled. Basic Memory stays at 0.23.2 to preserve the tested data/rollback contract. One exact FastMCP OAuth advisory remains under the documented, source-bound exception; see [SECURITY.md](../SECURITY.md), including its review deadline and raw audit distinction.
 
 The exception remains valid only through 2026-11-12 UTC inclusive. Release qualification must finish within that window or the dependency qualification must be renewed against a supported patched graph; the audit fails after expiry. A dependency upgrade requires its own data/index/transport and rollback qualification, not just new package pins.
 

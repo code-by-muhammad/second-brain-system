@@ -17,5 +17,7 @@ required-version = ">=0.9.16"
 # The product supports local FastEmbed only, with reranking disabled. The
 # upstream mandatory LiteLLM SDK/proxy is deliberately absent; see SECURITY.md.
 exclude-dependencies = ["litellm"]
+# Security floor for transitive JOSE consumers; keep the reviewed parent SDKs.
+constraint-dependencies = ["joserfc==1.7.7"]
 prerelease = "if-necessary-or-explicit"
 required-environments = ["sys_platform == 'darwin' and platform_machine == 'x86_64'", "sys_platform == 'darwin' and platform_machine == 'arm64'", "sys_platform == 'win32' and platform_machine == 'AMD64'", "sys_platform == 'linux' and platform_machine == 'x86_64'"]
