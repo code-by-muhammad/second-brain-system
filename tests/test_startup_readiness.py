@@ -6,6 +6,7 @@ import brain_client as client
 
 @pytest.mark.asyncio
 async def test_proxy_waits_until_all_tools_are_exposed(monkeypatch):
+    monkeypatch.setattr(client.processes,'listener_identity',lambda:{'synthetic':True})
     calls=0
     class Probe:
         def __init__(self,*a,**kw): pass

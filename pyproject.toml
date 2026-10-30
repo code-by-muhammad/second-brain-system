@@ -1,9 +1,9 @@
 [project]
 name = "shared-second-brain"
-version = "0.1.7"
+version = "0.1.8"
 description = "Portable local Obsidian MCP and evidence-linked wiki maintenance"
 requires-python = ">=3.12,<3.13"
-dependencies = ["basic-memory==0.23.2", "fastmcp==4.0.0b1", "fastmcp-slim==4.0.0b1", "wrapt==2.4.0", "tzdata>=2025.2", "filelock==4.1.2", "PyYAML==6.0.3", "jsonschema==4.26.0"]
+dependencies = ["basic-memory==0.23.2", "fastmcp==4.0.0b1", "fastmcp-slim==4.0.0b1", "wrapt==2.4.0", "tzdata>=2025.2", "filelock==4.2.4", "PyYAML==6.0.3", "jsonschema==4.26.0", "tomlkit==0.15.1", "psutil==7.2.2", "certifi==2026.10.23", "fastembed==0.9.1", "pillow==13.0.0"]
 
 [dependency-groups]
 dev = ["pytest>=8,<10", "pytest-asyncio>=0.26,<2"]
@@ -13,5 +13,11 @@ pythonpath = ["app"]
 testpaths = ["tests"]
 
 [tool.uv]
+required-version = ">=0.9.16"
+# The product supports local FastEmbed only, with reranking disabled. The
+# upstream mandatory LiteLLM SDK/proxy is deliberately absent; see SECURITY.md.
+exclude-dependencies = ["litellm"]
+# Security floor for transitive JOSE consumers; keep the reviewed parent SDKs.
+constraint-dependencies = ["joserfc==1.7.7"]
 prerelease = "if-necessary-or-explicit"
 required-environments = ["sys_platform == 'darwin' and platform_machine == 'x86_64'", "sys_platform == 'darwin' and platform_machine == 'arm64'", "sys_platform == 'win32' and platform_machine == 'AMD64'", "sys_platform == 'linux' and platform_machine == 'x86_64'"]

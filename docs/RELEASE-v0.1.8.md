@@ -1,0 +1,17 @@
+# v0.1.8 Windows hardening candidate
+
+This source addresses the reviewed Windows onboarding findings. It is not a deployment approval. The trusted release handover supplies the final tag/commit, manifest SHA256, exact-source qualification and remaining target-device checks. Mac/Linux remain on accepted v0.1.7 until their new native lifecycle is qualified.
+
+Changes include host-package/interpreter preflight, serial trusted uv preparation, fresh target environments, selected-client setup with optional hooks, sealed owned-entry refresh/CAS and concurrent-edit preservation, Desktop deferral, exact process ownership before authentication, a self-owned Windows Job, explicit stop persistence, verified quiescence/fresh startup and UUID upgrade/recovery archives. Exact-path reads accept optional Markdown extensions and full wikilinks without basename guessing. Current index status binds raw files, normalized indexed bodies and persisted vector metadata; bounded retries preserve history and source bytes.
+
+Historical wiki verification starts its existing time budget after the page scan, including during publication planning. Legacy origin lookup tests candidates as they are encountered and preserves exact proof order. Lint retains its failure names and adds a per-check `history_incomplete` reason for bounded or unavailable history; it never substitutes a receipt, a matching quote alone or an incomplete search for source-revision proof. This hardening does not establish the cause of a previously intermittent warning.
+
+Use the verified NEW updater from exactly `<runtime>/releases/v0.1.8/update.py`, launched by the verified RETAINED v0.1.7 Python. Do not launch it from the target `.venv`, pre-run `uv sync`, or use the old updater. The old configure-client preflight is refused before service stop; an old updater can still clone/prepare files before that refusal, so Mac/Linux must not attempt it. See [setup/update/recovery](DEVICE-SETUP.md).
+
+The manifest's capabilities describe source support; `qualified_service_platforms` is advisory metadata. Literal setup/update guards enforce Windows-only mutating workflows. Read-only planning is not POSIX service acceptance. No writer ownership, recurring AI schedule, accepted source exclusions or original-note policy changes are part of this release.
+
+Security composition patches filelock/certifi/FastEmbed/Pillow, constrains joserfc to 1.7.7 for the compact-JWS allocation advisory, and excludes the unused LiteLLM SDK/proxy. The server admits only FastEmbed with reranking disabled. Basic Memory stays at 0.23.2 to preserve the tested data/rollback contract. One exact FastMCP OAuth advisory remains under the documented, source-bound exception; see [SECURITY.md](../SECURITY.md), including its review deadline and raw audit distinction.
+
+The exception remains valid only through 2026-11-12 UTC inclusive. Release qualification must finish within that window or the dependency qualification must be renewed against a supported patched graph; the audit fails after expiry. A dependency upgrade requires its own data/index/transport and rollback qualification, not just new package pins.
+
+Full regression, native lifecycle, synthetic index proof, and real tagged upgrade/rollback/recovery must be bound to the actual final source. Earlier scoped tests stay historical. Named GUI clients, reboot/login, remote/device round trips and physical team-member installations require actual receipts. Preserve private logs/plans/snapshots locally and share only curated facts, counts and hashes.

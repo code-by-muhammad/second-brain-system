@@ -2,6 +2,7 @@
 import asyncio, hashlib, json, os, socket, subprocess, sys, time
 from pathlib import Path
 import pytest
+import brain_settings as cfg
 
 @pytest.mark.asyncio
 async def test_authenticated_mcp_and_safe_writes(tmp_path):
@@ -37,11 +38,26 @@ async def test_authenticated_mcp_and_safe_writes(tmp_path):
                 assert {tool.name for tool in await c.list_tools()}=={'brain_context','brain_search','brain_read','brain_capture','brain_update_current','brain_health'}
                 context=(await c.call_tool('brain_context',{})).data
                 assert Path(context['vault'])==vault
+                # R141: exercise the registered/authenticated health tool itself.
+                health=(await c.call_tool('brain_health',{})).data
+                assert health['status']=='running' and health['version']==cfg.VERSION
+                for filename,key in [('maintenance-status.json','maintenance'),('index-bootstrap-status.json','initial_index_validation')]:
+                    cache=state/filename
+                    for raw in (b'{',b'[]'):
+                        cache.write_bytes(raw)
+                        health=(await c.call_tool('brain_health',{})).data
+                        assert health['status']=='running' and health[key]['status']=='needs attention'
+                        assert cache.read_bytes()==raw
+                    cache.write_text(json.dumps({'status':'completed' if key=='maintenance' else 'verified'}),encoding='utf-8')
+                    health=(await c.call_tool('brain_health',{})).data
+                    assert health[key]['status']==('completed' if key=='maintenance' else 'verified')
                 args={'event_id':'isolated-mcp-milestone','title':'Synthetic test','outcome':'Synthetic marker QUARTZ-57321.',
                       'source_app':'CI','source_reference':'synthetic disposable fixture'}
                 first=(await c.call_tool('brain_capture',args)).data
                 assert (await c.call_tool('brain_capture',args)).data['status']=='duplicate'
                 assert 'QUARTZ-57321' in (await c.call_tool('brain_read',{'path':first['path']})).data['content']
+                linked=(await c.call_tool('brain_read',{'path':'[['+first['path'][:-3]+'|Saved evidence]]'})).data
+                assert linked['path']==first['path'] and linked['sha256']==first['sha256']
                 search=(await c.call_tool('brain_search',{'query':'ye synthetic marker kahan hai',
                               'english_query':'QUARTZ-57321','limit':4})).data
                 assert first['path'] in {row['path'] for row in search['results']}

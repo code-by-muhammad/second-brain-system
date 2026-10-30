@@ -37,6 +37,39 @@ def safe_path(relative: str) -> Path:
         raise ValueError('Path leaves the vault.')
     return p
 
+
+def _safe_discovered_path(path: Path) -> Path:
+    """Check the actual enumerated original before I/O; preserve separator aliases."""
+    relative=path.relative_to(VAULT)
+    safe_path(relative.as_posix())
+    target=VAULT
+    for part in relative.parts:
+        target=target/part
+        if target.is_symlink() or os.path.isjunction(target):
+            raise ValueError('Linked/reparse paths are refused.')
+    if not path.resolve().is_relative_to(VAULT):
+        raise ValueError('Path leaves the vault.')
+    return path
+
+
+def note_link(relative: str, from_path: str) -> str:
+    """Preserve ordinary links; display exceptional source paths without an anchor."""
+    for value in (relative,from_path):
+        clean_text(value,400); value.encode('utf-8','strict')
+        if any(ord(c)<32 or c in '\x7f\u2028\u2029' for c in value):
+            raise ValueError('Note reference path contains unsupported control characters.')
+    target=safe_path(relative).relative_to(VAULT).as_posix()
+    safe_path(from_path)
+    if not any(c in relative for c in '[]#^%\\'):
+        target=relative if relative[:-3].lower().endswith('.md') else relative[:-3]
+        return '[['+target+']]'
+    # Obsidian 1.12.7 does not resolve the tested literal-# Markdown URL.
+    # Use one conservative display policy for these selectors, not a link claim.
+    fence='`'*(1+max((len(run) for run in re.findall(r'`+',target)),default=0))
+    padding=' ' if target.startswith(('`',' ')) or target.endswith(('`',' ')) else ''
+    return 'Source path: '+fence+padding+target+padding+fence
+
+
 def clean_text(value: str, max_len=30000):
     if not isinstance(value,str) or len(value)>max_len or '\x00' in value:
         raise ValueError('Text exceeds allowed size or contains invalid characters.')
@@ -47,10 +80,52 @@ def clean_text(value: str, max_len=30000):
 def note_text(meta, body):
     return '---\n'+yaml.safe_dump(meta,sort_keys=False,allow_unicode=True)+'---\n\n'+body.rstrip()+'\n'
 
+NOTE_LIMIT=2_000_000
+_NOTE_LIMIT_ERROR='Note exceeds 2 MB; select a smaller source.'
+
+def _check_note_size(path):
+    try: size=path.stat().st_size
+    except FileNotFoundError: return
+    if size>NOTE_LIMIT: raise ValueError(_NOTE_LIMIT_ERROR)
+
+def _note_bytes(path):
+    with path.open('rb') as stream: raw=stream.read(NOTE_LIMIT+1)
+    if len(raw)>NOTE_LIMIT: raise ValueError(_NOTE_LIMIT_ERROR)
+    return raw
+
+def _read_reference(relative: str) -> Path:
+    """Resolve an exact read reference; writes still require safe_path directly."""
+    if not isinstance(relative,str) or not relative or len(relative)>1000 or '\x00' in relative:
+        raise ValueError('Provide an exact vault-relative Markdown path or wikilink.')
+    # An explicit filename can contain a literal selector character. Never
+    # reinterpret an existing exact Markdown path as a heading reference.
+    if not relative.startswith('[['):
+        try: exact=safe_path(relative)
+        except ValueError: pass
+        else:
+            if exact.is_file(): return exact
+        target=relative
+        if any(mark in target for mark in ('[[',']]', '![')):
+            raise ValueError('Malformed note reference; use the exact path from brain_search.')
+    else:
+        if not relative.endswith(']]'):
+            raise ValueError('Malformed wikilink; use the exact path from brain_search.')
+        # Aliases can themselves contain pipes/brackets in generated titles.
+        # Only the first target field has path authority.
+        target=relative[2:-2].split('|',1)[0]
+        for selector in ('#','^'): target=target.split(selector,1)[0]
+        if not target or '[' in target or ']' in target:
+            raise ValueError('Wikilink needs an exact vault-relative target.')
+    if not target.lower().endswith('.md'): target+='.md'
+    return safe_path(target)
+
+
 def read(relative: str, start_line=1, max_lines=160):
-    p=safe_path(relative)
-    raw=p.read_bytes()
-    if len(raw)>2_000_000: raise ValueError('Note exceeds 2 MB; select a smaller source.')
+    p=_read_reference(relative)
+    # Windows resolves case aliases to the on-disk spelling. Re-authorize the
+    # resolved target so receipts carry a portable exact path, never an escape.
+    p=safe_path(p.resolve(strict=True).relative_to(VAULT).as_posix())
+    raw=_note_bytes(p)
     lines=raw.decode('utf-8-sig').splitlines()
     start_line=max(1,int(start_line)); max_lines=max(1,min(int(max_lines),250))
     return {'path':p.relative_to(VAULT).as_posix(),'sha256':digest(raw),'total_lines':len(lines),
@@ -58,7 +133,7 @@ def read(relative: str, start_line=1, max_lines=160):
 
 def _write(p:Path,text:str,kind:str,expected_sha256:str|None=None):
     raw=text.encode('utf-8')
-    old=p.read_bytes() if p.exists() else None
+    old=_note_bytes(p) if p.exists() else None
     before=digest(old) if old is not None else None
     if expected_sha256 is not None and before!=expected_sha256:
         raise ValueError('Concurrent change detected. Read the current note and merge before retrying.')
@@ -69,37 +144,51 @@ def _write(p:Path,text:str,kind:str,expected_sha256:str|None=None):
         if not archive.exists(): archive.write_bytes(old)
     p.parent.mkdir(parents=True,exist_ok=True)
     fd,tmp=tempfile.mkstemp(prefix='.brain-',suffix='.tmp',dir=p.parent)
+    replaced=False
     try:
-        with os.fdopen(fd,'wb') as f: f.write(raw); f.flush(); os.fsync(f.fileno())
-        os.replace(tmp,p)
-    finally:
-        if os.path.exists(tmp): os.unlink(tmp)
-    entry={'at':stamp(),'action':kind,'path':p.relative_to(VAULT).as_posix(),'before':before,'after':digest(raw)}
-    with (STATE/'audit.jsonl').open('a',encoding='utf-8') as f: f.write(json.dumps(entry)+'\n')
-    return {'path':entry['path'],'status':'saved','sha256':entry['after'],'saved_at':entry['at']}
+        try:
+            with os.fdopen(fd,'wb') as f: f.write(raw); f.flush(); os.fsync(f.fileno())
+            os.replace(tmp,p)
+            replaced=True
+        finally:
+            if os.path.exists(tmp): os.unlink(tmp)
+        entry={'at':stamp(),'action':kind,'path':p.relative_to(VAULT).as_posix(),'before':before,'after':digest(raw)}
+        with (STATE/'audit.jsonl').open('a',encoding='utf-8') as f: f.write(json.dumps(entry)+'\n')
+        return {'path':entry['path'],'status':'saved','sha256':entry['after'],'saved_at':entry['at']}
+    except Exception as error:
+        # Preserve the original exception and the known replacement outcome.
+        # Callers may retain recovery intent; this does not authorize replay.
+        if replaced: error._brain_note_replaced=True
+        raise
+
 
 def capture(event_id:str,title:str,outcome:str,source_app:str,source_reference:str,
             project:str='',decisions:list[str]|None=None,next_steps:list[str]|None=None,
             evidence_paths:list[str]|None=None):
-    for x in (event_id,title,outcome,source_app,source_reference,project): clean_text(x)
-    if not event_id or len(event_id)>180 or not title.strip() or not outcome.strip() or not source_reference.strip():
-        raise ValueError('Stable event_id, title, outcome and source_reference are required.')
+    for x in (event_id,title,outcome,source_reference,project): clean_text(x)
+    clean_text(source_app,2000)
+    if not event_id or len(event_id)>180 or not title.strip() or not outcome.strip() or not source_app or not source_reference.strip():
+        raise ValueError('Stable event_id, title, outcome, source_app and source_reference are required.')
+    if any(x in event_id for x in ('\r','\n','-->')): raise ValueError('Invalid capture marker.')
     if len(title)>180 or len(project)>180: raise ValueError('Title/project too long.')
     decisions=decisions or []; next_steps=next_steps or []; evidence_paths=evidence_paths or []
     if max(len(decisions),len(next_steps),len(evidence_paths))>30: raise ValueError('Too many list items.')
     for x in decisions+next_steps: clean_text(x,2000)
     for x in evidence_paths:
+        clean_text(x,400)
         if not safe_path(x).is_file(): raise ValueError('Evidence note does not exist: '+x)
     payload=dict(event_id=event_id,title=title,outcome=outcome,source_app=source_app,source_reference=source_reference,
                  project=project,decisions=decisions,next_steps=next_steps,evidence_paths=evidence_paths)
     fingerprint=digest(json.dumps(payload,sort_keys=True,ensure_ascii=False).encode())
     key=digest(event_id.encode())[:24]
     p=safe_path(f'00-Inbox/AI-Captures/{key}.md')
+    _check_note_size(p)
     with FileLock(str(STATE/'writer.lock'),timeout=20):
         if p.exists():
-            previous=frontmatter(p.read_text(encoding='utf-8'),strict=True)
+            existing=_note_bytes(p)
+            previous=frontmatter(existing.decode('utf-8'),strict=True)
             if previous.get('payload_sha256')==fingerprint:
-                return {'path':p.relative_to(VAULT).as_posix(),'status':'duplicate','sha256':digest(p.read_bytes())}
+                return {'path':p.relative_to(VAULT).as_posix(),'status':'duplicate','sha256':digest(existing)}
             raise ValueError('event_id already saved with different content. Use a new milestone ID; evidence is immutable.')
         now=stamp()
         meta={'date':now[:10],'type':'work-log','tags':['ai-capture'],'event_id':event_id,
@@ -107,7 +196,7 @@ def capture(event_id:str,title:str,outcome:str,source_app:str,source_reference:s
               'captured_at':now,'payload_sha256':fingerprint,'status':'captured'}
         body=f'# {title}\n\n## Outcome\n{outcome}\n\n## Decisions\n'+('\n'.join('- '+x for x in decisions) or '- None recorded.')
         body+='\n\n## Next steps\n'+('\n'.join('- [ ] '+x for x in next_steps) or '- None recorded.')
-        body+='\n\n## Evidence\n'+('\n'.join('- [['+x[:-3]+']]' for x in evidence_paths) or '- Session summary; verify claims against the source conversation.')
+        body+='\n\n## Evidence\n'+('\n'.join('- '+note_link(x,p.relative_to(VAULT).as_posix()) for x in evidence_paths) or '- Session summary; verify claims against the source conversation.')
         body+='\n\n## Links\n- [[Maps/AI-Context]]'
         result=_write(p,note_text(meta,body),'capture')
         return result
@@ -115,6 +204,7 @@ def capture(event_id:str,title:str,outcome:str,source_app:str,source_reference:s
 def update_current(path:str,title:str,content:str,source_paths:list[str],expected_sha256:str|None=None):
     """Only derived pages, with source evidence and compare-and-swap for existing files."""
     cfg.require_maintainer()
+    clean_text(path,400)
     p=safe_path(path); rel=p.relative_to(VAULT).as_posix()
     if rel.casefold().startswith('02-areas/ai-memory/wiki/'):
         raise ValueError('Wiki pages and writer Control are compiler-owned; use the wiki worker or an explicit handoff/migration.')
@@ -123,14 +213,18 @@ def update_current(path:str,title:str,content:str,source_paths:list[str],expecte
     clean_text(title,180); clean_text(content)
     if not content.strip() or not source_paths or len(source_paths)>30: raise ValueError('Content and 1–30 source notes are required.')
     for src in source_paths:
-        if src==rel or not safe_path(src).is_file(): raise ValueError('A distinct existing source is required.')
+        clean_text(src,400)
+        source=safe_path(src)
+        if src==rel or not source.is_file() or (p.exists() and source.samefile(p)): raise ValueError('A distinct existing source is required.')
+        _check_note_size(source)
+    _check_note_size(p)
     with FileLock(str(STATE/'writer.lock'),timeout=20):
         if p.exists() and expected_sha256 is None: raise ValueError('Read current SHA256 before updating an existing page.')
         now=stamp()
         meta={'date':now[:10],'type':'note','tags':['ai-memory','derived'],'updated_at':now,
-              'sources':source_paths,'source_hashes':{src:digest(safe_path(src).read_bytes()) for src in source_paths},
+              'sources':source_paths,'source_hashes':{src:digest(_note_bytes(safe_path(src))) for src in source_paths},
               'status':'current','maintained_by':'second-brain'}
-        body=f'# {title}\n\n{content}\n\n## Sources\n'+'\n'.join('- [['+s[:-3]+']]' for s in source_paths)
+        body=f'# {title}\n\n{content}\n\n## Sources\n'+'\n'.join('- '+note_link(source,rel) for source in source_paths)
         return _write(p,note_text(meta,body),'update_current',expected_sha256)
 
 def fresh_search(query:str,limit:int=6):
@@ -138,11 +232,11 @@ def fresh_search(query:str,limit:int=6):
     stop={'the','and','for','with','was','were','where','what','which','how','does','this','that','from','about','built','project'}
     terms=[t for t in re.findall(r'[\w]+',query.lower()) if len(t)>2 and t not in stop]
     found=[]
-    for p in VAULT.rglob('*.md'):
+    for p in VAULT.rglob('*.md',case_sensitive=False):
         try:
-            rel=p.relative_to(VAULT).as_posix(); safe_path(rel)
-            if p.stat().st_size>2_000_000: continue
-            text=p.read_text(encoding='utf-8-sig'); low=text.lower()
+            rel=p.relative_to(VAULT).as_posix(); _safe_discovered_path(p)
+            if p.stat().st_size>NOTE_LIMIT: continue
+            text=_note_bytes(p).decode('utf-8-sig').replace('\r\n','\n').replace('\r','\n'); low=text.lower()
             title=p.stem.lower()
             score=sum(1 for t in terms if t in low)+sum(5 for t in terms if t in title)
             if score:

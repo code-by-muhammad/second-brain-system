@@ -8,6 +8,7 @@ from filelock import FileLock, Timeout as LockTimeout
 from brain_markdown import frontmatter
 import brain_store as s
 import brain_settings as cfg
+import brain_git
 _GIT_POPEN=subprocess.Popen  # Keep read-only evidence processes separate from the model runner.
 
 BASE='02-Areas/AI-Memory/Wiki/'
@@ -45,7 +46,7 @@ class WikiOutputError(ValueError):
 
 class WikiIntegrityError(WikiOutputError):
     def __init__(self,page,claim_index=None,field='wiki_claims'):
-        super().__init__('Wiki private packet exceeds its 2,000,000-character operation limit; review catalog/packet sizing before retrying.' if field=='packet' else 'Existing derived wiki metadata requires owner review before merging this topic.')
+        super().__init__('Wiki private packet exceeds its operation limits (2,000,000 characters, 100,000 traversal nodes, depth 128); review catalog/packet sizing before retrying.' if field=='packet' else 'Existing derived wiki metadata requires owner review before merging this topic.')
         self.page=page; self.claim_index=claim_index; self.field=field
 
 class WikiPolicyError(ValueError):
@@ -75,6 +76,7 @@ def _atomic_json(path,value):
         if os.path.exists(name): os.unlink(name)
 
 class _JSONTooLarge(ValueError): pass
+class _JSONStructureTooLarge(ValueError): pass
 
 def _bounded_json(value,limit=2_000_000,**options):
     # Validate the finite object graph before treating an over-budget value as
@@ -85,7 +87,7 @@ def _bounded_json(value,limit=2_000_000,**options):
         item,depth,leaving=stack.pop()
         if leaving: active.remove(id(item)); seen.add(id(item)); continue
         nodes+=1
-        if nodes>100000 or depth>128: raise ValueError('JSON context exceeds structural bounds.')
+        if nodes>100000 or depth>128: raise _JSONStructureTooLarge('JSON context exceeds structural bounds.')
         if isinstance(item,str):
             if not oversized:
                 ident=id(item); cached=strings.get(ident); size=cached[1] if cached is not None else None
@@ -105,7 +107,7 @@ def _bounded_json(value,limit=2_000_000,**options):
             if ident in active: raise ValueError('Circular JSON context.')
             if ident in seen: continue
             active.add(ident); stack.append((item,depth,True))
-            if len(item)*(2 if isinstance(item,dict) else 1)+nodes>100000: raise ValueError('JSON context exceeds structural bounds.')
+            if len(item)*(2 if isinstance(item,dict) else 1)+nodes>100000: raise _JSONStructureTooLarge('JSON context exceeds structural bounds.')
             if isinstance(item,dict):
                 if options.get('sort_keys',False): sorted(item)
                 for key,child in item.items():
@@ -139,7 +141,7 @@ def _valid_claim(claim):
 def _valid_source_revision(revision):
     return isinstance(revision,dict) and all(isinstance(revision.get(key),str) and re.fullmatch('[a-f0-9]{64}',revision[key]) for key in ('sha256','text_sha256')) and ('date' not in revision or isinstance(revision['date'],str))
 
-def _screen_decoded_context(value):
+def _screen_decoded_context(value,*,max_nodes=20000,max_depth=64):
     # JSON escaping changes the established detector's input. Inspect decoded
     # scalars and key/value associations too, with bounded, cycle-safe traversal.
     stack=[(value,0,False)]; active=set(); seen=set(); nodes=0; chars=0
@@ -148,11 +150,11 @@ def _screen_decoded_context(value):
         if leaving:
             active.remove(id(item)); seen.add(id(item)); continue
         nodes+=1
-        if nodes>20000 or depth>64: raise ValueError('Derived context exceeds structural bounds.')
+        if nodes>max_nodes or depth>max_depth: raise ValueError('Derived context exceeds structural bounds.')
         if isinstance(item,str):
             chars+=len(item)
             if chars>2_000_000: raise ValueError('Derived context exceeds text bounds.')
-            s.clean_text(item,2_000_000)
+            item.encode('utf-8'); s.clean_text(item,2_000_000)
         elif isinstance(item,(dict,list,tuple)):
             ident=id(item)
             if ident in active: raise ValueError('Circular derived context.')
@@ -178,6 +180,8 @@ def _validate_existing_claim(page,claim,index):
         context=_bounded_json(claim,sort_keys=True,ensure_ascii=False,allow_nan=False)
         context.encode('utf-8'); s.clean_text(context,2_000_000); _screen_decoded_context(claim)
     except (ValueError,TypeError,RecursionError,UnicodeError): raise WikiIntegrityError(page,index) from None
+    try: s.note_link(claim['source'],page)
+    except (ValueError,TypeError,UnicodeError): raise WikiIntegrityError(page,index,'path') from None
 
 def _validate_existing_claims(page,claims,start_index=0):
     if not isinstance(claims,list): raise WikiIntegrityError(page)
@@ -190,28 +194,398 @@ def _existing_topic_title(page):
     except (ValueError,UnicodeError): raise WikiIntegrityError(page['path'],field='title') from None
     return title
 
-def _validate_packet_paths(packet):
+def _validate_packet_paths(packet,screen_credentials=True):
     for item in packet.get('sources',[])+packet.get('catalog',[])+packet.get('current_pages',[]):
-        try: item['path'].encode('utf-8'); s.safe_path(item['path']); s.clean_text(item['path'],400)
-        except (ValueError,TypeError,UnicodeError,AttributeError): raise WikiIntegrityError(BASE+'Index.md',field='path') from None
+        try:
+            item['path'].encode('utf-8'); s.safe_path(item['path'])
+            if screen_credentials:
+                s.clean_text(item['path'],400)
+                s.note_link(item['path'],BASE+'Index.md')
+        except (ValueError,TypeError,UnicodeError,AttributeError):
+            if any(item is row for row in packet.get('sources',[])): raise _source_integrity_error(item,'path') from None
+            raise WikiIntegrityError(BASE+'Index.md',field='path') from None
+
+def _screen_source_metadata(value,*,max_nodes=100000,max_depth=128):
+    # SafeLoader already constructs !!set and !!binary. Inspect those known
+    # values too; do not decode arbitrary strings or change the generic JSON
+    # context guard. Binary uses ASCII token boundaries and preserves opaque
+    # non-UTF-8 octets, with the same NUL, text and graph bounds.
+    binary_secret=re.compile(s.SECRET.pattern.encode('ascii'),s.SECRET.flags & ~re.UNICODE)
+    stack=[(value,0,False)]; active=set(); seen=set(); nodes=0; chars=0; work=0; rendered={}; utf8_sizes={}; binary_views={}
+    def reserve(amount):
+        nonlocal work
+        work+=amount
+        if work>8_000_000: raise ValueError('Source metadata exceeds work bounds.')
+    def scalar_text(item):
+        key=(type(item),id(item)); cached=rendered.get(key)
+        if cached is not None: return cached[1]
+        # Decimal digits are bounded above from integer bit length without
+        # converting the integer. JSON float/bool/null spellings are bounded.
+        bound=(item.bit_length()*30103//100000+1+(item<0)) if type(item) is int else 32 if type(item) is float else 4 if item is None else 5
+        reserve(bound)
+        text=json.dumps(item,allow_nan=True)
+        if len(text)>bound: raise ValueError('Source scalar exceeds its rendering bound.')
+        rendered[key]=(item,text)  # Retain the actual scalar so identity cannot be recycled.
+        return text
+    def utf8_size(item):
+        if isinstance(item,bytes) or item.isascii(): return len(item)
+        # Child frames already verified each actual string. Reuse its exact
+        # byte size, without double-charging the detector/render envelope.
+        cached=utf8_sizes.get(id(item))
+        if cached is None: raise ValueError('Source scalar UTF-8 was not checked.')
+        return cached[1]
+    def binary_text(item,reserved=False):
+        if len(item)>2_000_000: raise ValueError('Unsafe source metadata.')
+        if not reserved: reserve(len(item))
+        if b'\x00' in item or binary_secret.search(item):
+            raise ValueError('Unsafe source metadata.')
+    def binary_view(item):
+        cached=binary_views.get(id(item))
+        if cached is not None: return cached[1]
+        # Preserve known Unicode strings in mixed pairs. Opaque binary octets
+        # retain ASCII semantics: high octets become nonword/nonspace markers,
+        # never UTF-8, base64 or other arbitrary text decoding.
+        reserve(len(item))
+        view=item.decode('ascii','replace')
+        binary_views[id(item)]=(item,view)  # Retain identity across aliases.
+        return view
+    def association(key,child):
+        if isinstance(key,(str,bytes)) and (isinstance(child,(str,bytes)) or type(child) in (int,float,bool) or child is None):
+            # YAML permits .inf/.nan. Cache this local detector view only;
+            # parsed numeric objects are never sent as model JSON.
+            scalar=child if isinstance(child,(str,bytes)) else scalar_text(child)
+            if len(key)+len(scalar)>2_000_000: raise ValueError('Source metadata exceeds text bounds.')
+            if isinstance(key,str) and isinstance(scalar,str):
+                reserve(len(key)+len(scalar)+2)
+                s.clean_text(key+': '+scalar,2_000_000)
+            else:
+                size=utf8_size(key)+utf8_size(scalar)+2
+                if size>2_000_000: raise ValueError('Source metadata exceeds text bounds.')
+                if isinstance(key,bytes) and isinstance(scalar,bytes):
+                    reserve(size)
+                    binary_text(key+b': '+scalar,reserved=True)
+                else:
+                    reserve(len(key)+len(scalar)+2)
+                    left=binary_view(key) if isinstance(key,bytes) else key
+                    right=binary_view(scalar) if isinstance(scalar,bytes) else scalar
+                    s.clean_text(left+': '+right,2_000_000)
+    while stack:
+        item,depth,leaving=stack.pop()
+        if leaving=='association':
+            association(*item); continue
+        if leaving:
+            active.remove(id(item)); seen.add(id(item)); continue
+        nodes+=1
+        if nodes>max_nodes or depth>max_depth: raise ValueError('Source metadata exceeds structural bounds.')
+        if isinstance(item,(str,bytes)):
+            chars+=len(item)
+            if chars>2_000_000: raise ValueError('Source metadata exceeds text bounds.')
+            if isinstance(item,str):
+                reserve(len(item))
+                if id(item) not in utf8_sizes:
+                    utf8_sizes[id(item)]=(item,len(item.encode('utf-8')))
+                s.clean_text(item,2_000_000)
+            else: binary_text(item)
+        elif isinstance(item,(dict,list,tuple,set,frozenset)):
+            ident=id(item)
+            if ident in active: raise ValueError('Circular source metadata.')
+            if ident in seen: continue
+            active.add(ident); stack.append((item,depth,True))
+            if len(item)*(2 if isinstance(item,dict) else 1)+nodes>max_nodes:
+                raise ValueError('Source metadata exceeds structural bounds.')
+            if isinstance(item,dict):
+                for key,child in item.items():
+                    # Check the pair after its normal child frames consume the
+                    # text budget, so aliases cannot amplify detector work.
+                    stack.append(((key,child),depth,'association'))
+                    stack.append((key,depth+1,False)); stack.append((child,depth+1,False))
+            else:
+                # SafeLoader represents !!omap and !!pairs entries as tuples.
+                if isinstance(item,tuple) and len(item)==2: stack.append((item,depth,'association'))
+                stack.extend((child,depth+1,False) for child in item)
+
+
+def _screen_source_header(text,*,max_nodes=100000,max_depth=128):
+    # Match frontmatter() recognition exactly. Preserve original scalar and
+    # value-key evidence before ordinary construction can discard it.
+    import yaml
+    lines=text.removeprefix('\ufeff').replace('\r\n','\n').replace('\r','\n').splitlines(keepends=True)
+    if not lines or lines[0].rstrip('\n \t')!='---': return 0
+    end=next((i for i,line in enumerate(lines[1:],1) if line.rstrip('\n \t')=='---'),None)
+    if end is None: return 0
+    header=''.join(lines[1:end])
+    if len(header)>2_000_000: raise ValueError('Source YAML exceeds text bounds.')
+    # This event ledger stays at 8M; the unchanged constructed pass retains its
+    # separate 8M ledger. No pair or nested wrapper resets either envelope.
+    work=0; nodes=0; lexical_chars=0; semantic_chars=0; documents=0; event_count=0
+    missing=object(); collection=object(); frames=[]; anchors={}; active=set()
+    utf8_sizes={}; binary_views={}; raw_cache={}; normalized_views={}
+    binary_secret=re.compile(s.SECRET.pattern.encode('ascii'),s.SECRET.flags & ~re.UNICODE)
+    loader=yaml.SafeLoader(''); events=yaml.parse(header,Loader=yaml.SafeLoader)
+    prefix='tag:yaml.org,2002:'; value_tag=prefix+'value'
+    nontext_tags={prefix+name for name in ('null','bool','int','float','timestamp')}
+    scalar_tags=nontext_tags|{prefix+'binary',prefix+'str'}
+    def reserve(amount):
+        nonlocal work
+        work+=amount
+        if work>8_000_000: raise ValueError('Source YAML exceeds work bounds.')
+    def semantic(amount):
+        nonlocal semantic_chars
+        semantic_chars+=amount
+        if semantic_chars>2_000_000: raise ValueError('Source YAML exceeds text bounds.')
+    def binary_text(value,reserved=False):
+        if len(value)>2_000_000: raise ValueError('Source YAML exceeds text bounds.')
+        if not reserved: reserve(len(value))
+        if b'\x00' in value or binary_secret.search(value): raise ValueError('Unsafe source YAML.')
+    def binary_view(value):
+        cached=binary_views.get(id(value))
+        if cached is not None: return cached[1]
+        reserve(len(value)); view=value.decode('ascii','replace')
+        binary_views[id(value)]=(value,view)
+        return view
+    def pair(key,value):
+        if key is collection or value is collection: return
+        if len(key)+len(value)>2_000_000: raise ValueError('Source YAML exceeds text bounds.')
+        if isinstance(key,str) and isinstance(value,str):
+            reserve(len(key)+len(value)+2); s.clean_text(key+': '+value,2_000_000)
+        else:
+            left_size=len(key) if isinstance(key,bytes) else utf8_sizes[id(key)][1]
+            right_size=len(value) if isinstance(value,bytes) else utf8_sizes[id(value)][1]
+            if left_size+right_size+2>2_000_000: raise ValueError('Source YAML exceeds text bounds.')
+            if isinstance(key,bytes) and isinstance(value,bytes):
+                reserve(left_size+right_size+2); binary_text(key+b': '+value,reserved=True)
+            else:
+                reserve(len(key)+len(value)+2)
+                left=binary_view(key) if isinstance(key,bytes) else key
+                right=binary_view(value) if isinstance(value,bytes) else value
+                s.clean_text(left+': '+right,2_000_000)
+    def descriptor(kind,tag,raw=None):
+        reserve(1)
+        return {'kind':kind,'tag':tag,'raw':raw,'selected':missing,
+                'view':collection,'weight':0,'definition_weight':0}
+    def selected_input():
+        if not frames: return False
+        frame=frames[-1];key=frame['key']
+        return (frame['kind']=='map' and frame['selector_context'] and
+                frame['node']['selected'] is missing and key is not missing and key['tag']==value_tag)
+    def attach(node,alias=False):
+        # A selected input is raw constructor syntax. Its semantic weight is
+        # charged by the completed scalar wrapper, rather than charged twice.
+        deferred=selected_input()
+        if not deferred: semantic(node['weight'] if alias else node['definition_weight'])
+        if frames and frames[-1]['kind']=='map':
+            frame=frames[-1]
+            if frame['key'] is missing: frame['key']=node
+            else:
+                key=frame['key']
+                pair(key['view'],node['view'])  # Retain every original direct pair check.
+                if frame['node']['selected'] is missing and key['tag']==value_tag:
+                    frame['node']['selected']=node
+                    if frame['selector_context']: frame['deferred_weight']=node['definition_weight']
+                frame['key']=missing
+    def bind(anchor,node):
+        if anchor is not None:
+            if anchor in anchors: raise ValueError('Ambiguous source YAML anchor.')
+            anchors[anchor]=node
+    def raw_scalar(node):
+        # SafeConstructor.construct_scalar follows the FIRST yaml:value key
+        # recursively, even if its value is itself a mapping or an alias. Keep
+        # that raw node distinct from its independently screened typed view.
+        cached=raw_cache.get(id(node))
+        if cached is not None: return cached[1]
+        path=[];seen=set();current=node
+        while current['kind']=='map':
+            reserve(1)
+            ident=id(current)
+            if ident in seen or len(path)>max_depth: raise ValueError('Circular or deep source YAML value mapping.')
+            cached=raw_cache.get(ident)
+            if cached is not None:
+                current=cached[1];break
+            seen.add(ident);path.append(current)
+            current=current['selected']
+            if current is missing: current=None;break
+        result=current if current is not None and current['kind']=='scalar' else None
+        for item in path: raw_cache[id(item)]=(item,result)
+        raw_cache[id(node)]=(node,result)
+        return result
+    def normalize(node):
+        tag=node['tag'];mapped=node['kind']=='map'
+        raw_node=raw_scalar(node) if mapped else node
+        raw=raw_node['raw'] if raw_node is not None else ''
+        lexical_fallback=not mapped or (raw_node is not None and tag in {prefix+name for name in ('int','float','bool','binary')})
+        if not mapped and tag not in scalar_tags:
+            return raw,len(raw),True
+        if not mapped and tag==prefix+'str': return raw,len(raw),True
+        # Standard scalar constructors other than timestamp consume the same
+        # raw scalar through either accepted shape. Retain the actual raw node;
+        # aliases or nested wrappers cannot recycle its identity or rerender it.
+        shape='mapping' if mapped and (tag==prefix+'timestamp' or raw_node is None) else 'scalar'
+        cache_key=(id(raw_node) if raw_node is not None else id(node),tag,shape)
+        cached=normalized_views.get(cache_key)
+        if cached is not None:
+            if cached[-1]: return cached[1:]
+            # Failed known scalar-consuming wrappers retain the already
+            # selected raw association, including shared cached failures.
+            return (raw,len(raw),False) if lexical_fallback else (collection,0,False)
+        name=tag.rsplit(':',1)[-1]
+        if name=='binary': bound=3*((len(raw)+3)//4);reserve(bound)
+        elif name=='str': bound=len(raw)
+        else:
+            bound=2*len(raw)+4 if name=='int' else 32 if name=='float' else 5 if name=='bool' else 4 if name=='null' else 64
+            conversion=len(raw)*len(raw) if name=='int' and ':' in raw else len(raw)
+            reserve(conversion+bound)
+        # A tiny value-key proxy preserves the original constructor's shape:
+        # timestamp mappings and missing selectors still fail locally. Never
+        # construct a whole source graph or invoke an unknown tag constructor.
+        reserve(3 if mapped else 1)
+        argument=yaml.nodes.ScalarNode(tag,raw)
+        if mapped:
+            items=[] if raw_node is None else [(yaml.nodes.ScalarNode(value_tag,'='),yaml.nodes.ScalarNode(prefix+'str',raw))]
+            argument=yaml.nodes.MappingNode(tag,items)
+        constructor={'binary':loader.construct_yaml_binary,'str':loader.construct_yaml_str,
+            'int':loader.construct_yaml_int,'float':loader.construct_yaml_float,'bool':loader.construct_yaml_bool,
+            'null':loader.construct_yaml_null,'timestamp':loader.construct_yaml_timestamp}[name]
+        try: actual=constructor(argument)
+        except (yaml.YAMLError,ValueError,TypeError,KeyError,AttributeError,IndexError,RecursionError,OverflowError) as exc:
+            # R131 containment remains local to the existing known primitive
+            # constructor scope. Binary/string, rendering and unrelated/fatal
+            # failures retain their original propagation behavior.
+            if isinstance(exc,OverflowError) and tag not in nontext_tags: raise
+            # The named constructors consume this selected raw scalar before
+            # failing. Keep that evidence; structural/nonconsuming mapped
+            # failures still use the existing collection fallback.
+            view=raw if lexical_fallback else collection;weight=len(raw) if lexical_fallback else 0;success=False
+        else:
+            success=True
+            if name=='binary':
+                if not isinstance(actual,bytes) or len(actual)>bound: raise ValueError('Invalid source YAML binary bound.')
+                view=actual;binary_text(view);weight=len(view)
+            elif name=='str':
+                if not isinstance(actual,str) or actual is not raw: raise ValueError('Invalid source YAML string view.')
+                view=actual;weight=len(view)  # Already strict-UTF8/lexically screened.
+            elif name=='timestamp':view=collection;weight=0
+            else:
+                view=json.dumps(actual,allow_nan=True)
+                if len(view)>bound: raise ValueError('Source YAML scalar exceeds rendering bound.')
+                reserve(len(view));utf8_sizes[id(view)]=(view,len(view.encode('utf-8')));s.clean_text(view,2_000_000);weight=0
+        normalized_views[cache_key]=(raw_node if raw_node is not None else node,view,weight,success)
+        return view,weight,success
+    try:
+        for event in events:
+            event_count+=1
+            if event_count>2*max_nodes+8: raise ValueError('Source YAML exceeds structural bounds.')
+            if isinstance(event,yaml.events.DocumentStartEvent):
+                documents+=1
+                if documents>1: raise ValueError('Source YAML must have one header document.')
+            elif isinstance(event,(yaml.events.ScalarEvent,yaml.events.AliasEvent,yaml.events.MappingStartEvent,yaml.events.SequenceStartEvent)):
+                nodes+=1
+                if nodes>max_nodes or len(frames)>max_depth: raise ValueError('Source YAML exceeds structural bounds.')
+                if isinstance(event,yaml.events.ScalarEvent):
+                    raw=event.value;lexical_chars+=len(raw)
+                    if lexical_chars>2_000_000: raise ValueError('Source YAML exceeds text bounds.')
+                    reserve(len(raw));utf8_sizes[id(raw)]=(raw,len(raw.encode('utf-8')));s.clean_text(raw,2_000_000)
+                    tag=event.tag
+                    if tag is None or tag=='!':
+                        reserve(len(raw));tag=loader.resolve(yaml.nodes.ScalarNode,raw,event.implicit)
+                    node=descriptor('scalar',tag,raw);view,weight,_=normalize(node)
+                    node.update(view=view,weight=weight,definition_weight=weight)
+                    bind(event.anchor,node);attach(node)
+                elif isinstance(event,yaml.events.AliasEvent):
+                    reserve(1)
+                    if event.anchor in active or event.anchor not in anchors: raise ValueError('Circular or unknown source YAML alias.')
+                    attach(anchors[event.anchor],alias=True)
+                else:
+                    kind='map' if isinstance(event,yaml.events.MappingStartEvent) else 'seq'
+                    tag=event.tag
+                    if tag is None or tag=='!':
+                        # SafeLoader.resolve() returns these pinned default
+                        # collection tags; scalar implicit resolution remains
+                        # the original standard resolver call above.
+                        tag=prefix+kind
+                    node=descriptor(kind,tag);raw_input=selected_input()
+                    bind(event.anchor,node)
+                    if event.anchor is not None: active.add(event.anchor)
+                    frames.append({'kind':kind,'key':missing,'node':node,'anchor':event.anchor,
+                        'selector_context':kind=='map' and (tag in scalar_tags or raw_input),'deferred_weight':0})
+            elif isinstance(event,(yaml.events.MappingEndEvent,yaml.events.SequenceEndEvent)):
+                kind='map' if isinstance(event,yaml.events.MappingEndEvent) else 'seq'
+                if not frames or frames[-1]['kind']!=kind or (kind=='map' and frames[-1]['key'] is not missing):
+                    raise ValueError('Incomplete source YAML collection.')
+                frame=frames.pop();node=frame['node']
+                if kind=='map' and node['tag'] in scalar_tags:
+                    view,weight,success=normalize(node);node.update(view=view,weight=weight,
+                        definition_weight=weight if success else max(weight,frame['deferred_weight']))
+                elif frame['selector_context']:node['definition_weight']=frame['deferred_weight']
+                if frame['anchor'] is not None: active.remove(frame['anchor'])
+                attach(node)
+            elif isinstance(event,(yaml.events.DocumentEndEvent,yaml.events.StreamEndEvent)):
+                if frames or active: raise ValueError('Incomplete source YAML header.')
+        return work
+    except (yaml.YAMLError,ValueError,TypeError,UnicodeError,KeyError,AttributeError,IndexError,RecursionError):
+        raise ValueError('Unsafe or incomplete source YAML header.') from None
+    finally:
+        events.close();loader.dispose()
+
+
+def _validate_source_context(packet):
+    screened=set()
+    for row in packet.get('sources',[]):
+        try:
+            # Inventory screens the complete source before chunking; resume also
+            # verifies this exact part against that canonical source. A slice can
+            # turn an ordinary word suffix into a false credential boundary.
+            text=row['text']
+            if not isinstance(text,str) or len(text)>2_000_000 or '\x00' in text: raise ValueError('Invalid source text.')
+            text.encode('utf-8')
+            for key in ('title','date'):
+                s.clean_text(row[key],2_000_000); row[key].encode('utf-8')
+            if row['path'] not in screened:
+                # Parse the complete source header, not a potentially truncated
+                # chunk. This is local known YAML, never arbitrary decoding.
+                source_path=s.safe_path(row['path'])
+                # Inventory rows identify literal originals, not separator aliases.
+                if source_path!=s.VAULT/row['path']:
+                    raise _source_integrity_error(row,'path')
+                with source_path.open('rb') as stream: raw=stream.read(2_000_001)
+                if len(raw)>2_000_000 or s.digest(raw)!=row['sha256']:
+                    raise WikiTransientError('Source changed since its selected snapshot; prepare current evidence.')
+                source_text=normalized(raw.decode('utf-8-sig'))
+                _screen_source_header(source_text)
+                _screen_source_metadata(meta(source_text))
+                screened.add(row['path'])
+        except (WikiTransientError,WikiIntegrityError): raise
+        except (ValueError,UnicodeError,TypeError,KeyError,AttributeError):
+            raise _source_integrity_error(row,'content') from None
+
 
 def _validate_packet_context(packet):
     _validate_packet_paths(packet)
+    _validate_source_context(packet)
     # Saved packets predate new safeguards too. Screen their actual selected
     # metadata before a request, without changing their durable source evidence.
     for page in packet.get('current_pages',[]):
         claims=page['meta'].get('wiki_claims',[]); count=page.get('claim_count')
-        offset=count-len(claims) if type(count) is int and isinstance(claims,list) and len(claims)<=count<=120 else 0
+        offset=count-len(claims) if type(count) is int and isinstance(claims,list) and len(claims)<=count else 0
         _validate_existing_claims(page['path'],claims,offset)
         title=page['meta'].get('title')
         if title is not None: _existing_topic_title(page)
     for page in packet.get('catalog',[]):
         _existing_topic_title({'path':page['path'],'meta':page})
     try: _bounded_json(packet,ensure_ascii=False,default=str)
-    except _JSONTooLarge: raise WikiIntegrityError(BASE+'Index.md',field='packet') from None
+    except (_JSONTooLarge,_JSONStructureTooLarge): raise WikiIntegrityError(BASE+'Index.md',field='packet') from None
     except (ValueError,TypeError,RecursionError,UnicodeError):
         page=next((page['path'] for page in packet.get('current_pages',[])),BASE+'Index.md')
         raise WikiIntegrityError(page) from None
+    try:
+        # Unknown legacy fields and object keys are forwarded too. Inspect every
+        # decoded string/association except the already authenticated source
+        # slices; serializing their JSON would recreate the boundary regression.
+        context={**packet,'sources':[{key:value for key,value in row.items() if key!='text'} for row in packet['sources']]}
+        # Whole-packet screening shares the already accepted packet budget.
+        # Individual claims retain their narrower default20k/64 bounds.
+        _screen_decoded_context(context,max_nodes=100000,max_depth=128)
+    except (ValueError,TypeError,RecursionError,UnicodeError):
+        raise WikiIntegrityError(BASE+'Index.md',field='content') from None
 
 def _list(value): return value if isinstance(value,list) else []
 def _tags(value): return [value] if isinstance(value,str) else _list(value)
@@ -232,8 +606,43 @@ def _read_worker_state():
         retry=value['retry_after']
         if type(retry) not in (int,float) or not math.isfinite(retry) or retry<0: raise ValueError('Invalid worker backoff.')
         return value
-    except (OSError,ValueError,TypeError):
+    except (OSError,ValueError,TypeError,OverflowError,RecursionError):
         return {**default,'status':'attention','attention_required':True,'reason':'malformed private worker state; inspect it or reset with wiki retry'}
+
+def _public_locator(relative, wiki_only=True):
+    """Render cached locators without trusting cache contents or exposing raw paths."""
+    try:
+        relative.encode('utf-8')
+        s.clean_text(relative,400)
+        if any(ord(char)<32 or ord(char)==127 for char in relative): raise ValueError('Control character in path.')
+        if wiki_only and not relative.startswith(BASE): raise ValueError('Not a wiki path.')
+        s.safe_path(relative)
+        return {'path':relative}
+    except (OSError,ValueError,UnicodeError):
+        return {'path':BASE+'Index.md','path_sha256':s.digest(relative.encode('utf-8',errors='surrogatepass'))}
+
+
+def _source_integrity_error(row,field):
+    relative=row.get('path') if isinstance(row,dict) else None
+    locator=_public_locator(relative,wiki_only=False) if isinstance(relative,str) else {'path':BASE+'Index.md'}
+    error=WikiIntegrityError(locator['path'],field=field)
+    if 'path_sha256' in locator: error.page_sha256=locator['path_sha256']
+    return error
+
+
+def _public_pending_parts(value):
+    result=[]
+    if not isinstance(value,list): return result
+    for row in value[:8]:
+        if not isinstance(row,dict): continue
+        key=row.get('job_key'); fingerprint=row.get('sha256')
+        if not isinstance(key,str) or len(key)>420 or not isinstance(fingerprint,str) or not re.fullmatch('[a-f0-9]{64}',fingerprint): continue
+        match=re.fullmatch(r'(.+)::part([1-9][0-9]{0,2})',key)
+        if not match or int(match[2])>(2_000_000+22999)//23000: continue
+        if 'path_sha256' in _public_locator(match[1],wiki_only=False): continue
+        result.append({'job_key':key,'sha256':fingerprint})
+    return result
+
 
 def _worker_summary():
     value=_read_worker_state()
@@ -241,11 +650,22 @@ def _worker_summary():
     reason=value.get('reason')
     if reason is not None:
         controlled=('model authentication/quota requires attention','malformed private worker state; inspect it or reset with wiki retry')
-        result['reason']=reason if reason in controlled or isinstance(reason,str) and re.fullmatch('[A-Za-z_][A-Za-z0-9_]{0,63}',reason) else 'inspect private worker diagnostics'
+        try:
+            s.clean_text(reason,200); reason.encode('utf-8')
+            safe_reason=reason in controlled or re.fullmatch('[A-Za-z_][A-Za-z0-9_]{0,63}',reason)
+        except (ValueError,UnicodeError): safe_reason=False
+        result['reason']=reason if safe_reason else 'inspect private worker diagnostics'
     if isinstance(value.get('batch_id'),str) and re.fullmatch('[a-f0-9]{24}',value['batch_id']): result['batch_id']=value['batch_id']
-    if isinstance(value.get('integrity_page'),str) and value['integrity_page'].startswith(BASE): result['integrity_page']=value['integrity_page'][:400]
-    if value.get('integrity_field') in ('title','wiki_claims','source_revision','latest_source_part','frontmatter','wiki_kind','encoding','content','path','packet','archive','recovery','serialization'): result['integrity_field']=value['integrity_field']
+    if isinstance(value.get('integrity_page'),str):
+        locator=_public_locator(value['integrity_page'])
+        result['integrity_page']=locator['path']
+        if 'path_sha256' in locator: result['integrity_page_sha256']=locator['path_sha256']
+    if result.get('integrity_page')==BASE+'Index.md' and 'integrity_page_sha256' not in result:
+        fingerprint=value.get('integrity_page_sha256')
+        if isinstance(fingerprint,str) and re.fullmatch('[a-f0-9]{64}',fingerprint): result['integrity_page_sha256']=fingerprint
+    if value.get('integrity_field') in ('title','wiki_claims','source_revision','latest_source_part','frontmatter','wiki_kind','encoding','content','path','packet','archive','archive_capacity','recovery','serialization','publication_cas','unused_publication_cas'): result['integrity_field']=value['integrity_field']
     if type(value.get('claim_index')) is int and 0<=value['claim_index']<120: result['claim_index']=value['claim_index']
+    if value.get('recovery_action') in ('resolve_saved_publication_cas_then_retry','retry_fresh_generation_preserving_owner_edits','resolve_saved_source_revision_then_retry','reconcile_saved_publication_then_retry'): result['recovery_action']=value['recovery_action']
     return result
 
 def meta(text):
@@ -276,8 +696,8 @@ def source_policy():
             return {'path':SOURCE_POLICY,'present':False,'sha256':None,'rules_sha256':None,
                     'version':1,'exclude_paths':[],'exclude_prefixes':[]}
         if not path.is_file() or path.stat().st_size>131072: raise ValueError('policy must be a regular Markdown file no larger than 128 KiB')
-        raw=path.read_bytes()
-        if len(raw)>131072: raise ValueError('policy exceeds 128 KiB')
+        with path.open('rb') as stream: raw=stream.read(131073)
+        if len(raw)>131072: raw=None; raise ValueError('policy exceeds 128 KiB')
         lines=normalized(raw.decode('utf-8-sig')).splitlines()
         fences=[i for i,line in enumerate(lines) if re.match(r'^\s*(?:```|~~~)',line)]
         if len(fences)!=2 or lines[fences[0]]!='```json' or lines[fences[1]]!='```':
@@ -343,14 +763,18 @@ def inventory(include_excluded=False,policy=None):
     policy=source_policy() if policy is None else policy
     result=[]
     for root in SOURCE_ROOTS:
-        for p in (s.VAULT/root).rglob('*.md'):
+        for p in (s.VAULT/root).rglob('*.md',case_sensitive=False):
             rel=p.relative_to(s.VAULT).as_posix()
-            if rel.startswith('02-Areas/AI-Memory/'): continue
+            folded=rel.casefold()
+            # Reserved generated summaries are never original source evidence,
+            # even when owner-policy exclusions are included for queue accounting.
+            if folded.startswith('02-areas/ai-memory/') or (folded.startswith('01-projects/') and folded.endswith('/ai-memory.md')): continue
             if not include_excluded and _policy_excluded(rel,policy): continue
             try:
+                s._safe_discovered_path(p)
                 if p.stat().st_size>2_000_000: continue
-                s.safe_path(rel); s.clean_text(rel,400)
-                raw=p.read_bytes(); text=normalized(raw.decode('utf-8-sig')); s.clean_text(text,2_000_000)
+                s.clean_text(rel,400)
+                raw=s._note_bytes(p); text=normalized(raw.decode('utf-8-sig')); s.clean_text(text,2_000_000)
                 info=meta(text)
                 if 'ai-capture' in _tags(info.get('tags')) and info.get('project')=='Second Brain': continue
                 chunks=[text[i:i+24000] for i in range(0,len(text),23000)] or ['']
@@ -477,6 +901,11 @@ def prepare(limit=4):
         compact['meta']['wiki_claims']=_list(p['meta'].get('wiki_claims'))[-12:]
         try: size=len(_bounded_json(compact,40000,default=str))
         except _JSONTooLarge: continue
+        except _JSONStructureTooLarge:
+            # Aggregate optional context has its own envelope. Retain raw
+            # individual guards, but do not screen decoded omitted context.
+            _validate_existing_claims(p['path'],p['meta'].get('wiki_claims',[]))
+            continue
         except (TypeError,ValueError,RecursionError): raise WikiIntegrityError(p['path']) from None
         if context_size+size>40000: continue
         _validate_existing_claims(p['path'],p['meta'].get('wiki_claims',[]))
@@ -493,19 +922,26 @@ def prepare(limit=4):
         while True:
             packet=base_packet if generation==0 else {**base_packet,'retry_generation':generation}
             try: ident=s.digest(_bounded_json(packet,sort_keys=True,default=str).encode())[:24]
-            except _JSONTooLarge: raise WikiIntegrityError(BASE+'Index.md',field='packet') from None
+            except (_JSONTooLarge,_JSONStructureTooLarge): raise WikiIntegrityError(BASE+'Index.md',field='packet') from None
             except (ValueError,TypeError,RecursionError,UnicodeError):
                 raise WikiIntegrityError(relevant[0]['path'] if relevant else BASE+'Index.md') from None
             previous=conn.execute('SELECT status FROM batches WHERE id=?',(ident,)).fetchone()
             already_published=previous and previous['status'] in ('complete','superseded','legacy_unverified')
-            stale_plan=previous and previous['status']=='stale' and (cfg.STATE/'wiki/batches'/ident/'publication.json').exists()
+            stale_plan=previous and previous['status']=='stale'
             shared_only=previous is None and s.safe_path(BASE+'Receipts/'+ident+'.md').exists()
             if not already_published and not stale_plan and not shared_only: break
             generation+=1
     packet['batch_id']=ident
+    # Shared YAML containers expand in JSON. Apply the complete saved-context
+    # guards to that decoded form before creating durable recovery input.
+    try:
+        serialized=_bounded_json(packet,sort_keys=True,default=str)
+        saved_packet=json.loads(serialized)
+        _validate_packet_context(saved_packet)
+    except (_JSONTooLarge,_JSONStructureTooLarge): raise WikiIntegrityError(BASE+'Index.md',field='packet') from None
     folder=cfg.STATE/'wiki'/'batches'/ident; folder.mkdir(parents=True,exist_ok=True)
     packet_path=folder/'input.json'
-    _atomic_json(packet_path,packet)
+    _atomic_json(packet_path,saved_packet)
     with db() as conn:
         conn.execute('INSERT OR IGNORE INTO batches(id,status,receipt,updated) VALUES(?,?,?,?)',(ident,'pending',None,s.stamp()))
     return packet
@@ -588,8 +1024,8 @@ def _receipt_note(ident,entries,kind='compiler'):
 def _verified_entries(payload,rows,claim_cache):
     verified=[]
     for entry in _list(payload.get('parts')):
-        if not isinstance(entry,dict): continue
-        row=rows.get(entry.get('job_key'))
+        if not isinstance(entry,dict) or not isinstance(entry.get('job_key'),str): continue
+        row=rows.get(entry['job_key'])
         if not row or any(entry.get(k)!=v for k,v in _portable_identity(row).items()): continue
         if not isinstance(entry.get('sha256'),str) or not re.fullmatch('[a-f0-9]{64}',entry['sha256']): continue
         if entry.get('status')=='published':
@@ -622,9 +1058,11 @@ def _hydrate_receipts(sources):
     """SQLite is local: import only independently verifiable shared per-part proof."""
     rows={row['job_key']:row for row in sources}; cache=None; verified=[]; issues=[]
     for path in (s.VAULT/BASE/'Receipts').glob('*.md'):
+        locator=_public_locator(path.relative_to(s.VAULT).as_posix())
         try:
-            s.safe_path(path.relative_to(s.VAULT).as_posix())
-            info=meta(path.read_text(encoding='utf-8')); payload=info.get('wiki_receipt')
+            if 'path_sha256' in locator: raise ValueError('Unsafe receipt locator.')
+            _,text=_read_derived(path)
+            info=meta(text); payload=info.get('wiki_receipt')
             if not isinstance(payload,dict) or payload.get('version')!=1 or info.get('receipt_sha256')!=_json_hash(payload): raise ValueError('Invalid receipt hash or version.')
             entries=payload.get('parts')
             if not isinstance(entries,list) or not entries or any(not isinstance(entry,dict) for entry in entries): raise ValueError('Invalid receipt part structure.')
@@ -636,7 +1074,7 @@ def _hydrate_receipts(sources):
             if cache is None: cache=_claim_cache()
             verified.extend(_verified_entries(payload,rows,cache))
         except (OSError,ValueError,KeyError,TypeError,AttributeError):
-            issues.append({'path':path.relative_to(s.VAULT).as_posix(),'issue':'Invalid or unreadable optional source-part receipt; valid other receipts continue.'})
+            issues.append({**locator,'issue':'Invalid or unreadable optional source-part receipt; valid other receipts continue.'})
     if verified:
         with db() as conn:
             for entry in verified:
@@ -668,9 +1106,10 @@ def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
             try:
                 raw=journal.read_bytes(); saved=json.loads(raw.decode('utf-8'))
                 receipt=json.loads(batch['receipt'])
+                if not isinstance(saved,dict) or not isinstance(receipt,list) or any(not isinstance(item,dict) or not isinstance(item.get('path'),str) for item in receipt): raise ValueError('Invalid legacy journal/receipt shape.')
                 if saved.get('state')!='complete' or saved.get('receipts')!=receipt: raise ValueError('Database/journal receipt mismatch.')
                 verified_batches.append((batch,saved,receipt,s.digest(raw)))
-            except (OSError,ValueError,TypeError):
+            except (OSError,ValueError,TypeError,AttributeError,RecursionError):
                 rejected.append({'batch_id':batch['id'],'reason':'complete local journal/database receipt unavailable or mismatched'})
         source_parts={}
         for row in rows.values(): source_parts.setdefault(row['path'],[]).append(row)
@@ -688,12 +1127,14 @@ def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
             exact_packet=False
             try:
                 packet=json.loads(packet_path.read_text(encoding='utf-8'))
+                if not isinstance(packet,dict) or not isinstance(packet.get('sources'),list): raise ValueError('Invalid legacy packet shape.')
                 selected=[]
                 for original in packet['sources']:
+                    if not isinstance(original,dict) or not isinstance(original.get('text'),str): raise ValueError('Invalid legacy source row.')
                     row=candidates.get(original.get('job_key'))
                     if row and _source_identity(original)==_source_identity(row): selected.append(row)
                 exact_packet=True
-            except (OSError,ValueError,KeyError,TypeError):
+            except (OSError,ValueError,KeyError,TypeError,AttributeError,RecursionError):
                 # This fallback still needs local per-part completion plus an
                 # actual preserved claim from a receipt-verified topic page.
                 selected=list(candidates.values())
@@ -706,7 +1147,7 @@ def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
                     output=json.loads((packet_path.parent/'output.json').read_text(encoding='utf-8'))
                     _validate_shape(output)
                     output_proofs={BASE+page['category']+'/'+page['slug']+'.md':{_claim_hash(claim) for claim in page['claims']} for page in output['pages']}
-                except (OSError,ValueError,TypeError,KeyError): pass
+                except (OSError,ValueError,TypeError,KeyError,AttributeError,RecursionError): pass
             for row in selected:
                 if row['job_key'] in covered: continue
                 proofs=[]
@@ -732,7 +1173,7 @@ def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
             ident=_json_hash({'legacy_batch_id':batch_id,'parts':entries})[:24]
             target=s.safe_path(BASE+'Receipts/'+ident+'.md')
             if target.exists():
-                existing=meta(target.read_text(encoding='utf-8')).get('wiki_receipt',{})
+                existing=meta(_read_derived(target)[1]).get('wiki_receipt',{})
                 if existing.get('parts')!=entries: raise ValueError('Legacy migration receipt collision.')
                 continue
             if not dry_run: written.append(s._write(target,_receipt_note(ident,entries,'legacy-receipt-migration'),'wiki_receipt_migration'))
@@ -777,6 +1218,7 @@ def rebuild_source_links():
         return {'source_records_updated':len(receipts),'receipts':receipts}
 
 def _read_derived(path):
+    path=s._safe_discovered_path(path)
     relative=path.relative_to(s.VAULT).as_posix()
     with path.open('rb') as stream: raw=stream.read(2_000_001)
     if len(raw)>2_000_000: raise WikiIntegrityError(relative,field='content')
@@ -792,10 +1234,11 @@ LOG_LIMIT=1_000_000
 STREAM_BLOCK=65536
 LOG_HEADER='# Wiki compilation log\n\nThis is compilation history; the maintenance service owns daily-note aggregation.\n'
 
-def _stream_file(path,utf8=False,sink=None,keep_limit=0):
+def _stream_file(path,utf8=False,sink=None,keep_limit=0,max_bytes=None):
     digest=hashlib.sha256(); size=0; kept=bytearray(); decoder=codecs.getincrementaldecoder('utf-8')('strict') if utf8 else None
     with path.open('rb') as stream:
         expected=os.fstat(stream.fileno()).st_size; remaining=expected
+        if max_bytes is not None and expected>max_bytes: raise WikiIntegrityError(BASE+'Log.md',field='archive_capacity')
         while remaining:
             chunk=stream.read(min(STREAM_BLOCK,remaining))
             if not chunk: raise WikiTransientError('File changed during a bounded streaming read.')
@@ -836,14 +1279,17 @@ def _log_snapshot(folder):
     # into one string, plan value or backup buffer.
     log=s.safe_path(BASE+'Log.md')
     if not log.exists(): return {'sha256':None,'bytes':0,'raw':LOG_HEADER.encode(),'spool':None}
+    # Refuse unsupported legacy history before reading/spooling or a paid call.
+    # Git uses this same capacity; publishing an unsyncable archive is invalid.
+    if log.stat().st_size>brain_git.ARCHIVE_BYTES_LIMIT: raise WikiIntegrityError(BASE+'Log.md',field='archive_capacity')
     _spool_folder(folder); folder.mkdir(parents=True,exist_ok=True); _spool_folder(folder)
     fd,name=tempfile.mkstemp(prefix='.log-',suffix='.tmp',dir=folder)
     try:
         with os.fdopen(fd,'wb') as stream:
-            try: sha,size,raw=_stream_file(log,utf8=True,sink=stream,keep_limit=LOG_LIMIT)
+            try: sha,size,raw=_stream_file(log,utf8=True,sink=stream,keep_limit=LOG_LIMIT,max_bytes=brain_git.ARCHIVE_BYTES_LIMIT)
             except UnicodeError: raise WikiIntegrityError(BASE+'Log.md',field='encoding') from None
             stream.flush(); os.fsync(stream.fileno())
-        if _current_hash(log)!=sha: raise WikiTransientError('Compilation log changed while its history was staged.')
+        if _stream_file(log,max_bytes=brain_git.ARCHIVE_BYTES_LIMIT)[0]!=sha: raise WikiTransientError('Compilation log changed while its history was staged.')
         spool=None
         if raw is None:
             spool='log-history-'+sha+'.bin'; target=folder/spool
@@ -863,18 +1309,37 @@ def _archive_payload(plan,packet):
     try:
         if not isinstance(rotation,dict) or set(rotation)!={'sha256','bytes','spool','path','at'}: raise ValueError()
         sha=rotation['sha256']; size=rotation['bytes']
-        if not isinstance(sha,str) or not re.fullmatch('[a-f0-9]{64}',sha) or type(size) is not int or size<0: raise ValueError()
+        if not isinstance(sha,str) or not re.fullmatch('[a-f0-9]{64}',sha) or type(size) is not int or not 0<=size<=brain_git.ARCHIVE_BYTES_LIMIT: raise ValueError()
         if rotation['spool']!='log-history-'+sha+'.bin' or rotation['path']!=BASE+'Log-Archives/'+sha+'.md': raise ValueError()
         if not isinstance(rotation['at'],str) or len(rotation['at'])>80: raise ValueError()
         datetime.fromisoformat(rotation['at'])
         folder=_spool_folder(cfg.STATE/'wiki/batches'/packet['batch_id']); spool=folder/rotation['spool']
-        if spool.is_symlink() or os.path.isjunction(spool) or not spool.resolve().is_relative_to(folder.resolve()) or _stream_file(spool,utf8=True)[:2]!=(sha,size): raise ValueError()
+        if spool.is_symlink() or os.path.isjunction(spool) or not spool.resolve().is_relative_to(folder.resolve()) or _stream_file(spool,utf8=True,max_bytes=brain_git.ARCHIVE_BYTES_LIMIT)[:2]!=(sha,size): raise ValueError()
         return spool
     except (ValueError,TypeError,OSError,UnicodeError): raise WikiIntegrityError(BASE+'Log.md',field='archive') from None
 
 def _publication_target(relative):
     try: return s.safe_path(relative)
     except (ValueError,TypeError,UnicodeError): raise WikiIntegrityError(BASE+'Index.md',field='path') from None
+
+def _publication_conflict(relative):
+    # Conflict locators are public diagnostics: never echo unsafe legacy names.
+    try:
+        if not isinstance(relative,str) or not relative.startswith(BASE): raise ValueError()
+        s.safe_path(relative); s.clean_text(relative,400)
+    except (ValueError,TypeError,UnicodeError): relative=BASE+'Index.md'
+    error=WikiTransientError('A planned derived page changed; preserve owner bytes and resolve its saved before/after image before retrying.')
+    error.page=relative; error.field='publication_cas'
+    return error
+
+
+def _screen_saved_output_paths(result):
+    try:
+        for page in result['pages']:
+            s.clean_text(BASE+page['category']+'/'+page['slug']+'.md',400)
+            for link in page['related']: s.safe_path(link); s.clean_text(link,400)
+    except (ValueError,TypeError,UnicodeError): raise WikiIntegrityError(BASE+'Index.md',field='path') from None
+
 
 def _stream_publish(write,payload=None):
     # This narrow path handles archive create-only and a bounded active Log
@@ -885,7 +1350,7 @@ def _stream_publish(write,payload=None):
     archive=write['kind']=='wiki_log_archive'
     if current!=write['before']:
         if archive: raise WikiIntegrityError(BASE+'Log.md',field='archive')
-        raise WikiTransientError('Compilation log changed before replacement.')
+        raise _publication_conflict(write['path'])
     target.parent.mkdir(parents=True,exist_ok=True); _publication_target(write['path'])
     fd,name=tempfile.mkstemp(prefix='.brain-',suffix='.tmp',dir=target.parent)
     try:
@@ -895,7 +1360,7 @@ def _stream_publish(write,payload=None):
                 if sha!=write['after'] or size!=write['bytes']: raise WikiIntegrityError(BASE+'Log.md',field='archive')
             else: stream.write(write['text'].encode('utf-8'))
             stream.flush(); os.fsync(stream.fileno())
-        if _current_hash(target)!=write['before']: raise WikiTransientError('Compilation log/archive changed before replacement.')
+        if _current_hash(target)!=write['before']: raise _publication_conflict(write['path'])
         if archive:
             # Atomic create-only: never overwrite an independently created file.
             try: os.link(name,target)
@@ -931,38 +1396,67 @@ class _EvidenceHistory:
     Caches exist only for this invocation.
     """
     def __init__(self):
-        self.deadline=time.monotonic()+15; self.commands=0; self.bytes=0
+        self.started=time.monotonic(); self.deadline=self.started+15; self.commands=0; self.bytes=0
         self.logs={}; self.blobs={}; self.current={}; self.current_bytes=0; self.results={}; self.topic_origins={}; self.revision_origins={}
+        self.log_failures={}; self.blob_failures={}; self.result_failures={}; self.legacy_proofs={}
+        self.failure_serial=0; self.failure_reason=None; self.first_failure_reason=None
+        self.failure_serial_by_reason={}
 
-    def _active(self): return time.monotonic()<self.deadline
+    def _incomplete(self,reason):
+        self.failure_serial+=1; self.failure_reason=reason
+        self.failure_serial_by_reason[reason]=self.failure_serial
+        if self.first_failure_reason is None: self.first_failure_reason=reason
+
+    def incomplete_since(self,serial):
+        return self.failure_reason if self.failure_serial!=serial else None
+
+    def _retryable_since(self,serial):
+        return self.failure_serial_by_reason.get('git-timeout',0)>serial
+
+    def _active(self):
+        if time.monotonic()<self.deadline: return True
+        self._incomplete('deadline'); return False
 
     def _git(self,*args):
         remaining=self.deadline-time.monotonic()
-        if remaining<=0 or self.commands>=256: return None
+        if remaining<=0: self._incomplete('deadline'); return None
+        if self.commands>=256: self._incomplete('commands'); return None
         self.commands+=1
         env=os.environ.copy()
         # The empty protocol allowlist also prevents promised-object transport
         # on supported older Git releases without GIT_NO_LAZY_FETCH.
-        env.update(GIT_OPTIONAL_LOCKS='0',GIT_TERMINAL_PROMPT='0',GIT_NO_LAZY_FETCH='1',GIT_ALLOW_PROTOCOL='')
+        env.update(GIT_OPTIONAL_LOCKS='0',GIT_TERMINAL_PROMPT='0',GIT_NO_LAZY_FETCH='1',GIT_ALLOW_PROTOCOL='',GIT_NO_REPLACE_OBJECTS='1')
         try:
             with _GIT_POPEN(['git','--no-pager','--literal-pathspecs','-c','log.showSignature=false','-C',str(s.VAULT),*args],
                             stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=env,**cfg.child_options()) as proc:
                 try: stdout,_=proc.communicate(timeout=min(3,remaining))
                 except subprocess.TimeoutExpired:
+                    self._incomplete('deadline' if remaining<3 else 'git-timeout')
                     proc.kill(); proc.communicate(); return None
-                return stdout if proc.returncode==0 else None
-        except (OSError,subprocess.TimeoutExpired): return None
+                if proc.returncode==0: return stdout
+                self._incomplete('git-error'); return None
+        except (OSError,subprocess.TimeoutExpired):
+            self._incomplete('git-error'); return None
 
     def _versions(self,relative):
         s.safe_path(relative)
+        if relative in self.log_failures:
+            self._incomplete(self.log_failures[relative]); return
         if relative not in self.logs:
+            serial=self.failure_serial
             raw=self._git('log','--max-count=64','--format=%H','HEAD','--',relative)
+            if raw is None:
+                reason=self.incomplete_since(serial)
+                if reason and not self._retryable_since(serial): self.log_failures[relative]=reason
+                return
             self.logs[relative]=[line for line in (raw or b'').decode('ascii',errors='ignore').splitlines() if re.fullmatch('[a-f0-9]{40}|[a-f0-9]{64}',line)]
         for commit in self.logs[relative]:
             if not self._active(): return
             key=(commit,relative)
+            if key in self.blob_failures:
+                self._incomplete(self.blob_failures[key]); continue
             if key not in self.blobs:
-                info=None
+                info=None; serial=self.failure_serial
                 tree=self._git('ls-tree','-z',commit,'--',relative)
                 records=(tree or b'').split(b'\x00')
                 if len(records)==2 and records[-1]==b'':
@@ -972,17 +1466,23 @@ class _EvidenceHistory:
                         oid=fields[2].decode('ascii',errors='ignore')
                         if re.fullmatch('[a-f0-9]{40}|[a-f0-9]{64}',oid):
                             size=self._git('cat-file','-s',oid)
-                            if size and size.strip().isdigit() and int(size)<=2_000_000 and self.bytes+int(size)<=16_000_000:
-                                raw=self._git('cat-file','blob',oid)
-                                if raw is not None and len(raw)==int(size) and self._active():
-                                    self.bytes+=len(raw)
-                                    try:
-                                        info=_source_bytes(raw,self._active)
-                                        if info is not None: info.update(git_commit=commit,git_blob=oid)
-                                    except (UnicodeError,ValueError): pass
-                                    if not self._active(): info=None
-                self.blobs[key]=info
-            if self.blobs[key] is not None: yield self.blobs[key]
+                            if size and size.strip().isdigit():
+                                if int(size)>2_000_000: self._incomplete('blob-size')
+                                elif self.bytes+int(size)>16_000_000: self._incomplete('blob-bytes')
+                                else:
+                                    raw=self._git('cat-file','blob',oid)
+                                    if raw is not None and len(raw)==int(size) and self._active():
+                                        self.bytes+=len(raw)
+                                        try:
+                                            info=_source_bytes(raw,self._active)
+                                            if info is not None: info.update(git_commit=commit,git_blob=oid)
+                                        except (UnicodeError,ValueError): pass
+                                        if not self._active(): info=None
+                reason=self.incomplete_since(serial)
+                if info is None and reason:
+                    if not self._retryable_since(serial): self.blob_failures[key]=reason
+                else: self.blobs[key]=info
+            if self.blobs.get(key) is not None: yield self.blobs[key]
 
     def _current(self,source):
         if source in self.current:
@@ -1008,7 +1508,10 @@ class _EvidenceHistory:
         try: s.safe_path(source)
         except (ValueError,TypeError): return None
         key=(source,sha256,normalized(quote) if quote is not None else None,text_sha256)
-        if key in self.results: return self.results[key]
+        if key in self.results:
+            if key in self.result_failures: self._incomplete(self.result_failures[key])
+            return self.results[key]
+        serial=self.failure_serial
         current=self._current(source)
         candidates=((current,'current'),) if current else ()
         for info,mode in candidates:
@@ -1021,7 +1524,10 @@ class _EvidenceHistory:
             proof={key:info[key] for key in ('text_sha256','date','git_commit','git_blob') if key in info}
             proof.update(sha256=sha256,mode='git-history',representation=info['variants'][sha256])
             self.results[key]=proof; return proof
-        self.results[key]=None
+        reason=self.incomplete_since(serial)
+        if not self._retryable_since(serial):
+            self.results[key]=None
+            if reason: self.result_failures[key]=reason
         return None
 
     def _revision_origins(self,old):
@@ -1054,20 +1560,31 @@ class _EvidenceHistory:
         proof=self.source(source,hashes.get(source) if isinstance(hashes,dict) else None,claim['quote'])
         if proof: return proof
         key=(page['path'],_claim_hash(claim))
+        if key in self.legacy_proofs: return self.legacy_proofs[key]
         if key not in self.topic_origins:
             if not self._active(): return None
-            origins=[]
+            origins=[]; seen=set(); serial=self.failure_serial
             for old in self._versions(page['path']):
                 if not self._active(): return None
                 indexed=self._revision_origins(old)
                 if indexed is None: return None
-                origins.extend(indexed.get(key[1],[]))
+                for candidate in indexed.get(key[1],[]):
+                    # Malformed legacy source hashes cannot attest a revision.
+                    if not isinstance(candidate.get('sha256'),str): continue
+                    fingerprint=(candidate.get('sha256'),candidate.get('text_sha256'),candidate.get('date'))
+                    if fingerprint in seen: continue
+                    seen.add(fingerprint); origins.append(candidate)
+                    proof=self.source(source,candidate.get('sha256'),claim['quote'],candidate.get('text_sha256'))
+                    if proof and ('date' not in candidate or candidate['date']==proof['date']):
+                        self.legacy_proofs[key]=proof; return proof
             if not self._active(): return None
-            self.topic_origins[key]=origins
+            if self.failure_serial==serial: self.topic_origins[key]=origins
+            return None
         for candidate in self.topic_origins[key]:
             proof=self.source(source,candidate.get('sha256'),claim['quote'],candidate.get('text_sha256'))
             if proof and 'date' in candidate and candidate['date']!=proof['date']: continue
-            if proof: return proof
+            if proof:
+                self.legacy_proofs[key]=proof; return proof
         return None
 
 _BEFORE_UNSET=object()
@@ -1107,6 +1624,7 @@ def _render_topic(page,packet,ident,result_hash,history=None):
     old_page={'path':rel,'meta':old_meta}
     old_keys={_json_hash({k:normalized(v) if k=='quote' else v for k,v in claim.items() if k!='source_revision'}) for claim in previous_claims}
     for index,claim in enumerate(unique.values()):
+        verification_serial=history.failure_serial
         current=history._current(claim['source']); proof=None; date='unknown'
         key=_json_hash({k:v for k,v in claim.items() if k!='source_revision'})
         if current:
@@ -1124,8 +1642,12 @@ def _render_topic(page,packet,ident,result_hash,history=None):
             claim.setdefault('source_revision',{'sha256':proof['sha256'],'text_sha256':proof['text_sha256'],'date':proof['date']})
             date=claim['source_revision'].get('date',proof['date'])
         evidence_note='; verified historical Git revision' if proof and proof['mode']=='git-history' else ''
-        if not proof: evidence_note='; evidence requires review'
-        rendered.append(f'- **{claim["status"]}; source date {date}{evidence_note}:** {claim["text"]}\n  - Evidence: [[{claim["source"][:-3]}]] — '+json.dumps(claim['quote'],ensure_ascii=False))
+        if not proof:
+            reason=history.incomplete_since(verification_serial)
+            evidence_note='; evidence requires review'+('; historical verification incomplete ('+reason+')' if reason else '')
+        try: reference=s.note_link(claim['source'],rel)
+        except (ValueError,TypeError,UnicodeError): raise WikiIntegrityError(rel,index,'path') from None
+        rendered.append(f'- **{claim["status"]}; source date {date}{evidence_note}:** {claim["text"]}\n  - Evidence: {reference} — '+json.dumps(claim['quote'],ensure_ascii=False))
     now=s.stamp()
     info={'date':now[:10],'title':page['title'],'type':'note','tags':['ai-memory','derived','wiki'],
           'wiki_kind':page['category'],'wiki_claims':list(unique.values()),'related':page['related'],
@@ -1143,6 +1665,7 @@ def _serialize_derived(path,info,body):
         raise WikiIntegrityError(path.relative_to(s.VAULT).as_posix(),field='serialization') from None
 
 def _source_note(row,topic_pages):
+    _validate_packet_paths({'sources':[row]})
     target=s.safe_path(BASE+'Sources/'+s.digest(row['path'].encode())[:16]+'.md')
     if target.exists():
         raw,text=_read_derived(target); info=_derived_metadata(target,text); before=s.digest(raw)
@@ -1155,14 +1678,14 @@ def _source_note(row,topic_pages):
     info.update({'date':now[:10],'type':'note','tags':['ai-memory','derived','wiki-source'],'sources':[row['path']],
                  'wiki_pages':linked,'latest_source_part':max(latest,row.get('part',1)),
                  'source_parts':row.get('parts',1),'source_hashes':{row['path']:row['sha256']},'updated_at':now,'maintained_by':cfg.DEVICE_ID})
-    body=f'# {row["title"]}\n\nOriginal: [[{row["path"][:-3]}]]\n\nSource date: {row["date"]}\n\n## Wiki pages\n'+'\n'.join('- [['+path[:-3]+']]' for path in linked)
+    body=f'# {row["title"]}\n\nOriginal: {s.note_link(row["path"],target.relative_to(s.VAULT).as_posix())}\n\nSource date: {row["date"]}\n\n## Wiki pages\n'+'\n'.join('- [['+path[:-3]+']]' for path in linked)
     return target,_serialize_derived(target,info,body),before
 
 def _publication_plan(packet,result,dispositions):
     ident=packet['batch_id']; result_hash=_json_hash(result); writes=[]
-    history=_EvidenceHistory()
     index=s.safe_path(BASE+'Index.md'); index_before=_current_hash(index)
     topic_pages={page['path']:page for page in _checked_pages()}
+    history=_EvidenceHistory()
     for page in result['pages']:
         rel,info,text,before=_render_topic(page,packet,ident,result_hash,history)
         _plan_write(writes,s.safe_path(rel),text,'wiki_compile',before)
@@ -1276,11 +1799,86 @@ def _saved_publication_started(packet,publication):
         plan=json.loads(publication.read_text(encoding='utf-8'))
         _validate(packet,result,screen_paths=False); _verify_publication_plan(plan,packet,result)
         return _publication_started(plan)
-    except (OSError,ValueError,KeyError,TypeError): return False
+    except (OSError,ValueError,KeyError,TypeError,RecursionError): return False
+
+def _publication_hold_records(plan,value):
+    """Validate supplied history before filtering hold-only semantic markers."""
+    def invalid():
+        error=_recovery_integrity(plan['batch_id'])
+        error.recovery_action='reconcile_saved_publication_then_retry'
+        raise error
+    if not isinstance(value,dict) or not isinstance(value.get('state'),str) or value['state'] not in ('applying','published','complete') or value.get('packet_sha256')!=plan['packet_sha256'] or value.get('result_sha256')!=plan['result_sha256'] or value.get('entries')!=plan['entries']:
+        invalid()
+    # Missing controls remain legacy history. Only an actual JSON integer can
+    # identify the current intent protocol; bool/float equality is insufficient.
+    if 'semantic_intent_version' in value and type(value['semantic_intent_version']) is not int: invalid()
+    if 'legacy_semantic_ambiguity' in value and type(value['legacy_semantic_ambiguity']) is not bool: invalid()
+    planned={(write['path'],write['after']) for write in plan['writes']}
+    semantic={(write['path'],write['after']) for write in plan['writes'] if write['kind']!='wiki_log_archive' and write['before']!=write['after']}
+    records=set()
+    def record(item):
+        if not isinstance(item,dict) or not isinstance(item.get('path'),str) or not isinstance(item.get('sha256'),str): invalid()
+        pair=(item['path'],item['sha256'])
+        if pair not in planned: invalid()
+        # Valid archive/unchanged progress is neither semantic hold evidence
+        # nor authority to bypass current source policy or owner changes.
+        if pair in semantic: records.add(pair)
+    for field in ('completed','prior_semantic'):
+        items=value.get(field,[])
+        if not isinstance(items,list): invalid()
+        for item in items: record(item)
+    if 'in_flight' in value: record(value['in_flight'])
+    if value.get('state') in ('published','complete'): records.update(semantic)
+    return [{'path':path,'sha256':digest} for path,digest in sorted(records)]
+
+
+def _hold_missing_publication(ident,publication):
+    if not publication.exists() and (publication.parent/'journal.json').exists():
+        error=_recovery_integrity(ident)
+        error.recovery_action='reconcile_saved_publication_then_retry'
+        raise error
+
+
+def _hold_prior_publication(packet,publication,plan=None):
+    """Historical progress can require a hold, never authorize replay or policy bypass."""
+    _hold_missing_publication(packet['batch_id'],publication)
+    if not publication.exists(): return
+    try:
+        if plan is None:
+            result=json.loads((publication.parent/'output.json').read_text(encoding='utf-8'))
+            plan=json.loads(publication.read_text(encoding='utf-8'))
+            _validate(packet,result,screen_paths=False); _verify_publication_plan(plan,packet,result)
+        if _publication_started(plan): return
+        journal=publication.parent/'journal.json'
+        if not journal.exists(): return
+        value=json.loads(journal.read_text(encoding='utf-8'))
+        recorded=bool(_publication_hold_records(plan,value))
+        if value.get('state')=='applying' and not recorded and (value.get('semantic_intent_version')!=1 or value.get('legacy_semantic_ambiguity') is True):
+            # Old empty/archives-only progress cannot prove whether the next
+            # semantic replacement preceded a crash. Hold changed context;
+            # this ambiguity never grants publication authority.
+            changed=any(_current_hash(_publication_target(write['path'])) not in (write['before'],write['after']) for write in plan['writes'])
+            changed=changed or any(_current_hash(s.safe_path(row['path']))!=row['sha256'] for row in packet['sources'])
+            changed=changed or any(_policy_excluded(row['path'],source_policy()) for row in packet['sources'])
+            expected=_full_catalog_snapshot(packet)
+            changed=changed or (expected is not None and expected!={page['path']:page['sha256'] for page in pages()})
+            changed=changed or any(page.get('sha256') and _current_hash(s.safe_path(page['path']))!=page['sha256'] for page in packet['catalog']+packet.get('current_pages',[]))
+            recorded=changed
+        if recorded:
+            error=_recovery_integrity(packet['batch_id'])
+            error.recovery_action='reconcile_saved_publication_then_retry'
+            raise error
+    except WikiIntegrityError: raise
+    except (OSError,ValueError,KeyError,TypeError,RecursionError): raise _recovery_integrity(packet['batch_id']) from None
+
 
 def apply(packet,result):
     cfg.require_maintainer()
     _validate_shape(result)
+    # Plan and replay the exact JSON value saved in input.json. A fresh YAML
+    # context may retain aliases or numeric metadata keys whose JSON sort order
+    # differs after decoding; keep that conversion local to publication.
+    packet=json.loads(_bounded_json(packet,sort_keys=True,default=str))
     result=json.loads(_bounded_json(result))
     valid={x['path'] for x in packet['catalog']} | {BASE+p.get('category','')+'/'+p.get('slug','')+'.md' for p in result.get('pages',[])}
     for page in result.get('pages',[]): page['related']=[BASE+link if BASE+link in valid else link for link in page.get('related',[])]
@@ -1288,16 +1886,12 @@ def apply(packet,result):
     if not re.fullmatch('[a-f0-9]{24}',ident): raise ValueError('Invalid batch identity.')
     publication=cfg.STATE/'wiki/batches'/ident/'publication.json'
     repairing=_saved_publication_started(packet,publication)
-    if publication.exists() and not repairing:
-        try:
-            for page in result['pages']:
-                s.clean_text(BASE+page['category']+'/'+page['slug']+'.md',400)
-                for link in page['related']: s.safe_path(link); s.clean_text(link,400)
-        except (ValueError,TypeError,UnicodeError): raise WikiIntegrityError(BASE+'Index.md',field='path') from None
+    if publication.exists() and not repairing: _screen_saved_output_paths(result)
     _validate(packet,result,screen_paths=not repairing); dispositions=_dispositions(packet,result)
     folder=cfg.STATE/'wiki/batches'/ident; journal=folder/'journal.json'; publication=folder/'publication.json'
     with FileLock(str(cfg.STATE/'writer.lock'),timeout=30):
         already_planned=publication.exists()
+        _hold_prior_publication(packet,publication)
         _assert_source_policy(packet,allow_durable=_saved_publication_started(packet,publication))
         with db() as conn: previous=conn.execute('SELECT * FROM batches WHERE id=?',(ident,)).fetchone()
         if previous and previous['status']=='complete':
@@ -1324,9 +1918,21 @@ def apply(packet,result):
         _verify_publication_plan(plan,packet,result)
         log_changes=[write for write in plan['writes'] if write['kind']=='wiki_log' and _current_hash(_publication_target(write['path'])) not in (write['before'],write['after'])]
         if log_changes and already_planned and not _publication_started(plan):
-            if any(write['kind'] not in ('wiki_log','wiki_log_archive') and _current_hash(_publication_target(write['path'])) not in (write['before'],write['after']) for write in plan['writes']):
-                raise WikiTransientError('Wiki page changed during publication; rebuild the batch.')
+            conflicts=[write for write in plan['writes'] if write['kind'] not in ('wiki_log','wiki_log_archive') and _current_hash(_publication_target(write['path'])) not in (write['before'],write['after'])]
+            if conflicts: raise _publication_conflict(conflicts[0]['path'])
             _assert_source_policy(packet)
+            if journal.exists():
+                _hold_prior_publication(packet,publication,plan)
+                saved=json.loads(journal.read_text(encoding='utf-8'))
+                if _publication_hold_records(plan,saved):
+                    error=_recovery_integrity(ident)
+                    error.recovery_action='reconcile_saved_publication_then_retry'
+                    raise error
+                # Only validated archive/unchanged progress is unused. Clear
+                # its old plan pairs before replacing the plan, so a crash at
+                # either checkpoint remains recoverable. Retain all controls.
+                unused={key:value for key,value in saved.items() if key not in ('completed','prior_semantic','in_flight','attempted_without_write')}
+                _atomic_json(journal,{**unused,'completed':[],'prior_semantic':[]})
             _atomic_json(folder/('publication-obsolete-'+_current_hash(publication)[:24]+'.json'),plan)
             plan=_publication_plan(packet,result,dispositions)
             _assert_source_policy(packet)
@@ -1342,24 +1948,55 @@ def apply(packet,result):
             if current not in (write['before'],write['after']):
                 if write['kind']=='wiki_log_archive': raise WikiIntegrityError(BASE+'Log.md',field='archive')
                 if write['kind']=='wiki_log' and not _publication_started(plan): raise _WikiLogChanged('Compilation log changed before initial publication; reuse saved output on retry.')
-                raise WikiTransientError('Wiki page changed during publication; rebuild the batch.')
+                raise _publication_conflict(write['path'])
         receipts=[]; progress=[]
-        _atomic_json(journal,{'version':2,'state':'applying','packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress})
+        try:
+            saved_progress=json.loads(journal.read_text(encoding='utf-8')) if journal.exists() else None
+            prior_semantic=_publication_hold_records(plan,saved_progress) if saved_progress is not None else []
+            # Legacy applying journals cannot disprove a replace-before-journal
+            # crash. Carry that uncertainty across upgrades and all checkpoints;
+            # it is a hold-only marker, never publication or policy authority.
+            legacy_ambiguity=bool(saved_progress is not None and saved_progress.get('state')=='applying' and (saved_progress.get('semantic_intent_version')!=1 or saved_progress.get('legacy_semantic_ambiguity') is True))
+        except (OSError,ValueError,KeyError,TypeError,RecursionError): raise _recovery_integrity(ident) from None
+        # Preserve observed afterimages and older hold-only history before a
+        # replay resets its progress journal. Owner edits must not erase it.
+        known={(item['path'],item['sha256']) for item in prior_semantic}
         for write in plan['writes']:
+            if write['kind']!='wiki_log_archive' and write['before']!=write['after'] and _current_hash(_publication_target(write['path']))==write['after']:
+                known.add((write['path'],write['after']))
+        prior_semantic=[{'path':path,'sha256':digest} for path,digest in sorted(known)]
+        _atomic_json(journal,{'version':2,'state':'applying','semantic_intent_version':1,'packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress,'prior_semantic':prior_semantic,'legacy_semantic_ambiguity':legacy_ambiguity})
+        for write in plan['writes']:
+            _hold_prior_publication(packet,publication,plan)
             _assert_source_policy(packet,allow_durable=_publication_started(plan))
             target=_publication_target(write['path'])
             if _current_hash(target)==write['after']:
                 receipt={'path':write['path'],'status':'recovered','sha256':write['after']}
             else:
-                if _current_hash(target)!=write['before']: raise WikiTransientError('Wiki page changed during publication; rebuild the batch.')
-                if write['kind']=='wiki_log_archive': receipt=_stream_publish(write,_archive_payload(plan,packet))
-                elif plan['version']==3 and write['kind']=='wiki_log': receipt=_stream_publish(write)
-                else: receipt=s._write(target,write['text'],write['kind'],write['before'])
-                if receipt.get('sha256')!=write['after'] or _current_hash(target)!=write['after']:
-                    raise OSError('Published note does not match the durable planned hash.')
+                if _current_hash(target)!=write['before']: raise _publication_conflict(write['path'])
+                checkpoint={'version':2,'state':'applying','semantic_intent_version':1,'packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress,'prior_semantic':prior_semantic,'legacy_semantic_ambiguity':legacy_ambiguity}
+                semantic=write['kind']!='wiki_log_archive' and write['before']!=write['after']
+                if semantic: _atomic_json(journal,{**checkpoint,'in_flight':{'path':write['path'],'sha256':write['after']}})
+                returned_afterimage=False
+                try:
+                    if write['kind']=='wiki_log_archive': receipt=_stream_publish(write,_archive_payload(plan,packet))
+                    elif plan['version']==3 and write['kind']=='wiki_log': receipt=_stream_publish(write)
+                    else: receipt=s._write(target,write['text'],write['kind'],write['before'])
+                    returned_afterimage=receipt.get('sha256')==write['after']
+                    if not returned_afterimage or _current_hash(target)!=write['after']:
+                        raise OSError('Published note does not match the durable planned hash.')
+                except Exception as error:
+                    if returned_afterimage: error._brain_note_replaced=True
+                    # Clear only proven pre-write intent. A completed replacement
+                    # or matching returned receipt remains history even if an
+                    # owner restores the before-image before verification.
+                    # BaseException also keeps intent without reclassification.
+                    if semantic and not returned_afterimage and not getattr(error,'_brain_note_replaced',False) and _current_hash(target)==write['before']:
+                        _atomic_json(journal,{**checkpoint,'attempted_without_write':{'path':write['path'],'sha256':write['after']}})
+                    raise
             if write['path'] in plan['topic_paths']: receipts.append(receipt)
             progress.append({'path':write['path'],'sha256':write['after']})
-            _atomic_json(journal,{'version':2,'state':'applying','packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress})
+            _atomic_json(journal,{'version':2,'state':'applying','semantic_intent_version':1,'packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'completed':progress,'prior_semantic':prior_semantic,'legacy_semantic_ambiguity':legacy_ambiguity})
         _atomic_json(journal,{'version':2,'state':'published','packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'receipts':receipts})
         _finish_database(packet,plan,receipts)
         _atomic_json(journal,{'version':2,'state':'complete','packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'receipts':receipts})
@@ -1381,14 +2018,24 @@ def _index_and_log(ident,receipts,sources):
         s._write(log,text,'wiki_log')
 
 def lint():
-    issues=[]; historical=[]; equivalent=[]; history=_EvidenceHistory()
+    issues=[]; historical=[]; equivalent=[]
     allpages=pages(issues); known={p['path'] for p in allpages}
+    history=_EvidenceHistory()
     for p in allpages:
         try: _existing_topic_title(p)
         except WikiIntegrityError: issues.append({'page':p['path'],'issue':'malformed title metadata','field':'title'})
         claims=p['meta'].get('wiki_claims',[])
         if not isinstance(claims,list):
             issues.append({'page':p['path'],'issue':'malformed claim metadata'}); claims=[]
+        # Only the last twelve claims can enter selected model context. Match
+        # prepare's bounded compact representation before screening its decoded
+        # claims; omitted context and older claims retain their graph checks.
+        decoded_claims=None; selected_offset=max(0,len(claims)-12)
+        compact={**p,'meta':{key:p['meta'].get(key) for key in ('title','wiki_kind')}}
+        compact['claim_count']=len(claims); compact['meta']['wiki_claims']=claims[-12:]
+        try:
+            decoded_claims=json.loads(_bounded_json(compact,40000,default=str))['meta']['wiki_claims']
+        except (ValueError,TypeError,RecursionError,UnicodeError): pass
         source_hashes=p['meta'].get('source_hashes',{})
         if not isinstance(source_hashes,dict):
             issues.append({'page':p['path'],'issue':'malformed source hash metadata'}); source_hashes={}
@@ -1398,6 +2045,7 @@ def lint():
                 issues.append({'page':p['path'],'issue':'malformed source path metadata','field':'source_hashes','source_index':source_index}); continue
             if not isinstance(h,str) or not re.fullmatch('[a-f0-9]{64}',h):
                 issues.append({'page':p['path'],'issue':'malformed source hash metadata','source':src}); continue
+            verification_serial=history.failure_serial
             proof=history.source(src,h)
             if proof and proof['mode']=='git-history':
                 # A hash alone is insufficient to bless historical attribution.
@@ -1406,7 +2054,10 @@ def lint():
                 proof=next((value for claim in claims if _valid_claim(claim) and claim['source']==src
                             if (value:=history.source(src,h,claim['quote'])) is not None),None)
             if not proof:
-                issues.append({'page':p['path'],'issue':'source missing or changed','source':src})
+                diagnostic={'page':p['path'],'issue':'source missing or changed','source':src}
+                reason=history.incomplete_since(verification_serial)
+                if reason: diagnostic['history_incomplete']=reason
+                issues.append(diagnostic)
             elif proof['mode']=='current' and proof['representation']!='exact':
                 equivalent.append({'page':p['path'],'source':src,'source_sha256':h,'representation':proof['representation']})
         related_paths=p['meta'].get('related',[])
@@ -1418,17 +2069,24 @@ def lint():
                 issues.append({'page':p['path'],'issue':'malformed related link metadata','field':'related','related_index':related_index}); continue
             if related not in known: issues.append({'page':p['path'],'issue':'broken related link','target':related})
         for index,claim in enumerate(claims):
-            try: _validate_existing_claim(p['path'],claim,index)
+            try:
+                _validate_existing_claim(p['path'],claim,index)
+                if decoded_claims is not None and index>=selected_offset:
+                    _validate_existing_claim(p['path'],decoded_claims[index-selected_offset],index)
             except WikiIntegrityError as exc:
                 issue='malformed source revision metadata' if exc.field=='source_revision' else 'malformed claim metadata'
                 diagnostic={'page':p['path'],'issue':issue,'field':exc.field,'claim_index':index}
                 issues.append(diagnostic)
                 continue
+            verification_serial=history.failure_serial
             proof=history.claim(p,claim)
             if not proof:
                 current=history._current(claim['source'])
                 issue='source revision unverified' if current and normalized(claim['quote']) in current['text'] else 'evidence quote missing'
-                issues.append({'page':p['path'],'issue':issue,'source':claim['source'],'claim_index':index})
+                diagnostic={'page':p['path'],'issue':issue,'source':claim['source'],'claim_index':index}
+                reason=history.incomplete_since(verification_serial)
+                if reason: diagnostic['history_incomplete']=reason
+                issues.append(diagnostic)
             elif proof['mode']=='git-history':
                 historical.append({'page':p['path'],'source':claim['source'],'claim_index':index,
                     'source_sha256':proof['sha256'],'text_sha256':proof['text_sha256'],
@@ -1438,7 +2096,10 @@ def lint():
             'historical_evidence_count':len(historical),'verified_historical_evidence':historical[:100],
             'equivalent_source_revision_count':len(equivalent),'equivalent_source_revisions':equivalent[:100],
             'history_verification':{'max_commits_per_path':64,'max_git_commands':256,'max_git_blob_bytes':16_000_000,
-                                    'max_history_seconds':15,'git_commands':history.commands,'git_blob_bytes':history.bytes},
+                                    'max_history_seconds':15,'git_commands':history.commands,'git_blob_bytes':history.bytes,
+                                    'elapsed_seconds':round(time.monotonic()-history.started,4),
+                                    'incomplete_reason':history.first_failure_reason,
+                                    'negative_scope':'not found within at most 64 reachable commits per path'},
             'semantic_review':'exact current/historical evidence checks do not prove factual entailment, chronology or current employment/completion'}
     (cfg.STATE/'wiki-lint.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
     return report
@@ -1455,8 +2116,9 @@ def cleanup(days=30):
         if not folder.resolve().is_relative_to(base): raise ValueError('Unsafe batch cleanup path.')
         journal=folder/'journal.json'
         try:
-            if json.loads(journal.read_text(encoding='utf-8')).get('state')!='complete': continue
-        except (OSError,ValueError): continue
+            saved=json.loads(journal.read_text(encoding='utf-8'))
+            if not isinstance(saved,dict) or saved.get('state')!='complete': continue
+        except (OSError,ValueError,RecursionError): continue
         spool_names=[path.name for path in folder.iterdir() if re.fullmatch(r'(?:log-history-[a-f0-9]{64}\.bin|publication-obsolete-[a-f0-9]{24}\.json)',path.name)]
         for name in ('input.json','output.json','runner.log','schema.json','publication.json',*spool_names):
             path=folder/name
@@ -1485,23 +2147,74 @@ def _full_catalog_snapshot(packet):
     if not isinstance(catalog,list): return None
     snapshot={}
     for page in catalog:
-        if not isinstance(page,dict) or not isinstance(page.get('path'),str) or not isinstance(page.get('sha256'),str) or not re.fullmatch('[a-f0-9]{64}',page['sha256']) or page['path'] in snapshot:
+        if not isinstance(page,dict) or not isinstance(page.get('path'),str) or not isinstance(page.get('sha256'),str) or not re.fullmatch('[a-f0-9]{64}',page['sha256']) or page['path'] in snapshot and snapshot[page['path']]!=page['sha256']:
             return None
         snapshot[page['path']]=page['sha256']
     return snapshot
 
+def _recovery_integrity(batch_id,field='recovery'):
+    error=WikiIntegrityError(BASE+'Index.md',field=field)
+    if isinstance(batch_id,str) and re.fullmatch('[a-f0-9]{24}',batch_id): error.batch_id=batch_id
+    return error
+
+
+def _read_saved_packet(path,batch_id):
+    """Decode bounded durable input before any resume decision or model request."""
+    try:
+        with path.open('r',encoding='utf-8') as stream: text=stream.read(2_000_001)
+        if len(text)>2_000_000: raise _JSONTooLarge('Saved input exceeds the packet limit.')
+        packet=json.loads(text)
+        if not isinstance(packet,dict) or packet.get('batch_id')!=batch_id: raise ValueError('Invalid saved identity.')
+        if not isinstance(batch_id,str) or not re.fullmatch('[a-f0-9]{24}',batch_id): raise ValueError('Invalid batch identity.')
+        for key in ('sources','catalog','current_pages'):
+            if not isinstance(packet.get(key),list) or any(not isinstance(row,dict) for row in packet[key]): raise ValueError('Invalid saved packet collection.')
+        if not 1<=len(packet['sources'])<=8: raise ValueError('Invalid source count.')
+        for row in packet['sources']:
+            if any(not isinstance(row.get(key),str) for key in ('path','job_key','sha256','text','title','date')): raise ValueError('Invalid saved source.')
+            if not re.fullmatch('[a-f0-9]{64}',row['sha256']): raise ValueError('Invalid saved source hash.')
+            if type(row.get('part')) is not int or type(row.get('parts')) is not int or not 1<=row['part']<=row['parts']<=87: raise ValueError('Invalid saved source part.')
+            if row['job_key']!=row['path']+'::part'+str(row['part']): raise ValueError('Invalid saved source key.')
+        if len({row['path'] for row in packet['sources']})!=len(packet['sources']) or len({row['job_key'] for row in packet['sources']})!=len(packet['sources']): raise ValueError('Duplicate saved source identity.')
+        for row in packet['catalog']+packet['current_pages']:
+            if not isinstance(row.get('path'),str): raise ValueError('Invalid saved page.')
+        catalog_hashes={}
+        for row in packet['catalog']:
+            if not isinstance(row.get('title'),str): raise ValueError('Invalid catalog title.')
+            if 'sha256' in row and (not isinstance(row['sha256'],str) or not re.fullmatch('[a-f0-9]{64}',row['sha256'])): raise ValueError('Invalid saved catalog hash.')
+            if 'sha256' in row:
+                if row['path'] in catalog_hashes and catalog_hashes[row['path']]!=row['sha256']: raise ValueError('Conflicting saved catalog identity.')
+                catalog_hashes[row['path']]=row['sha256']
+        for row in packet['current_pages']:
+            if not isinstance(row.get('meta'),dict): raise ValueError('Invalid saved page metadata.')
+            if not isinstance(row.get('sha256'),str) or not re.fullmatch('[a-f0-9]{64}',row['sha256']): raise ValueError('Invalid saved current-page hash.')
+        _bounded_json(packet)
+        return packet
+    except (_JSONTooLarge,_JSONStructureTooLarge):
+        raise _recovery_integrity(batch_id,'packet') from None
+    except (FileNotFoundError,ValueError,TypeError,KeyError,RecursionError):
+        raise _recovery_integrity(batch_id) from None
+
+
 def _resume_packet(policy=None):
     policy=source_policy() if policy is None else policy
     with db() as conn:
-        batches=list(conn.execute("SELECT * FROM batches WHERE status IN ('pending','retryable','applying','published','complete','stale') ORDER BY updated,id"))
-    eligibility=None; current_catalog=None
+        batches=list(conn.execute("SELECT * FROM batches WHERE status IN ('pending','retryable','applying','published','complete','stale','error') ORDER BY updated,id"))
+    eligibility=None; current_catalog=None; canonical=None
     for batch in batches:
+        if not isinstance(batch['id'],str) or not re.fullmatch('[a-f0-9]{24}',batch['id']): raise _recovery_integrity(None)
         folder=cfg.STATE/'wiki/batches'/batch['id']; journal=folder/'journal.json'; input_path=folder/'input.json'
         publication=folder/'publication.json'
+        if batch['status']!='complete': _hold_missing_publication(batch['id'],publication)
+        if batch['status']=='stale' and not publication.exists(): continue
+        # An error may still own a valid durable plan (for example an archive
+        # collision awaiting owner repair). Only those errors may replay output;
+        # a generic failed model result without a plan must run fresh validation.
+        if batch['status']=='error' and not publication.exists(): continue
         if batch['status']=='complete':
             try:
                 value=json.loads(journal.read_text(encoding='utf-8'))
                 finalized=isinstance(value,dict) and value.get('state')=='complete'
+            except RecursionError: raise _recovery_integrity(batch['id']) from None
             except (OSError,ValueError): finalized=False
             if finalized: continue
             if not publication.exists():
@@ -1511,11 +2224,7 @@ def _resume_packet(policy=None):
                 # report/requeue any parts that still lack verifiable coverage.
                 with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('legacy_unverified',s.stamp(),batch['id']))
                 continue
-        if not input_path.exists():
-            if batch['status']!='complete': raise RuntimeError('Unfinished wiki batch has no saved input; inspect its local journal before retrying.')
-            continue
-        packet=json.loads(input_path.read_text(encoding='utf-8'))
-        if packet.get('batch_id')!=batch['id']: raise ValueError('Saved wiki batch identity mismatch.')
+        packet=_read_saved_packet(input_path,batch['id'])
         if publication.exists():
             # Invalid durable recovery input stays visible even if a portable
             # source receipt already covers its parts. It grants no authority.
@@ -1523,18 +2232,39 @@ def _resume_packet(policy=None):
                 output=json.loads((folder/'output.json').read_text(encoding='utf-8'))
                 plan=json.loads(publication.read_text(encoding='utf-8'))
                 _validate(packet,output,screen_paths=False); _verify_publication_plan(plan,packet,output)
-            except WikiIntegrityError: raise
-            except (OSError,ValueError,TypeError,KeyError): raise WikiIntegrityError(BASE+'Index.md',field='recovery') from None
+            except WikiIntegrityError as exc:
+                exc.batch_id=batch['id']; raise
+            except (OSError,ValueError,TypeError,KeyError,RecursionError): raise _recovery_integrity(batch['id']) from None
+            _hold_prior_publication(packet,publication,plan)
+            if batch['status']!='complete' and not _publication_started(plan):
+                try: _screen_saved_output_paths(output)
+                except WikiIntegrityError as exc:
+                    exc.batch_id=batch['id']
+                    # Preserve immutable input/output/plan/spools for inspection.
+                    # A new generation can request a clean replacement exactly
+                    # once; never mix that result with this old publication hash.
+                    with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('superseded',s.stamp(),batch['id']))
+                    raise
         if batch['status']=='stale' and not _saved_publication_started(packet,publication): continue
         if batch['status']!='complete' and not _saved_publication_started(packet,publication):
             try: _validate_packet_paths({'sources':packet['sources']})
             except WikiIntegrityError:
                 with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('superseded',s.stamp(),batch['id']))
                 continue
+        # All subsequent owner-hash comparisons require filesystem-safe paths.
+        # Credential-like legacy paths may repair only a verified actual partial
+        # publication; their existing narrower exemption remains unchanged.
+        try: _validate_packet_paths(packet,screen_credentials=False)
+        except WikiIntegrityError as exc:
+            exc.batch_id=batch['id']; raise
         if batch['status']!='complete' and any(_policy_excluded(row['path'],policy) for row in packet['sources']) and not _saved_publication_started(packet,publication):
             with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('superseded',s.stamp(),batch['id']))
             continue
-        if batch['status']!='complete' and any(_current_hash(s.safe_path(row['path']))!=row['sha256'] for row in packet['sources']):
+        if any(_current_hash(s.safe_path(row['path']))!=row['sha256'] for row in packet['sources']):
+            if batch['status']=='complete' or _saved_publication_started(packet,publication):
+                error=_recovery_integrity(batch['id'],'source_revision')
+                error.recovery_action='resolve_saved_source_revision_then_retry'
+                raise error
             with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('stale',s.stamp(),batch['id']))
             continue
         if batch['status']!='complete':
@@ -1544,15 +2274,38 @@ def _resume_packet(policy=None):
             changed=expected is not None and expected!=current_catalog
             # Older packets may not carry a full catalog hash map. Their
             # explicitly supplied current-page snapshots still remain binding.
-            changed=changed or any(page.get('sha256') and _current_hash(s.safe_path(page['path']))!=page['sha256'] for page in packet.get('current_pages',[]))
+            changed=changed or any(page.get('sha256') and _current_hash(s.safe_path(page['path']))!=page['sha256'] for page in packet['catalog']+packet.get('current_pages',[]))
             if changed and not _saved_publication_started(packet,publication):
                 # Do not spend quota on known stale unused context. Keep its
                 # artifacts, then let fresh preparation validate owner repairs.
                 with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('superseded',s.stamp(),batch['id']))
                 continue
+        if batch['status']!='complete' and not _saved_publication_started(packet,publication):
+            try: _validate_source_context(packet)
+            except WikiIntegrityError as exc:
+                exc.batch_id=batch['id']; raise
+            if canonical is None:
+                canonical={row['job_key']:row for row in inventory(include_excluded=True,policy=policy)}
+            # Inventory may observe an owner edit after the earlier raw-hash check.
+            # Treat that as stale input, not a malformed immutable saved part.
+            if any(_current_hash(s.safe_path(row['path']))!=row['sha256'] or
+                   any(actual['path']==row['path'] and actual['sha256']!=row['sha256'] for actual in canonical.values())
+                   for row in packet['sources']):
+                with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('stale',s.stamp(),batch['id']))
+                continue
+            # Filesystem aliases/renames or temporary inventory omissions are
+            # stale unused selection, not corruption of a present source part.
+            current_paths={actual['path'] for actual in canonical.values()}
+            if any(row['path'] not in current_paths for row in packet['sources']):
+                with db() as conn: conn.execute('UPDATE batches SET status=?,updated=? WHERE id=?',('stale',s.stamp(),batch['id']))
+                continue
+            for row in packet['sources']:
+                actual=canonical.get(row['job_key'])
+                if actual is None or _source_identity(actual)!=_source_identity(row):
+                    raise _recovery_integrity(batch['id'])
         if batch['status']!='complete' and not publication.exists():
             if eligibility is None:
-                _hydrate_receipts(inventory(include_excluded=True,policy=policy))
+                _hydrate_receipts(list(canonical.values()))
                 with db() as conn: eligibility={row['path']:dict(row) for row in conn.execute('SELECT * FROM sources')}
             if any(not _eligible(row,eligibility.get(row['job_key'],{})) for row in packet['sources']):
                 # A later receipt/defer/retirement takes precedence over an old
@@ -1581,15 +2334,22 @@ def run(limit=4,timeout=480):
         worker_state=cfg.STATE/'wiki-worker-status.json'
         saved=_read_worker_state()
         if saved.get('attention_required'):
-            return {'status':'attention','reason':saved.get('reason'),'batch_id':saved.get('batch_id'),
-                    'consecutive_failures':saved.get('consecutive_failures',0),'manual_retry_required':True,
-                    'pending_parts':saved.get('pending_parts',[])}
+            summary=_worker_summary()
+            return {'status':'attention','reason':summary.get('reason'),'batch_id':summary.get('batch_id'),
+                    'consecutive_failures':summary['consecutive_failures'],'manual_retry_required':True,
+                    'pending_parts':_public_pending_parts(saved.get('pending_parts')),
+                    **{key:value for key,value in summary.items() if key in ('integrity_page','integrity_page_sha256','integrity_field','recovery_action')}}
         try: packet=_resume_packet(policy)
         except WikiIntegrityError as exc:
             attention={'status':'attention','at':s.stamp(),'reason':'WikiIntegrityError','retry_after':0,'backoff_seconds':0,
                        'consecutive_failures':saved.get('consecutive_failures',0),'attention_required':True,
                        'integrity_page':exc.page,'integrity_field':exc.field,'claim_index':exc.claim_index,'manual_retry_required':True}
+            if isinstance(getattr(exc,'page_sha256',None),str) and re.fullmatch('[a-f0-9]{64}',exc.page_sha256): attention['integrity_page_sha256']=exc.page_sha256
+            batch_id=getattr(exc,'batch_id',None)
+            if isinstance(batch_id,str) and re.fullmatch('[a-f0-9]{24}',batch_id): attention['batch_id']=batch_id
+            if getattr(exc,'recovery_action',None) in ('resolve_saved_source_revision_then_retry','reconcile_saved_publication_then_retry'): attention['recovery_action']=exc.recovery_action
             _atomic_json(worker_state,attention)
+            if exc.field in ('packet','content'): return attention
             raise
         except (WikiTransientError,OSError) as exc:
             receipt={'status':'retryable','at':s.stamp(),'reason':type(exc).__name__,'retry_after':time.time()+60,
@@ -1607,7 +2367,12 @@ def run(limit=4,timeout=480):
         if saved.get('retry_after',0)>time.time() and not superseded and not (saved.get('status')=='retryable' and saved_output):
             return {'status':'blocked','reason':saved.get('reason'),'retry_after':saved['retry_after']}
         try:
-            if packet is None: packet=prepare(limit)
+            if packet is None:
+                packet=prepare(limit)
+                if packet:
+                    # Match resumed input for publication and post-fault holds,
+                    # while prepare's caller-visible metadata remains untouched.
+                    packet=json.loads(_bounded_json(packet,sort_keys=True,default=str))
             if packet:
                 publication=cfg.STATE/'wiki/batches'/packet['batch_id']/'publication.json'
                 repairing=resumed and saved_output and _saved_publication_started(packet,publication)
@@ -1621,6 +2386,9 @@ def run(limit=4,timeout=480):
             attention={'status':'attention','at':s.stamp(),'reason':'WikiIntegrityError','retry_after':0,'backoff_seconds':0,
                        'consecutive_failures':saved.get('consecutive_failures',0),'attention_required':True,
                        'integrity_page':exc.page,'integrity_field':exc.field,'claim_index':exc.claim_index,'manual_retry_required':True}
+            if isinstance(getattr(exc,'page_sha256',None),str) and re.fullmatch('[a-f0-9]{64}',exc.page_sha256): attention['integrity_page_sha256']=exc.page_sha256
+            batch_id=packet.get('batch_id') if isinstance(packet,dict) else None
+            if isinstance(batch_id,str) and re.fullmatch('[a-f0-9]{24}',batch_id): attention['batch_id']=batch_id
             _atomic_json(worker_state,attention)
             return attention
         except (WikiTransientError,OSError) as exc:
@@ -1657,6 +2425,7 @@ def run(limit=4,timeout=480):
             # Excluded work may only repair actual partial publication from
             # verified saved output; an unused durable plan cannot exempt it.
             repairing=not model_ran and _saved_publication_started(packet,folder/'publication.json')
+            _hold_prior_publication(packet,folder/'publication.json')
             current_policy=_assert_source_policy(packet,allow_durable=repairing)
             recovered_excluded=sum(_policy_excluded(row['path'],current_policy) for row in packet['sources']) if repairing else 0
             if model_ran:
@@ -1696,6 +2465,10 @@ def run(limit=4,timeout=480):
             return {'status':'complete','batch_id':packet['batch_id'],'receipts':receipts,'lint':lint(),
                     'recovered_excluded_source_parts':recovered_excluded}
         except Exception as exc:
+            post_replace_error=exc if getattr(exc,'_brain_note_replaced',False) else None
+            if not isinstance(exc,WikiIntegrityError):
+                try: _hold_prior_publication(packet,folder/'publication.json')
+                except WikiIntegrityError as recovery: exc=recovery
             if isinstance(exc,WikiPolicyError): return _policy_attention(exc)
             if isinstance(exc,WikiPolicyChanged):
                 with db() as conn: conn.execute("UPDATE batches SET status='superseded',updated=? WHERE id=? AND status!='complete'",(s.stamp(),packet['batch_id']))
@@ -1735,6 +2508,16 @@ def run(limit=4,timeout=480):
                          'batch_id':packet['batch_id'],'reason':reason,'retry_after':time.time()+10800 if global_failure else time.time()+backoff if backoff else 0,
                          'backoff_seconds':backoff,'consecutive_failures':failures,'attention_required':attention,
                          'pending_parts':[{'job_key':row['job_key'],'sha256':row['sha256']} for row in packet['sources']]}
-            if integrity: worker_receipt.update(integrity_page=exc.page,integrity_field=exc.field,claim_index=exc.claim_index)
+            if integrity:
+                worker_receipt.update(integrity_page=exc.page,integrity_field=exc.field,claim_index=exc.claim_index)
+                if isinstance(getattr(exc,'page_sha256',None),str) and re.fullmatch('[a-f0-9]{64}',exc.page_sha256): worker_receipt['integrity_page_sha256']=exc.page_sha256
+                if getattr(exc,'recovery_action',None)=='reconcile_saved_publication_then_retry': worker_receipt['recovery_action']=exc.recovery_action
+            if isinstance(exc,WikiTransientError) and getattr(exc,'field',None)=='publication_cas':
+                partial=_saved_publication_started(packet,folder/'publication.json')
+                worker_receipt.update(integrity_page=exc.page,
+                    integrity_field='publication_cas' if partial else 'unused_publication_cas',
+                    recovery_action='resolve_saved_publication_cas_then_retry' if partial else 'retry_fresh_generation_preserving_owner_edits')
             _atomic_json(worker_state,worker_receipt)
-            raise
+            # Report the original post-replacement failure while retaining the
+            # controlled recovery hold in public/private worker state.
+            raise post_replace_error if post_replace_error is not None else exc
