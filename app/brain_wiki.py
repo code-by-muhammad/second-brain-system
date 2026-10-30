@@ -1396,14 +1396,31 @@ class _EvidenceHistory:
     Caches exist only for this invocation.
     """
     def __init__(self):
-        self.deadline=time.monotonic()+15; self.commands=0; self.bytes=0
+        self.started=time.monotonic(); self.deadline=self.started+15; self.commands=0; self.bytes=0
         self.logs={}; self.blobs={}; self.current={}; self.current_bytes=0; self.results={}; self.topic_origins={}; self.revision_origins={}
+        self.log_failures={}; self.blob_failures={}; self.result_failures={}; self.legacy_proofs={}
+        self.failure_serial=0; self.failure_reason=None; self.first_failure_reason=None
+        self.failure_serial_by_reason={}
 
-    def _active(self): return time.monotonic()<self.deadline
+    def _incomplete(self,reason):
+        self.failure_serial+=1; self.failure_reason=reason
+        self.failure_serial_by_reason[reason]=self.failure_serial
+        if self.first_failure_reason is None: self.first_failure_reason=reason
+
+    def incomplete_since(self,serial):
+        return self.failure_reason if self.failure_serial!=serial else None
+
+    def _retryable_since(self,serial):
+        return self.failure_serial_by_reason.get('git-timeout',0)>serial
+
+    def _active(self):
+        if time.monotonic()<self.deadline: return True
+        self._incomplete('deadline'); return False
 
     def _git(self,*args):
         remaining=self.deadline-time.monotonic()
-        if remaining<=0 or self.commands>=256: return None
+        if remaining<=0: self._incomplete('deadline'); return None
+        if self.commands>=256: self._incomplete('commands'); return None
         self.commands+=1
         env=os.environ.copy()
         # The empty protocol allowlist also prevents promised-object transport
@@ -1414,20 +1431,32 @@ class _EvidenceHistory:
                             stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=env,**cfg.child_options()) as proc:
                 try: stdout,_=proc.communicate(timeout=min(3,remaining))
                 except subprocess.TimeoutExpired:
+                    self._incomplete('deadline' if remaining<3 else 'git-timeout')
                     proc.kill(); proc.communicate(); return None
-                return stdout if proc.returncode==0 else None
-        except (OSError,subprocess.TimeoutExpired): return None
+                if proc.returncode==0: return stdout
+                self._incomplete('git-error'); return None
+        except (OSError,subprocess.TimeoutExpired):
+            self._incomplete('git-error'); return None
 
     def _versions(self,relative):
         s.safe_path(relative)
+        if relative in self.log_failures:
+            self._incomplete(self.log_failures[relative]); return
         if relative not in self.logs:
+            serial=self.failure_serial
             raw=self._git('log','--max-count=64','--format=%H','HEAD','--',relative)
+            if raw is None:
+                reason=self.incomplete_since(serial)
+                if reason and not self._retryable_since(serial): self.log_failures[relative]=reason
+                return
             self.logs[relative]=[line for line in (raw or b'').decode('ascii',errors='ignore').splitlines() if re.fullmatch('[a-f0-9]{40}|[a-f0-9]{64}',line)]
         for commit in self.logs[relative]:
             if not self._active(): return
             key=(commit,relative)
+            if key in self.blob_failures:
+                self._incomplete(self.blob_failures[key]); continue
             if key not in self.blobs:
-                info=None
+                info=None; serial=self.failure_serial
                 tree=self._git('ls-tree','-z',commit,'--',relative)
                 records=(tree or b'').split(b'\x00')
                 if len(records)==2 and records[-1]==b'':
@@ -1437,17 +1466,23 @@ class _EvidenceHistory:
                         oid=fields[2].decode('ascii',errors='ignore')
                         if re.fullmatch('[a-f0-9]{40}|[a-f0-9]{64}',oid):
                             size=self._git('cat-file','-s',oid)
-                            if size and size.strip().isdigit() and int(size)<=2_000_000 and self.bytes+int(size)<=16_000_000:
-                                raw=self._git('cat-file','blob',oid)
-                                if raw is not None and len(raw)==int(size) and self._active():
-                                    self.bytes+=len(raw)
-                                    try:
-                                        info=_source_bytes(raw,self._active)
-                                        if info is not None: info.update(git_commit=commit,git_blob=oid)
-                                    except (UnicodeError,ValueError): pass
-                                    if not self._active(): info=None
-                self.blobs[key]=info
-            if self.blobs[key] is not None: yield self.blobs[key]
+                            if size and size.strip().isdigit():
+                                if int(size)>2_000_000: self._incomplete('blob-size')
+                                elif self.bytes+int(size)>16_000_000: self._incomplete('blob-bytes')
+                                else:
+                                    raw=self._git('cat-file','blob',oid)
+                                    if raw is not None and len(raw)==int(size) and self._active():
+                                        self.bytes+=len(raw)
+                                        try:
+                                            info=_source_bytes(raw,self._active)
+                                            if info is not None: info.update(git_commit=commit,git_blob=oid)
+                                        except (UnicodeError,ValueError): pass
+                                        if not self._active(): info=None
+                reason=self.incomplete_since(serial)
+                if info is None and reason:
+                    if not self._retryable_since(serial): self.blob_failures[key]=reason
+                else: self.blobs[key]=info
+            if self.blobs.get(key) is not None: yield self.blobs[key]
 
     def _current(self,source):
         if source in self.current:
@@ -1473,7 +1508,10 @@ class _EvidenceHistory:
         try: s.safe_path(source)
         except (ValueError,TypeError): return None
         key=(source,sha256,normalized(quote) if quote is not None else None,text_sha256)
-        if key in self.results: return self.results[key]
+        if key in self.results:
+            if key in self.result_failures: self._incomplete(self.result_failures[key])
+            return self.results[key]
+        serial=self.failure_serial
         current=self._current(source)
         candidates=((current,'current'),) if current else ()
         for info,mode in candidates:
@@ -1486,7 +1524,10 @@ class _EvidenceHistory:
             proof={key:info[key] for key in ('text_sha256','date','git_commit','git_blob') if key in info}
             proof.update(sha256=sha256,mode='git-history',representation=info['variants'][sha256])
             self.results[key]=proof; return proof
-        self.results[key]=None
+        reason=self.incomplete_since(serial)
+        if not self._retryable_since(serial):
+            self.results[key]=None
+            if reason: self.result_failures[key]=reason
         return None
 
     def _revision_origins(self,old):
@@ -1519,20 +1560,31 @@ class _EvidenceHistory:
         proof=self.source(source,hashes.get(source) if isinstance(hashes,dict) else None,claim['quote'])
         if proof: return proof
         key=(page['path'],_claim_hash(claim))
+        if key in self.legacy_proofs: return self.legacy_proofs[key]
         if key not in self.topic_origins:
             if not self._active(): return None
-            origins=[]
+            origins=[]; seen=set(); serial=self.failure_serial
             for old in self._versions(page['path']):
                 if not self._active(): return None
                 indexed=self._revision_origins(old)
                 if indexed is None: return None
-                origins.extend(indexed.get(key[1],[]))
+                for candidate in indexed.get(key[1],[]):
+                    # Malformed legacy source hashes cannot attest a revision.
+                    if not isinstance(candidate.get('sha256'),str): continue
+                    fingerprint=(candidate.get('sha256'),candidate.get('text_sha256'),candidate.get('date'))
+                    if fingerprint in seen: continue
+                    seen.add(fingerprint); origins.append(candidate)
+                    proof=self.source(source,candidate.get('sha256'),claim['quote'],candidate.get('text_sha256'))
+                    if proof and ('date' not in candidate or candidate['date']==proof['date']):
+                        self.legacy_proofs[key]=proof; return proof
             if not self._active(): return None
-            self.topic_origins[key]=origins
+            if self.failure_serial==serial: self.topic_origins[key]=origins
+            return None
         for candidate in self.topic_origins[key]:
             proof=self.source(source,candidate.get('sha256'),claim['quote'],candidate.get('text_sha256'))
             if proof and 'date' in candidate and candidate['date']!=proof['date']: continue
-            if proof: return proof
+            if proof:
+                self.legacy_proofs[key]=proof; return proof
         return None
 
 _BEFORE_UNSET=object()
@@ -1572,6 +1624,7 @@ def _render_topic(page,packet,ident,result_hash,history=None):
     old_page={'path':rel,'meta':old_meta}
     old_keys={_json_hash({k:normalized(v) if k=='quote' else v for k,v in claim.items() if k!='source_revision'}) for claim in previous_claims}
     for index,claim in enumerate(unique.values()):
+        verification_serial=history.failure_serial
         current=history._current(claim['source']); proof=None; date='unknown'
         key=_json_hash({k:v for k,v in claim.items() if k!='source_revision'})
         if current:
@@ -1589,7 +1642,9 @@ def _render_topic(page,packet,ident,result_hash,history=None):
             claim.setdefault('source_revision',{'sha256':proof['sha256'],'text_sha256':proof['text_sha256'],'date':proof['date']})
             date=claim['source_revision'].get('date',proof['date'])
         evidence_note='; verified historical Git revision' if proof and proof['mode']=='git-history' else ''
-        if not proof: evidence_note='; evidence requires review'
+        if not proof:
+            reason=history.incomplete_since(verification_serial)
+            evidence_note='; evidence requires review'+('; historical verification incomplete ('+reason+')' if reason else '')
         try: reference=s.note_link(claim['source'],rel)
         except (ValueError,TypeError,UnicodeError): raise WikiIntegrityError(rel,index,'path') from None
         rendered.append(f'- **{claim["status"]}; source date {date}{evidence_note}:** {claim["text"]}\n  - Evidence: {reference} — '+json.dumps(claim['quote'],ensure_ascii=False))
@@ -1628,9 +1683,9 @@ def _source_note(row,topic_pages):
 
 def _publication_plan(packet,result,dispositions):
     ident=packet['batch_id']; result_hash=_json_hash(result); writes=[]
-    history=_EvidenceHistory()
     index=s.safe_path(BASE+'Index.md'); index_before=_current_hash(index)
     topic_pages={page['path']:page for page in _checked_pages()}
+    history=_EvidenceHistory()
     for page in result['pages']:
         rel,info,text,before=_render_topic(page,packet,ident,result_hash,history)
         _plan_write(writes,s.safe_path(rel),text,'wiki_compile',before)
@@ -1963,8 +2018,9 @@ def _index_and_log(ident,receipts,sources):
         s._write(log,text,'wiki_log')
 
 def lint():
-    issues=[]; historical=[]; equivalent=[]; history=_EvidenceHistory()
+    issues=[]; historical=[]; equivalent=[]
     allpages=pages(issues); known={p['path'] for p in allpages}
+    history=_EvidenceHistory()
     for p in allpages:
         try: _existing_topic_title(p)
         except WikiIntegrityError: issues.append({'page':p['path'],'issue':'malformed title metadata','field':'title'})
@@ -1989,6 +2045,7 @@ def lint():
                 issues.append({'page':p['path'],'issue':'malformed source path metadata','field':'source_hashes','source_index':source_index}); continue
             if not isinstance(h,str) or not re.fullmatch('[a-f0-9]{64}',h):
                 issues.append({'page':p['path'],'issue':'malformed source hash metadata','source':src}); continue
+            verification_serial=history.failure_serial
             proof=history.source(src,h)
             if proof and proof['mode']=='git-history':
                 # A hash alone is insufficient to bless historical attribution.
@@ -1997,7 +2054,10 @@ def lint():
                 proof=next((value for claim in claims if _valid_claim(claim) and claim['source']==src
                             if (value:=history.source(src,h,claim['quote'])) is not None),None)
             if not proof:
-                issues.append({'page':p['path'],'issue':'source missing or changed','source':src})
+                diagnostic={'page':p['path'],'issue':'source missing or changed','source':src}
+                reason=history.incomplete_since(verification_serial)
+                if reason: diagnostic['history_incomplete']=reason
+                issues.append(diagnostic)
             elif proof['mode']=='current' and proof['representation']!='exact':
                 equivalent.append({'page':p['path'],'source':src,'source_sha256':h,'representation':proof['representation']})
         related_paths=p['meta'].get('related',[])
@@ -2018,11 +2078,15 @@ def lint():
                 diagnostic={'page':p['path'],'issue':issue,'field':exc.field,'claim_index':index}
                 issues.append(diagnostic)
                 continue
+            verification_serial=history.failure_serial
             proof=history.claim(p,claim)
             if not proof:
                 current=history._current(claim['source'])
                 issue='source revision unverified' if current and normalized(claim['quote']) in current['text'] else 'evidence quote missing'
-                issues.append({'page':p['path'],'issue':issue,'source':claim['source'],'claim_index':index})
+                diagnostic={'page':p['path'],'issue':issue,'source':claim['source'],'claim_index':index}
+                reason=history.incomplete_since(verification_serial)
+                if reason: diagnostic['history_incomplete']=reason
+                issues.append(diagnostic)
             elif proof['mode']=='git-history':
                 historical.append({'page':p['path'],'source':claim['source'],'claim_index':index,
                     'source_sha256':proof['sha256'],'text_sha256':proof['text_sha256'],
@@ -2032,7 +2096,10 @@ def lint():
             'historical_evidence_count':len(historical),'verified_historical_evidence':historical[:100],
             'equivalent_source_revision_count':len(equivalent),'equivalent_source_revisions':equivalent[:100],
             'history_verification':{'max_commits_per_path':64,'max_git_commands':256,'max_git_blob_bytes':16_000_000,
-                                    'max_history_seconds':15,'git_commands':history.commands,'git_blob_bytes':history.bytes},
+                                    'max_history_seconds':15,'git_commands':history.commands,'git_blob_bytes':history.bytes,
+                                    'elapsed_seconds':round(time.monotonic()-history.started,4),
+                                    'incomplete_reason':history.first_failure_reason,
+                                    'negative_scope':'not found within at most 64 reachable commits per path'},
             'semantic_review':'exact current/historical evidence checks do not prove factual entailment, chronology or current employment/completion'}
     (cfg.STATE/'wiki-lint.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
     return report

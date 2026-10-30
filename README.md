@@ -64,6 +64,10 @@ service recover
 
 `index status` checks current eligible file paths and raw SHA, indexed body, persisted chunk fingerprints/model/vector rows, and a stable source inventory. Historical bootstrap success and equal row counts are insufficient. A retry uses one bootstrap lock and preserves prior status/history; `--full` is required for a stale checksum hidden by preserved size/mtime. Keep the actual receipt and recheck indexed retrieval. Original notes are not normalized or rewritten to make verification pass.
 
+`wiki lint` verifies exact current or reachable historical source bytes and quotes. Its optional history budget starts after the wiki page scan; the limits remain 15 seconds, 64 commits per path, 256 Git commands, 16 MB of blob bytes and 2 MB per blob. Legacy claims test recorded origins in their existing order and retain the first exact proof. A negative search covers only that bounded history, not every revision ever created.
+
+An issue's `history_incomplete` field distinguishes a deadline, command/blob limit or Git failure encountered during that check from an ordinary unverified revision. Existing issue names remain failures; an incomplete check never attests evidence. The report also records elapsed history time and the first incomplete reason. Preserve the notes and actual receipts while diagnosing this field. Missing current sources without a verified historical origin still stop publication for integrity review. Current-source checks and previously verified proofs remain usable after the optional history deadline.
+
 `brain_read` accepts exact vault-relative Markdown paths, optional `.md`, and full-path wikilinks. It does not guess a basename across the vault. Search for the real path, then read it; plain `#` in a filename stays literal.
 
 Do not reset SQLite, copy auth/WAL files between devices, kill cached PIDs, edit status to `verified`, run competing Git sync, alter accepted source exclusions or add another compiler schedule. Bulk imports need a reviewed inventory and a verified stopped window before publication, followed by current index acceptance.
