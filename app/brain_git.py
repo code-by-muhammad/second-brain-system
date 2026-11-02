@@ -6,12 +6,17 @@ import json
 import os
 import re
 import subprocess
+import sys
+import time
+import unicodedata
 import tempfile
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from filelock import FileLock
 import brain_store as s
+import brain_settings as cfg
+from brain_markdown import bounded_file_bytes
 
 FOLDERS={'00-Inbox','01-Projects','02-Areas','03-Resources','04-Archive','05-Daily','06-People','07-Meetings','Maps','Templates'}
 MIN_GIT=(2,38)
@@ -25,7 +30,110 @@ _WHITESPACE=re.compile(r'\s+')
 class GitSyncError(RuntimeError):
     """Controlled diagnostics: never include subprocess output or note contents."""
 
+def _hold_path():
+    path=s.STATE/'git-sync-hold.json'
+    if any(p.is_symlink() or os.path.isjunction(p) for p in (path,*path.parents)):
+        raise GitSyncError('paused: linked Git review state; preserve it for attended recovery.')
+    return path
+
+def _read_hold(vault):
+    path=_hold_path()
+    if not path.exists():return None
+    try:
+        raw=bounded_file_bytes(path,65536);value=json.loads(raw)
+        fields={'format','root','vault','branch','upstream','pre_head','expected_head','expected_tree','reason','created'}
+        if (not isinstance(value,dict) or set(value)!=fields or type(value['format']) is not int or value['format']!=1
+                or value['root']!=str(s.ROOT.resolve()) or value['vault']!=str(Path(vault).resolve())
+                or value['reason']!='checkout-pending-verification' or type(value['created']) not in (int,float)
+                or not isinstance(value['branch'],str) or not value['branch'].startswith('refs/remotes/origin/')
+                or len(value['branch'])>1024):raise ValueError()
+        for key in ('upstream','pre_head','expected_tree'):
+            if not isinstance(value[key],str) or not re.fullmatch(r'(?:[a-f0-9]{40}|[a-f0-9]{64})',value[key]):raise ValueError()
+        if value['expected_head'] not in ('',value['upstream']):raise ValueError()
+        return value,hashlib.sha256(raw).hexdigest()
+    except (OSError,ValueError,UnicodeError,RecursionError):
+        raise GitSyncError('paused: Git review state is invalid or unreadable; preserve it for attended recovery.') from None
+
+def _require_no_hold(vault):
+    if _read_hold(vault) is not None:
+        raise GitSyncError('paused: Git checkout requires attended review; use git status, inspect the commit and git review before retrying sync.')
+
+def _require_no_grafts(git,vault):
+    # Legacy grafts change ancestry traversal independently of replacement refs.
+    # Preserve them, but do not qualify automatic publication through that view.
+    value=git('rev-parse','--git-path','info/grafts').stdout.strip()
+    path=Path(value)
+    if not path.is_absolute():path=Path(vault)/path
+    if path.exists() or any(p.is_symlink() or os.path.isjunction(p) for p in (path,*path.parents)):
+        raise GitSyncError('paused: legacy Git grafts require attended repository recovery; original grafts preserved.')
+
+def _atomic_hold(path,value):
+    # Private state, not notes. The completed rename is process-crash safe;
+    # power-loss durability depends on the filesystem and Git ref durability.
+    _hold_path()
+    if path.parent!=s.STATE or path.is_symlink() or os.path.isjunction(path):
+        raise GitSyncError('paused: unsafe Git review state path.')
+    descriptor,name=tempfile.mkstemp(prefix='.git-review-',suffix='.tmp',dir=s.STATE)
+    try:
+        with os.fdopen(descriptor,'w',encoding='utf-8') as stream:
+            os.chmod(name,0o600)
+            json.dump(value,stream,ensure_ascii=True,allow_nan=False);stream.flush();os.fsync(stream.fileno())
+        os.replace(name,path)
+    except OSError:
+        raise GitSyncError('paused: Git review evidence could not be persisted; no automatic publication is permitted.') from None
+    finally:Path(name).unlink(missing_ok=True)
+
+def review(vault=None,*,head=None,tree=None,hold_sha256=None):
+    """Inspect or explicitly accept a reviewed checkout; never merge or push."""
+    vault=Path(vault or s.VAULT)
+    def git(*args,check=True):
+        result=_run_git(['git','--literal-pathspecs','-C',str(vault),*args],capture_output=True,text=True,encoding='utf-8',timeout=90,env={**os.environ,'GIT_OPTIONAL_LOCKS':'0'})
+        if check and result.returncode:raise GitSyncError('Git review inspection failed; hold preserved.')
+        return result
+    s.STATE.mkdir(parents=True,exist_ok=True)
+    with FileLock(str(s.STATE/'maintenance.lock'),timeout=1),FileLock(str(s.STATE/'git-sync.lock'),timeout=1),FileLock(str(s.STATE/'writer.lock'),timeout=30):
+        held=_read_hold(vault)
+        if held is None:
+            if any(v is not None for v in (head,tree,hold_sha256)):raise GitSyncError('No Git review hold exists; nothing accepted.')
+            return {'status':'clear'}
+        value,digest=held
+        _require_no_grafts(git,vault)
+        live_head=git('rev-parse','HEAD').stdout.strip();live_tree=git('rev-parse',live_head+'^{tree}').stdout.strip()
+        if all(v is None for v in (head,tree,hold_sha256)):
+            return {'status':'needs review','hold_sha256':digest,'head':live_head,'tree':live_tree,'hold':value}
+        cfg.write_admission()
+        if (head!=live_head or tree!=live_tree or hold_sha256!=digest
+                or not re.fullmatch(r'(?:[a-f0-9]{40}|[a-f0-9]{64})',head or '')
+                or not re.fullmatch(r'(?:[a-f0-9]{40}|[a-f0-9]{64})',tree or '')
+                or git('status','--porcelain','--untracked-files=all').stdout.strip()
+                or git('rev-parse','--verify','-q','MERGE_HEAD',check=False).returncode==0
+                or git('merge-base','--is-ancestor',value['pre_head'],head,check=False).returncode!=0):
+            raise GitSyncError('Git review fingerprint, ancestry or clean-worktree check failed; hold preserved.')
+        receipt={'format':1,'hold_sha256':digest,'hold':value,'reviewed_head':head,'reviewed_tree':tree,'reviewed_at':time.time()}
+        destination=s.STATE/('git-reviewed-'+os.urandom(16).hex()+'.json')
+        _atomic_hold(destination,receipt)
+        if _read_hold(vault)!=held:raise GitSyncError('Git review state changed; hold preserved.')
+        # Receipt is durable before removing the blocker. A crash before removal
+        # leaves the hold; the next normal maintenance pass alone owns publishing.
+        _hold_path().unlink()
+        return {'status':'review accepted','head':head,'tree':tree,'receipt':str(destination),'published':False}
+
 _CLEANUP_REPORTER=ContextVar('git_cleanup_reporter',default=None)
+
+def git_executable(env=None):
+    """Search absolute PATH entries only; never execute a vault/cwd shim."""
+    environment=os.environ if env is None else env
+    forbidden=(s.ROOT,s.STATE,s.VAULT,Path.cwd(),Path(sys.executable).parent)
+    for entry in environment.get('PATH','').split(os.pathsep):
+        folder=Path(entry.strip('"'))
+        if not entry or not folder.is_absolute():continue
+        candidate=folder/('git.exe' if os.name=='nt' else 'git')
+        if not candidate.is_file() or any(item.is_symlink() or os.path.isjunction(item) for item in (candidate,*candidate.parents)):continue
+        selected=candidate.resolve()
+        if any(selected.is_relative_to(Path(parent).resolve()) for parent in forbidden):continue
+        if os.name!='nt' and not os.access(selected,os.X_OK):continue
+        return str(selected)
+    raise FileNotFoundError('Install Git outside the vault, runtime, current directory and Python folder; use an absolute host PATH entry.')
 
 @contextmanager
 def cleanup_reporting(callback):
@@ -39,7 +147,9 @@ def _run_git(command,**kwargs):
     command[1:1]=['-c','core.fsmonitor=false']
     env=kwargs.get('env')
     kwargs['env']=dict(os.environ if env is None else env)
-    kwargs['env'].update(GIT_TERMINAL_PROMPT='0',GCM_INTERACTIVE='0')
+    kwargs['env'].update(GIT_TERMINAL_PROMPT='0',GCM_INTERACTIVE='0',GIT_NO_REPLACE_OBJECTS='1')
+    kwargs['env'].pop('GIT_GRAFT_FILE',None)
+    command[0]=git_executable(kwargs['env'])
     if os.name=='nt':
         from brain_windows_process import run
         try:return run(command,on_cleanup_wait=_CLEANUP_REPORTER.get(),**kwargs)
@@ -108,10 +218,10 @@ def _note_locator(relative):
 def _windows_note_path(relative):
     """Screen raw components for shared Windows checkout; never normalize them."""
     for part in relative.split('/'):
-        if part.endswith((' ','.')) or any(ord(c)<32 or c in '<>:"|?*\\' for c in part):
+        if not part or part in ('.','..') or part.endswith((' ','.')) or any(ord(c)<32 or c in '<>:"|?*\\' for c in part):
             return False
         stem=part.split('.',1)[0].rstrip(' ').upper()
-        if stem in {'CON','PRN','AUX','NUL','CONIN$','CONOUT$','LPT0'} or (
+        if stem in {'CON','PRN','AUX','NUL','CONIN$','CONOUT$','COM0','LPT0'} or (
                 len(stem)==4 and stem[:3] in {'COM','LPT'} and stem[3] in '123456789¹²³'):
             return False
     return True
@@ -152,26 +262,94 @@ def _windows_checkout_pause(relative):
 def _incoming_note_path(vault,oid):
     """Screen a pinned fetched tree before checkout, with bounded decoded input."""
     try:
+        deadline=time.monotonic()+90
+        def remaining():
+            value=deadline-time.monotonic()
+            if value<=0:raise GitSyncError('paused: Checkout preflight exceeded its work budget; originals preserved.')
+            return value
+        def collision_key(relative):return unicodedata.normalize('NFC',relative).casefold()
         if not re.fullmatch(r'[a-f0-9]{40}|[a-f0-9]{64}',oid): raise ValueError('identity')
         env=os.environ.copy()
         env.update(GIT_ALLOW_PROTOCOL='',GIT_NO_LAZY_FETCH='1',GIT_TERMINAL_PROMPT='0',
                    GIT_NO_REPLACE_OBJECTS='1',GIT_OPTIONAL_LOCKS='0')
-        command=['git','--literal-pathspecs','-C',str(vault),'ls-tree','-r','-z','--name-only',oid]
+        command=['git','--literal-pathspecs','-C',str(vault),'ls-tree','-r','-z',oid]
         with tempfile.TemporaryFile(mode='w+b') as stream:
-            result=_run_git(command,stdout=stream,stderr=subprocess.DEVNULL,env=env,timeout=90)
+            result=_run_git(command,stdout=stream,stderr=subprocess.DEVNULL,env=env,timeout=remaining())
             if result.returncode or os.fstat(stream.fileno()).st_size>TREE_PATH_BYTES_LIMIT: raise ValueError('tree')
-            stream.seek(0);pending=b'';longpaths=None
+            stream.seek(0);pending=b'';longpaths=None;folded={};prefix_bytes=0;checkout_key_bytes=0;leaves={};directories={};checked=set()
             for chunk in iter(lambda:stream.read(65536),b''):
                 rows=(pending+chunk).split(b'\0');pending=rows.pop()
                 if len(pending)>1_048_576: raise ValueError('path')
                 for raw in rows:
+                    remaining()
                     if len(raw)>1_048_576: raise ValueError('path')
+                    metadata,raw=raw.split(b'\t',1)
+                    mode,kind,object_id=metadata.split()
+                    if mode not in (b'100644',b'100755') or kind!=b'blob':
+                        raise GitSyncError('paused: Incoming tree contains a linked or submodule entry; originals preserved, no checkout performed.')
+                    if not re.fullmatch(rb'[a-f0-9]{40}|[a-f0-9]{64}',object_id):raise ValueError('tree object identity')
                     relative=raw.decode('utf-8')
+                    parts=relative.split('/')
+                    if len(parts)>128 or len(raw)>32768:raise ValueError('tree path work limit')
                     if not _windows_note_path(relative): return relative
+                    for length in range(1,len(parts)+1):
+                        prefix='/'.join(parts[:length])
+                        if prefix not in checked:
+                            checked.add(prefix)
+                            target=vault.joinpath(*parts[:length])
+                            if target.is_symlink() or os.path.isjunction(target):
+                                raise GitSyncError('paused: Incoming checkout crosses a linked local path '+_note_locator(prefix)+'; originals preserved.')
+                    canonical=relative
+                    if os.name=='nt' and '~' in relative:
+                        canonical=(vault/relative).resolve().relative_to(vault.resolve()).as_posix()
+                    if len(canonical.encode('utf-8'))>32768 or len(canonical.split('/'))>128:raise ValueError('checkout alias work limit')
+                    key=collision_key(canonical)
+                    if key in leaves:
+                        raise GitSyncError('paused: Conservative candidate-tree collision between '+_note_locator(leaves[key])+' and '+_note_locator(relative)+'; originals preserved.')
+                    checkout_key_bytes+=len(key.encode('utf-8'))
+                    leaves[key]=relative
+                    canonical_parts=canonical.split('/')
+                    for length in range(1,len(canonical_parts)):
+                        parent_key=collision_key('/'.join(canonical_parts[:length]))
+                        if parent_key not in directories:
+                            checkout_key_bytes+=len(parent_key.encode('utf-8'));directories[parent_key]=relative
+                    if checkout_key_bytes>TREE_PATH_BYTES_LIMIT or len(leaves)+len(directories)>500_000:raise ValueError('checkout key work limit')
+                    for length in range(1,len(parts)+1):
+                        prefix='/'.join(parts[:length]);key=prefix.casefold()
+                        if key in folded and folded[key]!=prefix:
+                            raise GitSyncError('paused: Conservative case-insensitive candidate-tree collision: '+_note_locator(folded[key])+' and '+_note_locator(prefix)+'. Originals and local staging preserved; no checkout performed.')
+                        if key not in folded:
+                            prefix_bytes+=len(prefix.encode('utf-8'))+len(key.encode('utf-8'))
+                            if prefix_bytes>TREE_PATH_BYTES_LIMIT or len(folded)>=500_000:raise ValueError('case tree work limit')
+                            folded[key]=prefix
                     if os.name=='nt' and longpaths is not True and not _windows_checkout_path(vault,relative):
                         if longpaths is None: longpaths=_windows_longpaths(vault)
                         if not longpaths: return relative
             if pending: raise ValueError('tree')
+        # Git's true-merge path may overwrite ignored files even with
+        # --no-overwrite-ignore. Screen every untracked path before checkout.
+        command=['git','--literal-pathspecs','-C',str(vault),'ls-files','--others','-z']
+        with tempfile.TemporaryFile(mode='w+b') as stream:
+            result=_run_git(command,stdout=stream,stderr=subprocess.DEVNULL,env=env,timeout=remaining())
+            if result.returncode or os.fstat(stream.fileno()).st_size>TREE_PATH_BYTES_LIMIT:
+                raise GitSyncError('paused: Untracked checkout inventory exceeds its bound or is unavailable; originals preserved.')
+            stream.seek(0);pending=b'';count=0
+            for chunk in iter(lambda:stream.read(65536),b''):
+                rows=(pending+chunk).split(b'\0');pending=rows.pop()
+                if len(pending)>32768:raise GitSyncError('paused: Untracked checkout path exceeds its bound; originals preserved.')
+                for raw in rows:
+                    remaining();count+=1
+                    if count>500_000 or len(raw)>32768:raise GitSyncError('paused: Untracked checkout inventory exceeds its bound; originals preserved.')
+                    relative=raw.decode('utf-8').rstrip('/');parts=relative.split('/')
+                    if not relative or len(parts)>128:raise ValueError('untracked path')
+                    key=collision_key(relative);incoming=leaves.get(key) or directories.get(key)
+                    if incoming is None:
+                        incoming=next((leaves[collision_key('/'.join(parts[:length]))] for length in range(1,len(parts))
+                                       if collision_key('/'.join(parts[:length])) in leaves),None)
+                    if incoming is not None:
+                        raise GitSyncError('paused: Untracked local path '+_note_locator(relative)+' blocks incoming checkout '+_note_locator(incoming)+
+                                           '; originals, HEAD and index preserved. Review this collision explicitly.')
+            if pending:raise ValueError('untracked framing')
     except (OSError,ValueError,subprocess.TimeoutExpired):
         raise GitSyncError('Incoming note paths could not be verified locally; local changes preserved. Inspect the local repository and its bounded tree-name output before retrying.') from None
 
@@ -349,6 +527,9 @@ def sync(vault=None):
         if not match or tuple(map(int,match.groups()))<MIN_GIT:
             raise GitSyncError('Git >= 2.38 is required for safe merge-tree preflight; upgrade Git before synchronization.')
         with FileLock(str(s.STATE/'writer.lock'),timeout=30):
+            _require_no_hold(vault)
+            cfg.write_admission()
+            _require_no_grafts(git,vault)
             if staged_paths(): return 'paused: existing staged changes preserved'
             if pause:=casing_pause(check_windows=False): return pause
             candidates=git('ls-files','--modified','--others','--exclude-standard','-z').stdout.split('\0')
@@ -401,14 +582,17 @@ def sync(vault=None):
                 except Exception:
                     undo_owned_staging(owned)
                     raise
-            if git('status','--porcelain').stdout.strip():
+            if git('status','--porcelain','--untracked-files=all').stdout.strip():
                 return 'paused: other local changes or source deletions require review'
 
         git('fetch','origin')
         with FileLock(str(s.STATE/'writer.lock'),timeout=30):
+            _require_no_hold(vault)
+            cfg.write_admission()
+            _require_no_grafts(git,vault)
             # Captures can arrive while fetch waits. Never merge over new files or
             # user staging; leave them for the next normal maintenance cycle.
-            if git('status','--porcelain').stdout.strip():
+            if git('status','--porcelain','--untracked-files=all').stdout.strip():
                 return 'paused: local changes arrived during fetch; retry next cycle'
             upstream_ref=git('rev-parse','--symbolic-full-name','@{upstream}').stdout.strip()
             if not upstream_ref.startswith('refs/remotes/origin/'):
@@ -423,10 +607,36 @@ def sync(vault=None):
                     return 'paused: conflicting device edits; originals preserved for review'
                 if result.returncode:
                     raise GitSyncError('Git merge-tree preflight failed (exit '+str(result.returncode)+'); Git >= 2.38 is required. Inspect repository health; originals preserved.')
-                git('merge','--no-edit',upstream)
-            elif behind: git('merge','--ff-only',upstream)
+                tree=result.stdout.splitlines()[0].strip()
+                if (invalid:=_incoming_note_path(vault,tree)) is not None:
+                    return _windows_path_pause(invalid) if not _windows_note_path(invalid) else _windows_checkout_pause(invalid)
+                expected_tree=tree
+            elif behind:
+                expected_tree=git('rev-parse',upstream+'^{tree}').stdout.strip()
+            else:expected_tree=None
+            if expected_tree:
+                pre_head=git('rev-parse','HEAD').stdout.strip()
+                intent={'format':1,'root':str(s.ROOT.resolve()),'vault':str(vault.resolve()),'branch':upstream_ref,
+                        'upstream':upstream,'pre_head':pre_head,'expected_head':'' if ahead else upstream,
+                        'expected_tree':expected_tree,'reason':'checkout-pending-verification','created':time.time()}
+                _atomic_hold(_hold_path(),intent)
+                held=_read_hold(vault)
+                if ahead:git('merge','--strategy=ort','--no-overwrite-ignore','--no-edit',upstream)
+                else:git('merge','--no-overwrite-ignore','--ff-only',upstream)
+                actual_head=git('rev-parse','HEAD').stdout.strip()
+                if not re.fullmatch(r'(?:[a-f0-9]{40}|[a-f0-9]{64})',actual_head):raise GitSyncError('paused: invalid checkout commit; review hold retained.')
+                _require_no_grafts(git,vault)
+                parents=git('rev-list','--parents','-n','1',actual_head).stdout.split()[1:]
+                if (git('rev-parse',actual_head+'^{tree}').stdout.strip()!=expected_tree
+                        or (not ahead and actual_head!=upstream)
+                        or (ahead and parents!=[pre_head,upstream])
+                        or git('status','--porcelain','--untracked-files=all').stdout.strip()
+                        or git('rev-parse','--verify','-q','MERGE_HEAD',check=False).returncode==0):
+                    raise GitSyncError('paused: checked-out merge differs from its screened result; durable Git review hold retained.')
+                if _read_hold(vault)!=held:raise GitSyncError('paused: Git checkout evidence changed; review required.')
+                _hold_path().unlink()
             if pause:=casing_pause(): return pause
-            head=git('rev-parse','HEAD').stdout.strip()
+            head=actual_head if expected_tree else git('rev-parse','HEAD').stdout.strip()
             branch=upstream_ref.removeprefix('refs/remotes/origin/')
         # Pin the verified commit; unrelated external commits made during network
         # waits cannot accidentally be pushed by this cycle.

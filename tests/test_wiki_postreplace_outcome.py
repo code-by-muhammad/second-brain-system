@@ -20,7 +20,7 @@ def test_actual_postreplace_failure_retains_hold_when_owner_restores_beforeimage
     before=topic.read_bytes() if topic.exists() else None
     index=s.VAULT/w.BASE/'Index.md';index_before=index.read_bytes() if index.exists() else None
     folder=cfg.STATE/'wiki/batches'/packet['batch_id'];source_raw=source.read_bytes()
-    calls=fake_model(monkeypatch,explicit(packet,result));native_open=Path.open;native_exists=s.os.path.exists;native_unlink=s.os.unlink;native_replace=s.os.replace;native_write=s._write;native_stamp=s.stamp
+    calls=fake_model(monkeypatch,explicit(packet,result));native_open=Path.open;native_exists=s.os.path.exists;native_unlink=s.os.unlink;native_replace=s.os.replace;native_rename=s.os.rename;native_write=s._write;native_stamp=s.stamp
     fired=False;published=None;owner=b'# Owner Index retained after real replacement\n';error=OSError('Synthetic failure after successful replacement')
     def change_owner():
         nonlocal fired,published
@@ -52,7 +52,7 @@ def test_actual_postreplace_failure_retains_hold_when_owner_restores_beforeimage
         if failure=='cleanup-check' and not fired and is_temp(path) and topic.is_file():change_owner();raise error
         return native_exists(path)
     def replace(src,dst):
-        result=native_replace(src,dst)
+        result=(native_rename if not existing and Path(dst)==topic else native_replace)(src,dst)
         if failure=='cleanup-unlink' and Path(dst)==topic:Path(src).write_bytes(b'Synthetic raced temporary file')
         return result
     def unlink(path,*args,**kwargs):
@@ -63,7 +63,7 @@ def test_actual_postreplace_failure_retains_hold_when_owner_restores_beforeimage
         if failure=='caller-verification' and path==topic and not fired:change_owner()
         return receipt
     with monkeypatch.context() as fault:
-        fault.setattr(Path,'open',audit);fault.setattr(s.os.path,'exists',exists);fault.setattr(s.os,'replace',replace);fault.setattr(s.os,'unlink',unlink);fault.setattr(s,'_write',after_return);fault.setattr(s,'stamp',stamp)
+        fault.setattr(Path,'open',audit);fault.setattr(s.os.path,'exists',exists);fault.setattr(s.os,'replace',replace);fault.setattr(s.os,'rename',replace);fault.setattr(s.os,'unlink',unlink);fault.setattr(s,'_write',after_return);fault.setattr(s,'stamp',stamp)
         with pytest.raises(OSError) as caught:w.run()
     assert fired and len(calls)==1 and source.read_bytes()==source_raw
     if failure!='caller-verification':assert caught.value is error and str(caught.value)=='Synthetic failure after successful replacement'

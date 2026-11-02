@@ -18,7 +18,7 @@ def main():
     # Embedded callers may replace stdout with a text-only stream such as StringIO.
     if hasattr(sys.stdout,'reconfigure'): sys.stdout.reconfigure(encoding='utf-8')
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command',choices=['health','search','read','wiki','service','index'])
+    parser.add_argument('command',choices=['health','search','read','wiki','service','index','git'])
     parser.add_argument('action',nargs='?',default='status'); parser.add_argument('--limit',type=int,default=4)
     parser.add_argument('--apply',action='store_true',help='Apply an explicitly reviewed legacy migration.')
     parser.add_argument('--requeue-unverified',action='store_true',help='Keep unverified legacy parts pending instead of claiming completion.')
@@ -26,10 +26,14 @@ def main():
     parser.add_argument('--overall-seconds',type=int,default=28800)
     parser.add_argument('--stall-seconds',type=int,default=1800)
     parser.add_argument('--hold-id')
+    parser.add_argument('--executable',help='Explicit native codex.exe for maintainer wiki configure-model; no model call.')
     parser.add_argument('--snapshot')
     parser.add_argument('--since',type=int)
     parser.add_argument('--allow-legacy',action='store_true')
     parser.add_argument('--expected-version')
+    parser.add_argument('--head',help='Full reviewed Git commit fingerprint; git review only.')
+    parser.add_argument('--tree',help='Full reviewed Git tree fingerprint; git review only.')
+    parser.add_argument('--hold-sha256',help='Exact private hold digest reported by git status.')
     parser.add_argument('--wait-seconds',type=int,default=30,help='Service stop admission/exit wait budget, 1–300 seconds; busy writers are preserved.')
     args=parser.parse_args()
     if args.command=='health': result=asyncio.run(mcp_call('brain_health',{}))
@@ -50,11 +54,21 @@ def main():
         elif args.action=='prepare': result=wiki.prepare(args.limit)
         elif args.action=='lint': result=wiki.lint()
         elif args.action=='migrate':
-            result=wiki.migrate_legacy_receipts(requeue_unverified=args.requeue_unverified,dry_run=not args.apply)
-        elif args.action=='relink': result=wiki.rebuild_source_links()
+            result=wiki.migrate_legacy_receipts(requeue_unverified=args.requeue_unverified,dry_run=not args.apply,hold_id=args.hold_id)
+        elif args.action=='relink': result=wiki.rebuild_source_links(hold_id=args.hold_id)
         elif args.action=='retry':
             result=wiki.reset_retries()
-        else: parser.error('wiki action: status, run, prepare, lint, retry, migrate, relink')
+        elif args.action=='configure-model':
+            if not args.executable:parser.error('wiki configure-model requires --executable.')
+            result=wiki.configure_model(args.executable)
+        else: parser.error('wiki action: status, run, prepare, lint, retry, migrate, relink, configure-model')
+    elif args.command=='git':
+        import brain_git
+        if args.action=='status': result=brain_git.review()
+        elif args.action=='review':
+            if not all((args.head,args.tree,args.hold_sha256)):parser.error('git review requires --head, --tree and --hold-sha256 after attended inspection.')
+            result=brain_git.review(head=args.head,tree=args.tree,hold_sha256=args.hold_sha256)
+        else:parser.error('git action: status, review')
     else:
         import brain_service as service
         if args.action=='install': result=service.install()

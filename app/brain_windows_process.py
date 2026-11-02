@@ -1,6 +1,6 @@
-"""Private Windows Git runner: atomic Job association and file-backed stdio.
+"""Private Windows child runner: atomic Job association and file-backed stdio.
 
-This is the small subprocess.run subset used by brain_git, not a shell runner.
+Used for Git, installer/controller and model children; never a shell runner.
 Windows 10+ is required. No product imports and no Win32 calls occur on import.
 """
 import ctypes
@@ -12,6 +12,9 @@ import shutil
 import subprocess
 import tempfile
 import time
+import json
+import sys
+from pathlib import Path
 
 
 class _StartupInfo(ctypes.Structure):
@@ -105,9 +108,12 @@ class _LifetimeTracker:
     """Require object-lifetime evidence, not only Job accounting, for release.
 
     Positive member handles remain open until completion, preventing their PID
-    from being recycled. A trusted NEW_PROCESS notice plus valid absence proof
-    may fill one already-gone slot; snapshots alone may not. If a later positive
-    member reuses that gone PID, its row also retains the proven prior lifetime.
+    from being recycled. Trusted private-port NEW/EXIT sequences also distinguish
+    earlier lifetimes reusing the same PID before its retained handle was opened.
+    A second NEW without an intervening EXIT is ambiguous and holds permanently;
+    packet retries/snapshots never count as additional births. This relies on the
+    kernel's per-process event ordering on the exclusive FIFO completion port.
+    Missing notices or ambiguous nested-job notification sequences remain holds.
     Missing notifications or uncertain identity reduce availability, never the
     amount of evidence required before caller locks can be released.
     """
@@ -118,6 +124,7 @@ class _LifetimeTracker:
         self._root_handle=None;self._root_pid=None
         self._capacity=16;self._snapshot_cursor=0;self._pending_cursor=0;self._wait_cursor=0
         self._uncertain=False;self._maximum_total=0;self._coverage_invalid=False
+        self._new_packets={};self._last_packet={};self._last_accounting=None
 
     def associate(self):
         # Unnamed, noninherited and exclusive to this still-empty private Job.
@@ -217,8 +224,20 @@ class _LifetimeTracker:
                 error=ctypes.get_last_error()
                 if value.value is None and error==258:return
                 raise ctypes.WinError(error)
-            if key.value!=1:raise OSError('Unexpected private Job completion key.')
-            if message.value==6:self._attempt(self._pid(int(value.value or 0)),True)
+            if key.value!=1:
+                self._coverage_invalid=True
+                raise OSError('Unexpected private Job completion key.')
+            if message.value in (6,7,8):
+                try:pid=self._pid(int(value.value or 0))
+                except BaseException:
+                    self._coverage_invalid=True
+                    raise
+                if message.value==6:
+                    if self._last_packet.get(pid)==6:self._coverage_invalid=True
+                    self._new_packets[pid]=self._new_packets.get(pid,0)+1
+                    self._last_packet[pid]=6
+                    self._attempt(pid,True)
+                else:self._last_packet[pid]=message.value
             # EXIT_PROCESS and ACTIVE_PROCESS_ZERO are hints, never lifetime
             # completion evidence; only a signaled retained handle proves exit.
 
@@ -284,8 +303,17 @@ class _LifetimeTracker:
         total=int(accounting.TotalProcesses)
         if total<self._maximum_total:self._coverage_invalid=True
         self._maximum_total=max(self._maximum_total,total)
-        covered=len(self._members)+sum(row.get('prior_gone_slot') is True for row in self._members.values())
+        covered=sum(max(1+int(row.get('prior_gone_slot') is True),self._new_packets.get(pid,0))
+                    for pid,row in self._members.items())
+        self._last_accounting={'total':total,'active':int(accounting.ActiveProcesses),'covered':covered}
         return not self._coverage_invalid and accounting.ActiveProcesses==0 and total==covered
+
+    def diagnostic(self):
+        return {'event':'owned_process_cleanup_pending','members':len(self._members),
+                'signaled':sum(row['signaled'] for row in self._members.values()),
+                'pending':len(self._pending),'new_packets':sum(self._new_packets.values()),
+                'uncertain':self._uncertain,'coverage_invalid':self._coverage_invalid,
+                'accounting':self._last_accounting}
 
     def close(self):
         for row in self._members.values():
@@ -305,7 +333,7 @@ def _cleanup_owned(api,job,process,on_cleanup_wait,tracker):
     owning process retries, and reports only a fixed diagnostic once. This
     deliberately has no second deadline that could abandon live descendants.
     """
-    next_report=time.monotonic()+0.5;notified=False
+    next_report=time.monotonic()+0.5;notified=False;last_diagnostic=None;diagnostics_left=16
     while True:
         try:
             try:
@@ -315,12 +343,20 @@ def _cleanup_owned(api,job,process,on_cleanup_wait,tracker):
                 api.TerminateJobObject(job,1)
                 if _empty(api,job,process,tracker):return
             except BaseException:pass
-            if not notified and time.monotonic()>=next_report:
+            if time.monotonic()>=next_report:
+                if diagnostics_left:
+                    try:
+                        diagnostic=tracker.diagnostic()
+                        if diagnostic!=last_diagnostic:
+                            print(json.dumps(diagnostic,sort_keys=True),file=sys.stderr,flush=True)
+                            last_diagnostic=diagnostic;diagnostics_left-=1
+                    except BaseException:pass
+                if not notified:
+                    try:
+                        if on_cleanup_wait is not None:on_cleanup_wait()
+                    except BaseException:pass
+                    else:notified=True
                 next_report=time.monotonic()+1
-                try:
-                    if on_cleanup_wait is not None:on_cleanup_wait()
-                except BaseException:pass
-                else:notified=True
             time.sleep(0.05)
         except BaseException:
             # Includes interruption: neither cancellation nor an API failure
@@ -356,7 +392,8 @@ def _output(stream,destination,text,encoding):
 
 
 def run(command,*,input=None,capture_output=False,stdout=None,stderr=None,text=False,
-        encoding=None,env=None,timeout=90,on_cleanup_wait=None,on_tick=None,direct_output=False):
+        encoding=None,env=None,timeout=90,on_cleanup_wait=None,on_tick=None,direct_output=False,
+        cwd=None,on_started=None,max_output_bytes=64*1024*1024):
     """Run current Git call shapes, with one deadline for direct + descendant work.
 
     Regular temporary files replace all pipe ends, including stdin. The only
@@ -379,11 +416,16 @@ def run(command,*,input=None,capture_output=False,stdout=None,stderr=None,text=F
         raise ValueError('Direct process output requires private binary log files.')
     if not isinstance(timeout,(int,float)) or not math.isfinite(timeout) or timeout<=0:
         raise ValueError('A positive finite Git deadline is required.')
+    if type(max_output_bytes) is not int or not 1<=max_output_bytes<=64*1024*1024:
+        raise ValueError('A bounded process output budget is required.')
+    working=None if cwd is None else Path(cwd)
+    if working is not None and (not working.is_absolute() or not working.is_dir() or working.is_symlink() or working.is_junction() or working.resolve()!=working):
+        raise ValueError('Use a plain absolute working directory.')
     arguments=[os.fsdecode(value) for value in command]
     if not arguments or any('\x00' in value for value in arguments):raise ValueError('Invalid command arguments.')
     environment=dict(os.environ if env is None else env)
     application=shutil.which(arguments[0],path=environment.get('PATH'))
-    if not application:raise FileNotFoundError('Git executable is unavailable.')
+    if not application:raise FileNotFoundError('Process executable is unavailable.')
     application=os.path.abspath(application)
     line=ctypes.create_unicode_buffer(subprocess.list2cmdline(arguments))
     block=_environment(environment)
@@ -430,11 +472,15 @@ def run(command,*,input=None,capture_output=False,stdout=None,stderr=None,text=F
             # before any child can run; there is no uncontained fallback.
             if time.monotonic()>=deadline:raise subprocess.TimeoutExpired(arguments,timeout)
             _checked(api.CreateProcessW(application,line,None,None,True,0x00080000|0x00000400|0x08000000,
-                                        block,None,ctypes.byref(startup),ctypes.byref(process)))
+                                        block,str(working) if working is not None else None,ctypes.byref(startup),ctypes.byref(process)))
+            if on_started is not None:on_started()
             api.DeleteProcThreadAttributeList(attributes);attributes_initialized=False
             for handle in inherited:api.CloseHandle(handle)
             inherited.clear()
             while True:
+                observed=(stdout,stderr) if direct_output else (outgoing,errors)
+                if any(os.fstat(stream.fileno()).st_size>max_output_bytes for stream in observed):
+                    raise OSError('Owned process output exceeded its private budget; cleanup required.')
                 remaining=deadline-time.monotonic()
                 if remaining<=0:raise subprocess.TimeoutExpired(arguments,timeout)
                 if _empty(api,job,process.hProcess,tracker):break
@@ -464,6 +510,8 @@ def run(command,*,input=None,capture_output=False,stdout=None,stderr=None,text=F
                         if api.WaitForSingleObject(process.hProcess,0)!=0:raise
                     next_tick=time.monotonic()+1
             verified_empty=True
+            if any(os.fstat(stream.fileno()).st_size>max_output_bytes for stream in ((stdout,stderr) if direct_output else (outgoing,errors))):
+                raise OSError('Owned process output exceeded its private budget.')
             if root_exit_code is None:
                 code=wt.DWORD();_checked(api.GetExitCodeProcess(process.hProcess,ctypes.byref(code)))
                 root_exit_code=int(code.value)

@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from test_wiki_remediation import model_process_stub
 
 import pytest
 import brain_settings as cfg
@@ -54,7 +55,6 @@ def damage_input(folder, corruption):
 def dynamic_skip_model(monkeypatch):
     """Real validation/publication paths, deterministic evidence-backed fake model."""
     calls = []
-    monkeypatch.setattr(w.shutil, 'which', lambda name: 'synthetic-codex')
     class Process:
         returncode = 0
         def __init__(self, command, **kwargs):
@@ -67,7 +67,7 @@ def dynamic_skip_model(monkeypatch):
                  'reason': 'Synthetic administrative evidence explicitly reviewed without a reusable topic.',
                  'quote': part['text'].strip()[:120]} for part in packet['sources']]}
             self.output.write_text(json.dumps(result), encoding='utf-8')
-    monkeypatch.setattr(w.subprocess, 'Popen', Process)
+    model_process_stub(monkeypatch, Process)
     return calls
 
 

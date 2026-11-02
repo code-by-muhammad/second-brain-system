@@ -6,6 +6,7 @@ MCP or reading authentication. Existing MCP integration tests retain that gate.
 import ast
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -26,23 +27,62 @@ def health_function():
     exec(compile(ast.fix_missing_locations(ast.Module(body=[function],type_ignores=[])),str(source),'exec'),namespace)
     return namespace['brain_health']
 
+@pytest.mark.parametrize('component',['wiki','index'])
+@pytest.mark.parametrize('error',[MemoryError,RuntimeError])
+def test_fatal_health_failures_remain_visible(brain,monkeypatch,component,error):
+    def fail(*args,**kwargs):raise error('Synthetic internal fault')
+    if component=='wiki':monkeypatch.setattr(wiki,'_worker_summary',fail)
+    else:
+        import sqlite3
+        monkeypatch.setattr(sqlite3,'connect',fail)
+    with pytest.raises(error):health_function()()
+
 
 def fault_reader(monkeypatch, path, mode):
     if mode == 'read-error':
-        original = Path.read_text
+        original = Path.open;seen=[]
         def read(self,*args,**kwargs):
-            if self == path:
+            if self == path and not seen:
+                seen.append(True)
                 raise OSError('Synthetic private cache detail.')
             return original(self,*args,**kwargs)
-        monkeypatch.setattr(Path,'read_text',read)
+        monkeypatch.setattr(Path,'open',read)
+        if os.name!='nt':
+            native_open=os.open
+            def read_native(file,*args,**kwargs):
+                if Path(file)==path and not seen:
+                    seen.append(True);raise OSError('Synthetic private cache detail.')
+                return native_open(file,*args,**kwargs)
+            monkeypatch.setattr(os,'open',read_native)
     elif mode in ('recursion','runtime','memory'):
         original = json.loads
         error = {'recursion':RecursionError,'runtime':RuntimeError,'memory':MemoryError}[mode]
         def loads(value,*args,**kwargs):
-            if value == '{"synthetic_cache_fault":true}':
+            if value in ('{"synthetic_cache_fault":true}',b'{"synthetic_cache_fault":true}'):
                 raise error('Synthetic private decoder detail.')
             return original(value,*args,**kwargs)
         monkeypatch.setattr(json,'loads',loads)
+
+@pytest.mark.parametrize('component',['worker','maintenance','bootstrap'])
+@pytest.mark.parametrize('kind',['symlink','junction'])
+def test_dangling_cache_links_report_attention_without_open(brain,monkeypatch,component,kind):
+    names={'worker':'wiki-worker-status.json','maintenance':'maintenance-status.json','bootstrap':'index-bootstrap-status.json'}
+    path=brain[1]/names[component]
+    assert not path.exists()
+    method='is_symlink' if kind=='symlink' else 'is_junction';original=getattr(Path,method)
+    monkeypatch.setattr(Path,method,lambda self:self==path or original(self))
+    original_open=Path.open;native_open=os.open
+    def no_open(self,*args,**kwargs):
+        if self==path:pytest.fail('Dangling cache link must not be opened')
+        return original_open(self,*args,**kwargs)
+    def no_native(file,*args,**kwargs):
+        if Path(file)==path:pytest.fail('Dangling cache link must not be opened')
+        return native_open(file,*args,**kwargs)
+    monkeypatch.setattr(Path,'open',no_open)
+    if os.name!='nt':monkeypatch.setattr(os,'open',no_native)
+    value=health_function()()
+    if component=='worker':assert value['wiki']['worker']['attention_required'] is True
+    else:assert value['maintenance' if component=='maintenance' else 'initial_index_validation']['status']=='needs attention'
 
 
 @pytest.mark.parametrize('component', ['maintenance','bootstrap'])
@@ -60,7 +100,8 @@ def test_component_cache_failure_keeps_full_health_available_and_original_bytes(
     result = health_function()()
     value = result['maintenance' if component == 'maintenance' else 'initial_index_validation']
     assert isinstance(value,dict) and value['status'] == 'needs attention'
-    assert result['version'] == cfg.VERSION and result['wiki'] == {'status':'idle'}
+    assert result['version'] == cfg.VERSION and result['wiki']['worker']['status']=='idle'
+    assert result['wiki']['coverage'].startswith('not checked')
     assert 'index' in result
     assert 'Synthetic private' not in json.dumps(result)
     assert hashlib.sha256(path.read_bytes()).hexdigest() == before

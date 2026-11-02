@@ -43,13 +43,13 @@ def git(*args,input=None,canonical=False):
 @pytest.mark.parametrize('scenario',['forged-body','canonical-old','no-replacement-control'])
 def test_historical_proof_uses_canonical_objects_not_local_replacement_views(brain,monkeypatch,scenario):
     monkeypatch.setenv('GIT_NO_REPLACE_OBJECTS','0')
-    original_popen=w._GIT_POPEN; calls=[]
+    original_popen=w._GIT_RUN; calls=[]
     def inspect_git(*args,**kwargs):
         env=kwargs['env']; calls.append(env)
         assert env['GIT_NO_REPLACE_OBJECTS']=='1' and env['GIT_ALLOW_PROTOCOL']==''
         assert env['GIT_NO_LAZY_FETCH']=='1' and env['GIT_OPTIONAL_LOCKS']=='0'
         return original_popen(*args,**kwargs)
-    monkeypatch.setattr(w,'_GIT_POPEN',inspect_git)
+    monkeypatch.setattr(w,'_GIT_RUN',inspect_git)
     source=s.VAULT/'01-Projects/Source.md';source.parent.mkdir(); old=b'# Original\nCanonical historic quotation is alpha lantern.\n'; fake=b'# Replacement\nUncommitted synthetic quotation is beta beacon.\n'
     source.write_bytes(old);git('init','-q');git('config','user.name','Synthetic');git('config','user.email','synthetic@example.invalid');git('config','core.autocrlf','false');git('add','.');git('commit','-qm','canonical historic source')
     old_oid=git('rev-parse','HEAD:01-Projects/Source.md').decode().strip(); fake_oid=git('hash-object','-w','--stdin',input=fake).decode().strip()

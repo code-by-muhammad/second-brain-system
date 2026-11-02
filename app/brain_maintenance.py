@@ -6,7 +6,7 @@ from filelock import FileLock
 import brain_store as s
 import brain_settings as cfg
 from brain_wiki import meta as parse_meta, _read_derived, _current_hash, BASE as WIKI_BASE
-from brain_markdown import frontmatter
+from brain_markdown import frontmatter,bounded_capture_datetime,bounded_json_file
 
 def save_status(status):
     path=s.STATE/'maintenance-status.json'
@@ -52,8 +52,8 @@ def _age_only_review(row):
 
 def health_status(path,review_limit=20):
     """Screen even old cached fields; keep the full local receipt unchanged."""
-    try: status=json.loads(path.read_text(encoding='utf-8'))
-    except (OSError,ValueError,RecursionError): return {'status':'needs attention','error':'Maintenance status is unavailable or invalid.'}
+    try: status=bounded_json_file(path,1_000_000)
+    except (OSError,ValueError,RecursionError): return {'status':'needs attention','error':'Maintenance status is unavailable, invalid or exceeds the 1 MB health-read limit; inspect the retained private receipt.'}
     if not isinstance(status,dict): return {'status':'needs attention','error':'Maintenance status is invalid.'}
     public={}
     for key in ('at','status','stage','git','aggregation','error_type','error'):
@@ -249,6 +249,7 @@ def _daily_link(p,raw,meta,when):
 def maintenance(sync=True):
     status={'at':s.stamp(),'status':'running','stage':'starting','captures_linked':0,'review':[],'git':'pending' if sync else 'not requested'}
     with FileLock(str(s.STATE/'maintenance.lock'),timeout=1):
+      cfg.write_admission()
       save_status(status)
       try:
        with FileLock(str(s.STATE/'writer.lock'),timeout=30):
@@ -277,7 +278,7 @@ def maintenance(sync=True):
                 if any(x in meta['event_id'] for x in ('\r','\n','-->')): raise ValueError('Invalid capture marker.')
             except ValueError:
                 add_review(status,p,['invalid capture metadata; original preserved']); continue
-            try: when=datetime.fromisoformat(str(meta['captured_at']))
+            try: when=bounded_capture_datetime(meta['captured_at'])
             except ValueError:
                 add_review(status,p,['invalid capture date; original preserved']); continue
             try:

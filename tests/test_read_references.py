@@ -83,11 +83,48 @@ def test_no_recursive_basename_guess(note, brain):
     '[[../outside]]', '[[.obsidian/secret]]', '[[CON]]', '[[C:/private]]',
     '![[01-Projects/Team Notes]]', '[[#Heading]]', '[[]]',
     '[[01-Projects/[[Team Notes]]]]', '[[01-Projects/Team Notes]',
-    '01-Projects/Team Notes.md#Heading', 'not-markdown.txt',
 ])
-def test_unsafe_malformed_or_missing_references_refused(note, reference):
-    with pytest.raises((ValueError, FileNotFoundError)):
+def test_unsafe_or_malformed_references_refused_before_any_witness_read(note,brain,monkeypatch,reference):
+    vault,_=brain;outside=vault.parent/'outside.md';hidden=vault/'.obsidian/secret.md'
+    hidden.parent.mkdir();outside.write_text('Outside synthetic witness.');hidden.write_text('Hidden synthetic witness.')
+    original=Path.open
+    def opened(path,*args,**kwargs):
+        assert path not in (outside,hidden),'Policy refusal must precede opening either real witness.'
+        return original(path,*args,**kwargs)
+    monkeypatch.setattr(Path,'open',opened)
+    with pytest.raises(ValueError):
         store.read(reference)
+
+@pytest.mark.parametrize('reference',['01-Projects/Team Notes.md#Heading','not-markdown.txt'])
+def test_missing_literal_filename_references_are_distinct_from_policy_refusal(note,reference):
+    with pytest.raises(FileNotFoundError):store.read(reference)
+
+@pytest.mark.parametrize('folder',['','Folder/'])
+def test_exact_bracket_filename_wins_before_link_parsing(brain,folder):
+    vault,_=brain;literal=vault/(folder+'[[Original]].md');literal.parent.mkdir(parents=True,exist_ok=True)
+    literal.write_text('Exact bracket witness.',encoding='utf-8')
+    decoy=vault/(folder+'Original.md');decoy.write_text('Ordinary wikilink witness.',encoding='utf-8')
+    result=store.read(folder+'[[Original]].md')
+    assert result['path']==folder+'[[Original]].md' and result['sha256']==store.digest(literal.read_bytes())
+    assert 'Exact bracket witness.' in result['content']
+    assert 'Ordinary wikilink witness.' in store.read('[['+folder+'Original]]')['content']
+    literal.unlink()
+    with pytest.raises(ValueError):store.read(folder+'[[Original]].md')
+
+def synthetic_symlink(path,target,**kwargs):
+    try:path.symlink_to(target,**kwargs)
+    except OSError as error:
+        if os.name=='nt' and getattr(error,'winerror',None)==1314:
+            pytest.skip('Windows privilege1314 prevents this synthetic symlink.')
+        raise
+
+@pytest.mark.parametrize('winerror',[1314,5,None])
+def test_symlink_fixture_skips_only_documented_windows_privilege(tmp_path,monkeypatch,winerror):
+    error=OSError('Synthetic link error');error.winerror=winerror
+    def fail(*args,**kwargs):raise error
+    monkeypatch.setattr(Path,'symlink_to',fail)
+    expected=pytest.skip.Exception if os.name=='nt' and winerror==1314 else OSError
+    with pytest.raises(expected):synthetic_symlink(tmp_path/'link',tmp_path/'target')
 
 
 def test_write_boundary_still_requires_exact_markdown(note):
@@ -104,10 +141,7 @@ def test_missing_context_note_exception_contract(brain):
 def test_linked_target_refused(note, brain):
     vault, _ = brain
     link = vault / 'Linked.md'
-    try:
-        link.symlink_to(note)
-    except OSError:
-        pytest.skip('Host does not permit synthetic symbolic links.')
+    synthetic_symlink(link,note)
     with pytest.raises(ValueError, match='Linked/reparse'):
         store.read('[[Linked]]')
 
@@ -121,7 +155,6 @@ def test_linked_parent_refused(note, brain, kind):
         result = subprocess.run(['cmd.exe', '/c', 'mklink', '/J', str(link), str(note.parent)], capture_output=True)
         assert result.returncode == 0
     else:
-        try: link.symlink_to(note.parent, target_is_directory=True)
-        except OSError: pytest.skip('Host does not permit synthetic symbolic links.')
+        synthetic_symlink(link,note.parent,target_is_directory=True)
     with pytest.raises(ValueError, match='Linked/reparse'):
         store.read('[[LinkedFolder/Team Notes]]')

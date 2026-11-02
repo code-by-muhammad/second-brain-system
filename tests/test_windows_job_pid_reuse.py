@@ -2,6 +2,7 @@
 import ctypes as c
 from ctypes import wintypes as w
 import sys
+from types import SimpleNamespace
 import pytest
 import brain_windows_process as runner
 
@@ -112,4 +113,59 @@ def test_unobserved_birth_still_holds_with_empty_accounting():
     try:
         tracker._observe(200,True)
         assert not tracker.complete(10) and not tracker._pending and api.active==0
+    finally:tracker.close()
+
+
+class PacketApi(Api):
+    def __init__(self,packets,total):
+        super().__init__();self.packets=list(packets);self.total=total
+    def GetQueuedCompletionStatus(self,port,message,key,value,timeout):
+        if not self.packets:c.set_last_error(258);return False
+        kind,pid=self.packets.pop(0)
+        c.cast(message,c.POINTER(w.DWORD)).contents.value=kind
+        c.cast(key,c.POINTER(c.c_size_t)).contents.value=1
+        c.cast(value,c.POINTER(c.c_void_p)).contents.value=pid
+        return True
+
+
+def test_multiple_completed_lifetimes_reusing_pid_are_counted_from_private_packets():
+    api=PacketApi([(6,200),(7,200),(6,200),(7,200),(6,200)],4)
+    tracker=runner._LifetimeTracker(api,1);tracker.associate()
+    try:
+        assert tracker.complete(10)
+        assert tracker._new_packets=={200:3}
+        for _ in range(4):tracker._observe(200,True);tracker._retry()
+        assert tracker._new_packets=={200:3} and tracker.complete(10)
+    finally:tracker.close()
+
+
+@pytest.mark.parametrize('packets,total',[
+    ([(6,200),(6,200)],3), # duplicate plus missing birth cannot satisfy coverage
+    ([(6,200),(7,200),(6,200)],4), # one unseen birth still holds
+    ([(6,0)],1), # malformed consumed packet is permanently ambiguous
+])
+def test_ambiguous_or_incomplete_packet_coverage_cannot_release(packets,total):
+    api=PacketApi(packets,total);tracker=runner._LifetimeTracker(api,1);tracker.associate()
+    try:
+        assert not tracker.complete(10)
+        assert not tracker.complete(10)
+    finally:tracker.close()
+
+
+def test_cleanup_diagnostic_survives_failing_reporter_without_releasing_proof(monkeypatch,capsys):
+    api,tracker=fixture();calls=[];clock=[0.0];completed=[False]
+    def now():clock[0]+=.4;return clock[0]
+    monkeypatch.setattr(runner,'time',SimpleNamespace(monotonic=now,sleep=lambda delay:None))
+    def empty(*args):
+        calls.append('check')
+        if len(calls)>=5:completed[0]=True;return True
+        return False
+    monkeypatch.setattr(runner,'_empty',empty)
+    monkeypatch.setattr(api,'TerminateJobObject',lambda *args:True,raising=False)
+    def broken_reporter():raise RuntimeError('Synthetic reporter failure')
+    try:
+        runner._cleanup_owned(api,1,10,broken_reporter,tracker)
+        assert completed[0] and len(calls)==5
+        output=capsys.readouterr().err
+        assert output.count('owned_process_cleanup_pending')==1
     finally:tracker.close()

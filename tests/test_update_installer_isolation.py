@@ -20,8 +20,7 @@ import tomlkit
 SOURCE = Path(os.environ.get('R149_SOURCE', Path(__file__).resolve().parents[1])).resolve()
 
 
-@pytest.mark.parametrize('selected_launch', ['preflight', 'install'])
-def test_public_update_installer_cannot_import_untracked_checkout_module(tmp_path, monkeypatch, selected_launch):
+def test_public_update_preflight_and_owned_deploy_do_not_import_untracked_checkout_module(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location('isolated_update', SOURCE / 'update.py')
     updater = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(updater)
@@ -97,13 +96,26 @@ def test_public_update_installer_cannot_import_untracked_checkout_module(tmp_pat
     monkeypatch.setattr(support,'host_context',lambda:None)
     def provision(*args):effects.append('provision-intercepted');return python
     monkeypatch.setattr(support,'provision',provision)
+    def deploy(selected,selected_python,selected_vault,*,client_value,source_sha256):
+        assert selected==root and selected_python==python and selected_vault==vault
+        support.validate_plan(client_value,root,python)
+        # The in-process deploy entry point uses the already sealed plan, not
+        # a parser import from the checkout. Real deploy/locks are exercised by
+        # the upgrade-transaction fixture; this test isolates import provenance.
+        effects.append('owned-deploy-intercepted')
+        monkeypatch.setattr(install,'REPO',release)
+        before=json.loads((root/'device.json').read_text())
+        install.atomic(root/'device.json',json.dumps(install.device_settings(before,vault,python),indent=2)+'\n')
+        return {'status':'installed','simulated':True}
+    monkeypatch.setattr(install,'deploy',deploy)
 
     def run(command, **kwargs):
         if Path(command[0]).name.lower() in ('git', 'git.exe'):
             assert 'clone' not in command
             return real_run(command, **kwargs)
         if str(release / 'install.py') in command:
-            stage = 'preflight' if '--validate-only' in command else 'install'
+            assert '--validate-only' in command, 'Existing-runtime deployment must not use a public installer child.'
+            stage = 'preflight'
             # Keep the real production launch prefix. -B only prevents fixture bytecode;
             # the deployment launch is restricted to its real validate-only path.
             child = [command[0], '-B', *command[1:]]
@@ -126,7 +138,7 @@ def test_public_update_installer_cannot_import_untracked_checkout_module(tmp_pat
     monkeypatch.setattr(updater, 'snapshot', lambda *args,**kwargs: tmp_path / 'snapshot-not-created')
     monkeypatch.setattr(updater, 'restore', lambda *args: None)
     def controller(python,checkout,selected,command,action,*flags):
-        assert selected==root and command=='service' and action in ('inspect','hold','stop','start','finish')
+        assert selected==root and command=='service' and action in ('inspect','hold','stop','install','start','finish')
         effects.append('controller-intercepted-'+action)
         if action=='inspect':return {'status':'inspected','task_present':True,'task_enabled':True,'simulated':True}
         return {'status':'stopped' if action=='stop' else action,'empty_at_filetime':123,'simulated':True}
@@ -138,14 +150,16 @@ def test_public_update_installer_cannot_import_untracked_checkout_module(tmp_pat
         updater.perform(root,'v0.1.7',skip_desktop=True)
     except subprocess.CalledProcessError as error:
         failure = error
-    assert before == preserved(), 'Validate-only must preserve synthetic runtime/client settings.'
-    assert not marker.exists(), 'The allowed untracked cached tomllib.py executed during ' + selected_launch
-    assert failure is None and len(children)==2
-    selected=[result for stage,result in children if stage==selected_launch]
-    assert len(selected)==1 and selected[0].returncode==0
+    after=preserved()
+    assert before[1:]==after[1:], 'The isolated preflight/deploy control must preserve owner clients/app.'
+    assert not marker.exists(), 'The allowed untracked cached tomllib.py executed.'
+    assert failure is None and len(children)==1
+    assert children[0][1].returncode==0
     for _,result in children:assert json.loads(result.stdout)['status']=='validated'
     plans=list((root/'state').glob('upgrade-client-plan-*.json'))
     assert len(plans)==1 and json.loads(plans[0].read_text())['files'], 'Refresh must exercise the locked TOML parser.'
+    assert hashlib.sha256(after[0]).hexdigest()==json.loads(plans[0].read_text())['device_after_sha256']
     assert effects.count('provision-intercepted')==1
     assert effects.count('controller-intercepted-inspect')==1
     assert effects.index('controller-intercepted-inspect')<effects.index('controller-intercepted-hold')
+    assert effects.index('controller-intercepted-stop')<effects.index('owned-deploy-intercepted')<effects.index('controller-intercepted-install')

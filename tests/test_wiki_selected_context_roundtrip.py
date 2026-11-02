@@ -8,7 +8,7 @@ import brain_settings as cfg
 import brain_store as s
 import brain_wiki as w
 from test_wiki import fixture
-from test_wiki_remediation import explicit, fake_model
+from test_wiki_remediation import explicit, fake_model,model_process_stub
 
 
 def durable_selection():
@@ -116,12 +116,11 @@ def test_actual_yaml_claim_node_boundary_and_compact_omission_remain_distinct(br
 def test_actual_invalid_selected_alias_worker_never_calls_model_or_persists_input(brain,monkeypatch):
     source,_=retired_fixture(brain);source_raw=source.read_bytes()
     topic,_=actual_topic(aliased_depth(66));topic_raw=topic.read_bytes();before=durable_selection();calls=[]
-    monkeypatch.setattr(w.shutil,'which',lambda name:'synthetic-codex')
     class Process:
         returncode=1
         def __init__(self,command,**kwargs):calls.append(command)
         def communicate(self,model_input,timeout):return None,None
-    monkeypatch.setattr(w.subprocess,'Popen',Process)
+    model_process_stub(monkeypatch,Process)
     for _ in range(2):
         w.reset_retries()
         try:report=w.run(1)

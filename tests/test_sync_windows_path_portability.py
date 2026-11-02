@@ -22,6 +22,7 @@ BAD=[
  ('superscript-two','01-Projects/COM².md'),('superscript-three','01-Projects/LPT³.md'),
  ('console-input','01-Projects/CONIN$.md'),('console-output','01-Projects/CONOUT$.md'),
  ('git-windows-lpt-zero','01-Projects/LPT0.md'),
+ ('conservative-read-policy-com-zero','01-Projects/COM0.md'),
  ('directory-dot','02-Areas/Ideas./plan.md'),('directory-space','02-Areas/Ideas /plan.md'),
  *[('punctuation-'+str(index),'03-Resources/reserved'+char+'name.md') for index,char in enumerate('<>:"|?*')],
  ('literal-backslash','03-Resources/regex \\d.md'),

@@ -104,25 +104,31 @@ def test_real_main_keeps_venv_interpreter_and_venv_only_import(portable,monkeypa
 def test_atomic_keeps_mode_and_first_byte_private(portable,monkeypatch,tmp_path):
     install,_,_,_,_=portable
     target=tmp_path/'config.json'; target.write_text('old'); target.chmod(0o600)
-    real_replace=install.os.replace
+    real_replace=install.os.replace;real_link=install.os.link
     real_fdopen=install.os.fdopen
     observed=[]; before_write=[]
     def fdopen(fd,*args,**kwargs):
         before_write.append(stat.S_IMODE(os.fstat(fd).st_mode))
         return real_fdopen(fd,*args,**kwargs)
     def replace(source,destination):
-        observed.append((stat.S_IMODE(Path(source).stat().st_mode),Path(source).read_text()))
+        observed.append(('replace',stat.S_IMODE(Path(source).stat().st_mode),Path(source).read_text()))
         real_replace(source,destination)
+    def link(source,destination):
+        observed.append(('link',stat.S_IMODE(Path(source).stat().st_mode),Path(source).read_text()))
+        real_link(source,destination)
     monkeypatch.setattr(install.os,'replace',replace)
+    monkeypatch.setattr(install.os,'link',link)
     monkeypatch.setattr(install.os,'fdopen',fdopen)
     previous=os.umask(0o022)
     try:
         install.atomic(target,'new-private')
         install.atomic(tmp_path/'new-token.json','new-token')
     finally: os.umask(previous)
-    assert observed==[(0o600,'new-private'),(0o600,'new-token')]
+    assert observed==[('replace',0o600,'new-private'),('link',0o600,'new-token')]
     assert before_write==[0o600,0o600]
     assert stat.S_IMODE(target.stat().st_mode)==0o600
+    assert stat.S_IMODE((tmp_path/'new-token.json').stat().st_mode)==0o600
+    assert not list(tmp_path.glob('*.tmp'))
     assert not list(tmp_path.glob('*.tmp'))
 
 
@@ -190,7 +196,7 @@ def test_failed_real_install_switch_restores_exact_clients_and_app(portable,monk
     assert h.health==['0.1.6','0.1.0']
     control=[row for row in h.events if row['kind']=='controller']
     assert all(row['checkout']==str(h.release) for row in control)
-    assert [row['action'] for row in control]==['inspect','hold','stop','start','stop','install','start','finish']
+    assert [row['action'] for row in control]==['inspect','hold','stop','install','start','stop','install','start','finish']
 
 
 def test_busy_writer_refusal_cancels_hold_without_runtime_switch(portable,monkeypatch):
@@ -234,7 +240,8 @@ def test_migration_runs_under_worker_lock_and_does_not_rollback_notes_or_ledger(
         env=h.updater.cli_environment(h.root)
         assert env['BRAIN_SYSTEM_ROOT']==str(h.root) and env['BRAIN_VAULT']==str(h.vault)
         if action=='migrate':
-            assert flags==('--apply','--requeue-unverified')
+            hold=json.loads((h.root/'state/service-transaction.json').read_text())['hold_id']
+            assert flags==('--apply','--requeue-unverified','--hold-id',hold)
             marker.write_text('verified derived receipt');ledger.write_text('persistent local migration state')
             return {'dry_run':False,'verified_parts':3,'unverified_parts':[{'path':'source.md'}],'requeued_parts':1,
                     'complete_journals_verified':1,'rejected_batches':[],'receipts_created':[{'path':marker.name,'sha256':'synthetic-proof-hash'}]}

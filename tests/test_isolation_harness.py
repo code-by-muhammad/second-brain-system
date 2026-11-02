@@ -157,6 +157,11 @@ def test_subprocess_guard_is_installed():
     with pytest.raises(AssertionError, match='service-capable'):
         subprocess.run([sys.executable, 'C:/fake/brain_client.py'], check=True)
 
+@pytest.mark.parametrize('command',[['codex','exec','Synthetic'],['codex.cmd','exec','Synthetic'],['codex.exe','exec','Synthetic'],['claude','-p','Synthetic'],
+                                  [sys.executable,'-c','from fastembed import TextEmbedding; TextEmbedding()']])
+def test_inference_launches_are_refused_without_starting_a_child(command):
+    with pytest.raises(AssertionError,match='inference|embedding/model'):check(command)
+
 
 @pytest.mark.skipif(os.name != 'nt', reason='Windows uses a native process runner.')
 def test_native_process_guard_is_installed():

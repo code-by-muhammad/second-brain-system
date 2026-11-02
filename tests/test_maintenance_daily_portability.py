@@ -214,12 +214,14 @@ def test_historical_forged_marker_does_not_suppress_genuine_link(brain,legacy):
 @pytest.mark.parametrize('name',['bracket[legacy].md','anchor#legacy.md','block^legacy.md'])
 def test_unsafe_renamed_capture_is_flagged_before_read_or_link(brain,monkeypatch,name):
     vault,_=brain; template(vault); receipt=capture(); old=s.safe_path(receipt['path']); renamed=old.with_name(name); old.rename(renamed); before=renamed.read_bytes()
-    read_text=Path.read_text
+    opened=Path.open
     def no_read(path,*args,**kwargs):
         if path==renamed: pytest.fail('Unsafe legacy capture must be rejected before a read.')
-        return read_text(path,*args,**kwargs)
-    monkeypatch.setattr(Path,'read_text',no_read); calls=git_recorder(monkeypatch)
-    result=m.maintenance()
+        return opened(path,*args,**kwargs)
+    with monkeypatch.context() as boundary:
+        boundary.setattr(Path,'open',no_read)
+        with pytest.raises(pytest.fail.Exception):renamed.open('rb')
+        calls=git_recorder(boundary);result=m.maintenance()
     assert result['captures_linked']==0 and calls==['sync']
     assert result['review'][0]['reasons']==['capture path cannot be safely linked; original preserved']
     assert renamed.read_bytes()==before and not (vault/'05-Daily').exists()

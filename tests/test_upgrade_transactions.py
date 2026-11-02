@@ -88,12 +88,12 @@ def test_rollback_stop_runs_outside_parent_work_locks_and_uses_new_controller(in
     class Locks:
         def __enter__(self):held.append(True)
         def __exit__(self,*args):held.clear()
-    monkeypatch.setattr(updater,'_work_locks',lambda *args:Locks())
+    monkeypatch.setattr(updater,'_work_locks',lambda *args,**kwargs:Locks())
     def controller(python,checkout,root,command,action,*flags):
         events.append(action)
         assert str(checkout)=='new-reviewed-checkout' and python==sys.executable
         if action=='stop':assert not held
-        if action=='install':assert held
+        if action=='install':assert bool(held)==switch
         return {'status':action}
     monkeypatch.setattr(updater,'controller',controller)
     monkeypatch.setattr(updater,'wait_health',lambda *args,**kwargs:{'status':'running','version':'0.1.7'})
@@ -127,6 +127,8 @@ def test_unsupported_release_refused_before_provision_and_stop(installation,monk
 def test_packaged_host_refused_before_releases_or_state_change(installation,monkeypatch):
     h=installation
     monkeypatch.setattr(updater,'__file__',str(h.root/'releases/v0.1.8/update.py'))
+    monkeypatch.setattr(updater,'verify',lambda *args,**kwargs:{'version':'0.1.8','sha256':{},
+        'capabilities':['sealed-client-refresh-v1','owned-service-control-v1']})
     support=h.helper.setup_helpers()
     monkeypatch.setattr(support,'host_context',lambda:(_ for _ in ()).throw(ValueError('packaged')))
     monkeypatch.setattr(h.helper,'setup_helpers',lambda:support)

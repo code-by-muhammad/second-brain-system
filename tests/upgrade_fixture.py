@@ -41,6 +41,7 @@ def prepare(portable,monkeypatch):
     monkeypatch.setattr(support,'provision',provision)
     monkeypatch.setattr(updater,'verify',lambda *args,**kwargs:{'version':'0.1.6',
         'capabilities':['sealed-client-refresh-v1','owned-service-control-v1'],
+        'sha256':{'app/brain_cli.py':hashlib.sha256((release/'app/brain_cli.py').read_bytes()).hexdigest()},
         'git_identity':{'tag':'v0.1.6','commit':'synthetic-not-provenance'}})
 
     def run(arguments,**options):
@@ -100,7 +101,10 @@ def prepare(portable,monkeypatch):
             if h.last_end:raise RuntimeError('unverified End cannot be cancelled')
             path.unlink();return {'status':'cancelled; runtime not switched','simulated':True}
         elif action=='install':
-            with pytest.raises(Timeout):
+            if getattr(h,'expect_unlocked_registration',False):
+                with FileLock(str(root/'state/writer.lock'),timeout=0):pass
+            else:
+              with pytest.raises(Timeout):
                 with FileLock(str(root/'state/writer.lock'),timeout=0):pass
         elif action=='start':
             h.running=True;install.atomic(path,json.dumps({**transaction(),'stage':'started'}))

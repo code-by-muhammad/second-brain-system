@@ -21,7 +21,7 @@ def test_failed_new_readiness_uses_new_controller_for_rollback(portable,monkeypa
     with pytest.raises(RuntimeError,match='previous runtime health verified'):h.updater.perform(h.root,'v0.1.6')
     events=[row for row in h.events if row['kind']=='controller']
     actions=[row['action'] for row in events]
-    assert actions==['inspect','hold','stop','start','stop','install','start','finish']
+    assert actions==['inspect','hold','stop','install','start','stop','install','start','finish']
     assert all(row['checkout']==str(h.release) for row in events)
     assert h.health==['0.1.6','0.1.0']
 

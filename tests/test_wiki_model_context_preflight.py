@@ -3,6 +3,7 @@ import copy
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from test_wiki_remediation import model_process_stub
 
 import pytest
 
@@ -37,7 +38,6 @@ def fake_skip_model(monkeypatch):
         pass
     calls = Calls()
     calls.inputs = []
-    monkeypatch.setattr(w.shutil, 'which', lambda name: 'synthetic-codex')
     class Process:
         returncode = 0
         def __init__(self, command, **kwargs):
@@ -52,7 +52,7 @@ def fake_skip_model(monkeypatch):
                 dispositions.append({'source': row['path'], 'part': row['part'], 'status': 'skipped',
                                      'reason': 'This synthetic administrative source needs no reusable topic.', 'quote': quote})
             self.output.write_text(json.dumps({'pages': [], 'dispositions': dispositions}), encoding='utf-8')
-    monkeypatch.setattr(w.subprocess, 'Popen', Process)
+    model_process_stub(monkeypatch, Process)
     return calls
 
 
@@ -340,11 +340,11 @@ def test_valid_completion_journal_and_legacy_expiry_still_recover(brain, monkeyp
 def test_saved_json_memory_failure_remains_visible(brain, monkeypatch):
     _, _, _, folder, _ = interrupted_plan(brain, monkeypatch)
     output = folder / 'output.json'
-    original = Path.read_text
+    original = Path.open
     def fatal(path, *args, **kwargs):
         if path == output: raise MemoryError('Synthetic fatal resource failure')
         return original(path, *args, **kwargs)
-    monkeypatch.setattr(Path, 'read_text', fatal)
+    monkeypatch.setattr(Path, 'open', fatal)
     w.reset_retries()
     with pytest.raises(MemoryError): w.run()
 

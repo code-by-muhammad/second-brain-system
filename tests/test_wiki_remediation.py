@@ -11,6 +11,16 @@ import brain_store as s
 import brain_wiki as w
 from test_wiki import fixture
 
+def model_process_stub(monkeypatch,process_type):
+    """Mock only the model boundary; historical Git keeps its real transport."""
+    monkeypatch.setattr(w,'_model_executable',lambda:{'path':'synthetic-codex','sha256':'a'*64,'bytes':1})
+    def invoke(command,model_input,timeout,**kwargs):
+        proc=process_type(command,**kwargs)
+        kwargs['on_started']()
+        proc.communicate(model_input,timeout)
+        return proc
+    monkeypatch.setattr(w,'_run_model',invoke)
+
 
 def explicit(packet,result):
     result=copy.deepcopy(result)
@@ -24,7 +34,6 @@ def explicit(packet,result):
 def fake_model(monkeypatch,result,after=None):
     class Calls(list): pass
     calls=Calls(); calls.inputs=[]
-    monkeypatch.setattr(w.shutil,'which',lambda name:'synthetic-codex')
     class Process:
         returncode=0
         def __init__(self,command,**kwargs):
@@ -33,7 +42,7 @@ def fake_model(monkeypatch,result,after=None):
             calls.inputs.append(model_input)
             self.output.write_text(json.dumps(result),encoding='utf-8')
             if after: after()
-    monkeypatch.setattr(w.subprocess,'Popen',Process)
+    model_process_stub(monkeypatch,Process)
     return calls
 
 
@@ -353,7 +362,6 @@ def test_rebuild_historical_cohort_links_preserves_metadata_and_extra_sections(b
 def test_short_parts_are_deterministically_skipped_without_model_call(brain,monkeypatch,contents):
     vault,_=brain; path=vault/'01-Projects/Draft.md'; path.parent.mkdir()
     original=contents.encode(); path.write_bytes(original)
-    monkeypatch.setattr(w.shutil,'which',lambda name:None)
     def forbidden(*args,**kwargs): raise AssertionError('Short-only batch must not invoke a model.')
     monkeypatch.setattr(w.subprocess,'Popen',forbidden)
     completed=w.run()
@@ -399,7 +407,6 @@ def test_small_final_overlapping_part_is_skipped_without_changing_partition(brai
     fake_model(monkeypatch,explicit(packet,result))
     assert w.run()['status']=='complete' and w.status()['pending_source_parts']==1
     assert w.prepare()['sources'][0]['text']=='xxxxx'
-    monkeypatch.setattr(w.shutil,'which',lambda name:None)
     def forbidden(*args,**kwargs): raise AssertionError('Short final part must not invoke a model.')
     monkeypatch.setattr(w.subprocess,'Popen',forbidden)
     assert w.run()['receipts']==[] and source.read_bytes()==original
@@ -451,7 +458,6 @@ def test_fresh_device_does_not_overwrite_a_shared_completed_defer_receipt(brain,
 
 def test_migration_recognizes_new_explicit_short_skip_proofs(brain,monkeypatch):
     vault,_=brain; source=vault/'01-Projects/Blank.md'; source.parent.mkdir(); source.write_bytes(b'')
-    monkeypatch.setattr(w.shutil,'which',lambda name:None)
     assert w.run()['status']=='complete'
     report=w.migrate_legacy_receipts(dry_run=True,requeue_unverified=True)
     assert report['verified_parts']==1 and not report['unverified_parts'] and report['requeued_parts']==0
@@ -545,7 +551,6 @@ def test_published_disposition_metadata_is_guarded_before_any_publication(brain,
 def test_repeated_worker_failures_stop_after_three_without_source_blame(brain,monkeypatch,mode):
     source,packet,result=fixture(brain); result=explicit(packet,result); calls=[]
     original_note=w._source_note; original_atomic=w._atomic_json
-    monkeypatch.setattr(w.shutil,'which',lambda name:'synthetic-codex')
     monkeypatch.setattr(w.subprocess,'run',lambda *args,**kwargs:None)
     if hasattr(w.os,'killpg'): monkeypatch.setattr(w.os,'killpg',lambda *args:None)
     class Process:
@@ -557,7 +562,7 @@ def test_repeated_worker_failures_stop_after_three_without_source_blame(brain,mo
             if mode not in ('nonzero','no-output'):
                 self.output.write_text(json.dumps({'pages':None} if mode=='invalid-schema' else result),encoding='utf-8')
         def wait(self,timeout): return 1
-    monkeypatch.setattr(w.subprocess,'Popen',Process)
+    model_process_stub(monkeypatch,Process)
     if mode=='render-error':
         def fail_render(*args): raise RuntimeError('synthetic persistent rendering failure')
         monkeypatch.setattr(w,'_source_note',fail_render)

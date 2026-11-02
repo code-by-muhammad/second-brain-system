@@ -1,6 +1,6 @@
 """Common configuration; device identity and secrets never belong in Git."""
 from __future__ import annotations
-import json, os, sys
+import json, os, sys, re
 from pathlib import Path
 
 VERSION = '0.1.8'
@@ -18,6 +18,22 @@ if PYTHON.name.lower() == 'pythonw.exe': PYTHON = PYTHON.with_name('python.exe')
 def child_options():
     import subprocess
     return {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
+
+def write_admission(hold_id=None):
+    """Call after taking the writer's work lock; legacy code has no such gate."""
+    path=STATE/'service-transaction.json'
+    if not path.exists():return
+    if any(item.is_symlink() or os.path.isjunction(item) for item in (path,*path.parents)):
+        raise ValueError('Linked service transaction; writes deferred, pending work preserved.')
+    with path.open('rb') as stream:raw=stream.read(65537)
+    if len(raw)>65536:raise ValueError('Service transaction exceeds its bound; writes deferred.')
+    try:value=json.loads(raw)
+    except (ValueError,UnicodeError):raise ValueError('Service transaction needs review; writes deferred.') from None
+    if (not isinstance(value,dict) or value.get('root')!=str(ROOT) or not isinstance(value.get('hold_id'),str)
+            or not re.fullmatch('[a-f0-9]{32}',value['hold_id']) or value.get('stage') not in ('prepared','stopped','start failed','starting','started')):
+        raise ValueError('Service transaction identity/stage needs review; writes deferred.')
+    if value['stage'] in ('stopped','start failed') and hold_id!=value['hold_id']:
+        raise ValueError('Runtime is held for an owned update/recovery; writes deferred, pending work preserved.')
 
 
 def validate_search_configuration(value):

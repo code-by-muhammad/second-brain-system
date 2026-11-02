@@ -30,6 +30,7 @@ def record(value):
     with events.open('a', encoding='utf-8') as output:
         output.write(json.dumps(value) + '\n')
 def run(arguments, **kwargs):
+    kwargs.pop('source_app',None)  # This lane intercepts the reviewed contained boundary.
     assert '--install-service' not in arguments
     if str(release / 'install.py') in arguments:
         assert route=='bootstrap-child' and arguments[:3]==[str(selected),'-I',str(release/'install.py')]
@@ -47,7 +48,15 @@ def run(arguments, **kwargs):
         assert os.name == 'nt' and Path(arguments[0]).name.lower() == 'icacls.exe'
         assert Path(arguments[1]).resolve().is_relative_to(root.resolve())
     return real_run(arguments, **kwargs)
-subprocess.run = run
+support.run = run
+
+# This lane isolates process/import provenance. The real public journal,
+# interruption, identity and resume contracts have their own test module.
+def fresh(root,python,vault,args,value,finish):
+    result=product['deploy'](root,python,vault,args.role,False,client_value=value)
+    finish(result,lambda stage:None,'deployed')
+    return result
+product['_run_fresh']=fresh
 def provision(*arguments):
     assert route=='bootstrap-child'
     record({'kind':'provision-intercepted','argv':[str(value) for value in arguments]})

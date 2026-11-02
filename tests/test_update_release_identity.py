@@ -176,10 +176,39 @@ def test_public_update_reuses_valid_local_tag(release_case, origin, annotated):
 
 
 @pytest.mark.parametrize('annotated', [False, True], ids=['lightweight', 'annotated'])
-def test_public_update_verifies_fresh_clone_before_dependencies(release_case, tmp_path, annotated):
+def test_missing_forward_cache_is_refused_without_an_unreachable_clone(release_case, tmp_path, annotated):
     _, _, _, effects, _, _, _, make, invoke = release_case
     seed = tmp_path / 'local approved source'
     make(seed, annotated=annotated)
-    with pytest.raises(ReachedDependencyPreparation):
+    with pytest.raises(ValueError,match='Cached release'):
         invoke(seed)
-    assert effects == ['clone', 'uv']
+    assert effects == []
+
+@pytest.mark.parametrize('sibling',['install.py','setup_runtime.py'])
+def test_public_entrypoint_verifies_before_loading_real_sibling(release_case,monkeypatch,sibling):
+    updater,root,release,effects,_,git,manifest,make,_=release_case
+    make(release)
+    for name in ('install.py','setup_runtime.py'):(release/name).write_bytes((SOURCE/name).read_bytes())
+    manifest(release);git(release,'add','--all');git(release,'commit','-m','Synthetic actual helpers');git(release,'tag','-f',VERSION)
+    marker=root/'unverified-helper-executed'
+    (release/sibling).write_text('from pathlib import Path\nPath('+repr(str(marker))+').write_bytes(b"unverified helper")\nraise RuntimeError("Unverified helper executed")\n',encoding='utf-8')
+    monkeypatch.setattr(updater,'__file__',str(release/'update.py'))
+    monkeypatch.setattr(sys,'argv',['update.py','--root',str(root),'--version',VERSION])
+    before={p.relative_to(root).as_posix():p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    # No replacement installer/update_lock/provision stub: the public ordering
+    # itself must stop the actual executable helper bytes from being evaluated.
+    with pytest.raises(ValueError,match='Cached release'):updater.main()
+    assert not marker.exists() and not (root/'state').exists() and effects==[]
+    assert before=={p.relative_to(root).as_posix():p.read_bytes() for p in root.rglob('*') if p.is_file()}
+
+@pytest.mark.parametrize('name',['yaml.pyd','filelock.cp312-win_amd64.pyd','json.pyc','pkg/__init__.pyc'])
+def test_untracked_importable_controller_files_are_refused(release_case,name):
+    updater,_,release,_,_,_,_,make,_=release_case;make(release)
+    path=release/'app'/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'Synthetic inert payload, never execute.')
+    with pytest.raises(ValueError,match='Unexpected importable'):updater.verify(release,version=VERSION)
+
+def test_untracked_reports_and_disabled_pycache_are_permitted(release_case):
+    updater,_,release,_,_,_,_,make,_=release_case;make(release)
+    (release/'app/__pycache__').mkdir();(release/'app/__pycache__/x.pyc').write_bytes(b'Not imported under the isolated fresh cache prefix.')
+    (release/'app/report.txt').write_text('Synthetic report.')
+    assert updater.verify(release,version=VERSION)['git_identity']['tag']==VERSION

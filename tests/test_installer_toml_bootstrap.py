@@ -40,6 +40,10 @@ def context(tmp_path,monkeypatch,text='model = "owner"\n'):
     monkeypatch.setattr(installer,'setup_helpers',lambda:support)
     def forbidden(*args,**kwargs):raise AssertionError('Unexpected client/runtime write or process.')
     for name in ('atomic','private_dir','backup','clients'):monkeypatch.setattr(installer,name,forbidden)
+    # These parser/handoff controls isolate deployment. Public recovery and
+    # journal writes have separate real-main coverage in test_initial_install_resume.
+    monkeypatch.setattr(installer,'_run_fresh',lambda root,python,vault,args,value,finish:
+        installer.deploy(root,python,vault,args.role,False,client_value=value))
     return home,appdata,vault,root,python,forbidden
 
 
@@ -138,10 +142,10 @@ def test_normal_bootstrap_hands_off_original_arguments_once_before_deploy(tmp_pa
         assert args==[str(python),'-I',str(release/'install.py'),*argv[1:],'--reuse-python',str(python)]
         if child_fails:raise subprocess.CalledProcessError(23,args)
         return subprocess.CompletedProcess(args,0)
-    monkeypatch.setattr(installer.subprocess,'run',run)
+    monkeypatch.setattr(installer.setup_helpers(),'run',run)
     with pytest.raises(SystemExit) as error:installer.main()
     assert error.value.code==(23 if child_fails else 0)
-    assert len(calls)==2 and calls[0]==('provision',(release,root,None)) and calls[1][1]=={'check':True}
+    assert len(calls)==2 and calls[0]==('provision',(release,root,None)) and calls[1][1]=={'source_app':release/'app','check':True,'capture_output':True,'text':True,'encoding':'utf-8','timeout':3600}
     assert (tree(home),tree(appdata))==before and not root.exists()
 
 
@@ -206,7 +210,7 @@ def test_handoff_reuse_flag_terminates_a_simulated_child_without_a_loop(tmp_path
         try:sys.argv=[args[2],*args[3:]];installer.main()
         finally:sys.argv=saved
         return subprocess.CompletedProcess(args,0)
-    monkeypatch.setattr(installer.subprocess,'run',run);before=(tree(home),tree(appdata))
+    monkeypatch.setattr(installer.setup_helpers(),'run',run);before=(tree(home),tree(appdata))
     with pytest.raises(SystemExit) as error:installer.main()
     assert error.value.code==0
     assert len(calls)==2 and len(deployed)==1 and deployed[0][1]==python.absolute()
@@ -266,9 +270,10 @@ real_run=subprocess.run
 def run(args,**kwargs):
     assert not child and args[:3]==[str(selected),'-I',str(module.REPO/'install.py')]
     assert '--install-service' not in args and '--download-model' not in args
+    assert kwargs.pop('source_app')==module.REPO/'app'
     env=os.environ.copy();env['R133_FIXTURE_CHILD']='1'
     return real_run(args,env=env,**kwargs)
-module.subprocess.run=run
+module.setup_helpers().run=run
 selected=module.REPO/('.venv/Scripts/python.exe' if os.name=='nt' else '.venv/bin/python')
 support=module.setup_helpers()
 support.host_context=lambda:None
@@ -281,6 +286,7 @@ def deploy(root,python,vault,role,configure,**kwargs):
     record('deploy-stub',argv=sys.argv,python=str(python),role=role,configure=kwargs.get('client_value') is not None)
     return {'status':'synthetic-no-installation'}
 module.deploy=deploy
+module._run_fresh=lambda root,python,vault,args,value,finish:module.deploy(root,python,vault,args.role,False,client_value=value)
 if child and os.environ['R133_FIXTURE_MODE']=='exit23':
     record('child-exit',argv=sys.argv,python=sys.executable)
     raise SystemExit(23)

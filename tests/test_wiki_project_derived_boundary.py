@@ -1,6 +1,7 @@
 """Project summaries are derived context, while neighboring original notes stay eligible."""
 import json
 from pathlib import Path
+from test_wiki_remediation import model_process_stub
 
 import pytest
 
@@ -100,7 +101,6 @@ def test_prepare_selects_pending_original_instead_of_project_summary(brain, monk
 
 def publishing_model(monkeypatch, path):
     calls = []
-    monkeypatch.setattr(w.shutil, 'which', lambda name: 'synthetic-codex')
 
     class Process:
         returncode = 0
@@ -123,7 +123,7 @@ def publishing_model(monkeypatch, path):
             }
             self.output.write_text(json.dumps(result), encoding='utf-8')
 
-    monkeypatch.setattr(w.subprocess, 'Popen', Process)
+    model_process_stub(monkeypatch, Process)
     return calls
 
 
@@ -167,7 +167,7 @@ def test_new_project_summary_does_not_release_actual_partial_publication_hold(br
     index = s.VAULT / w.BASE / 'Index.md'
     index.write_bytes(b'# Owner Index preserved during recovery\n')
     notes, private = snapshot(s.VAULT), snapshot(folder)
-    monkeypatch.setattr(w.shutil, 'which', lambda name: pytest.fail('Partial publication must not request new model output.'))
+    monkeypatch.setattr(w, '_model_executable', lambda: pytest.fail('Partial publication must not request new model output.'))
     w.reset_retries()
     with pytest.raises(w.WikiIntegrityError):
         w.run()

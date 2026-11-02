@@ -24,7 +24,6 @@ def write_source(relative, raw=RAW):
 
 def forbid_model(monkeypatch):
     calls = []
-    monkeypatch.setattr(w.shutil, 'which', lambda name: 'synthetic-forbidden-model')
     def forbidden(*args, **kwargs):
         calls.append(True)
         raise AssertionError('Path/transport preflight must stop before any model call.')

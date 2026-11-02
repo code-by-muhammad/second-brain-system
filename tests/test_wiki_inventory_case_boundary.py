@@ -2,6 +2,7 @@
 import json
 import sys
 from pathlib import Path
+from test_wiki_remediation import model_process_stub
 
 import pytest
 
@@ -51,7 +52,6 @@ def test_actual_case_rename_does_not_start_two_self_ingestion_rounds(brain,monke
     canonical=s.VAULT/'02-Areas/AI-Memory'
     assert canonical.is_dir() and (canonical/'Wiki/Index.md').is_file()
     before=snapshot();raw=source.read_bytes();calls=[]
-    monkeypatch.setattr(w.shutil,'which',lambda name:'synthetic-codex')
     class Process:
         returncode=0
         def __init__(self,command,**options):self.output=Path(command[command.index('-o')+1])
@@ -61,7 +61,7 @@ def test_actual_case_rename_does_not_start_two_self_ingestion_rounds(brain,monke
                 'reason':'This synthetic derived item has no new reusable original evidence.','quote':row['text'][:100]}
                 for row in selected['sources']]}
             self.output.write_text(json.dumps(result),encoding='utf-8')
-    monkeypatch.setattr(w.subprocess,'Popen',Process)
+    model_process_stub(monkeypatch,Process)
     reports=[w.run(limit=4),w.run(limit=4)]
     assert not calls and [row['status'] for row in reports]==['idle','idle']
     assert w.status()['pending_source_parts']==0

@@ -2,7 +2,7 @@
 
 A local authenticated MCP service for an Obsidian Markdown vault, current-file search, milestone capture and evidence-linked derived pages. Each computer keeps its own Python, credentials, SQLite index and model cache. One designated maintainer compiles the shared wiki. The existing maintenance service serializes Git synchronization and daily linking.
 
-## Release scope — 29 October 2026
+## Release scope — 2 November 2026
 
 **v0.1.8 is the Windows hardening candidate.** Use only a trusted handover that supplies its approved commit, manifest SHA256 and qualification report. A branch name or this document is not deployment acceptance. The previously accepted Windows and Apple Silicon Mac deployment is v0.1.7. Mac/Linux must stay on that accepted tag until their new lifecycle is qualified; v0.1.8 refuses mutating setup/update/recovery there. Library imports on another OS do not establish native service acceptance.
 
@@ -32,10 +32,12 @@ Use an ordinary host PowerShell and verified Python 3.12. Prepare uv/Python seri
 
 ```powershell
 & $BrainBasePython -I -B -c "from pathlib import Path; import runpy; print(runpy.run_path(str(Path.cwd()/'update.py'))['verify'](Path.cwd())['version'])"
-& $BrainBasePython -I -B install.py --root <new runtime> --vault <existing vault> --role capture --uv $BrainUv --download-model --install-service
+& $BrainBasePython -I -B install.py --root <new runtime> --vault <existing vault> --role capture --uv $BrainUv --download-model
 ```
 
 The first command checks internal manifest consistency only. It does not independently authenticate the download. The team kit's trusted standard-library verifier checks the supplied commit/tag, manifest hash, payload and clean checkout before executing software.
+
+This creates the runtime only. Before registering or starting a service, use the trusted team kit's sealed `prepare_device.py` plan/apply workflow to select the actual IANA timezone and, for a new independent maintainer, create the explicit Control bootstrap. The compatibility default is Asia/Karachi; it is not inferred from the computer. Preserve the complete install journal and never hand-edit device/journal hashes to bypass preparation. Without a matching qualified kit, first-start acceptance stays pending.
 
 Fresh setup leaves client files alone unless selected. Add `--configure-clients --client claude-code --client codex` to the SAME initial command only for the clients chosen by the owner. Desktop is separately selected; close it or explicitly skip its refresh. Hooks require `--include-hooks`. Preserve unrelated settings and verify a real tool call in each named fresh client. See the device guide for existing v0.1.8 client refresh and manual addition of a new client; v0.1.7 entries refresh during the forward upgrade.
 

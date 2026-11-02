@@ -85,7 +85,7 @@ def _observe_transport(monkeypatch):
 @pytest.mark.parametrize('kind',['ordinary','archive'])
 def test_actual_staged_blob_reads_apply_policy_and_preserve_original_bytes(brain,tmp_path,monkeypatch,isolated_git,kind):
     vault,state=brain;_init(vault,isolated_git)
-    raw='Harmless staged source اردو.\r\n'.encode('utf-8')
+    raw='Harmless staged source Ø§Ø±Ø¯Ùˆ.\r\n'.encode('utf-8')
     relative=('03-Resources/Ordinary.md' if kind=='ordinary' else
               '02-Areas/AI-Memory/Wiki/Log-Archives/'+hashlib.sha256(raw).hexdigest()+'.md')
     note=vault/relative;note.parent.mkdir(parents=True,exist_ok=True);note.write_bytes(raw)
@@ -99,7 +99,7 @@ def test_actual_staged_blob_reads_apply_policy_and_preserve_original_bytes(brain
     else:
         assert g._archive_blob(vault,relative,entry,g._archive_file(relative,note)) is None
     assert len(calls)==2
-    assert all(command[:3]==['git','-c','core.fsmonitor=false'] for command in calls)
+    assert all(Path(command[0]).is_absolute() and Path(command[0]).name.lower() in ('git','git.exe') and command[1:3]==['-c','core.fsmonitor=false'] for command in calls)
     assert [command[6:8] for command in calls]==[['cat-file','-s'],['cat-file','blob']]
     assert note.read_bytes()==raw and config.read_bytes()==before
 
@@ -126,9 +126,9 @@ def test_actual_public_sync_with_local_fsmonitor_true_succeeds_for_two_cycles(br
                       capture_output=True,text=True,encoding='utf-8',timeout=2.5).returncode
     try:
         assert daemon_status()==1, 'New disposable repository already has a monitor.'
-        note=vault/'03-Resources/Ordinary space é.md'
+        note=vault/'03-Resources/Ordinary space Ã©.md'
         for cycle in (1,2):
-            raw=('Controlled ordinary source اردو, cycle '+str(cycle)+'.\n').encode('utf-8');note.write_bytes(raw)
+            raw=('Controlled ordinary source Ø§Ø±Ø¯Ùˆ, cycle '+str(cycle)+'.\n').encode('utf-8');note.write_bytes(raw)
             started=time.monotonic()
             assert g.sync(vault)=='synced'
             assert time.monotonic()-started<12
@@ -137,7 +137,7 @@ def test_actual_public_sync_with_local_fsmonitor_true_succeeds_for_two_cycles(br
             assert _raw(remote,'show','main:03-Resources/'+note.name)==raw
             assert config.read_bytes()==owner_config and (remote/'config').read_bytes()==remote_config
         policy_calls=[command for command in transport if '--literal-pathspecs' in command]
-        assert policy_calls and all(command[:3]==['git','-c','core.fsmonitor=false'] for command in policy_calls)
+        assert policy_calls and all(Path(command[0]).is_absolute() and Path(command[0]).name.lower() in ('git','git.exe') and command[1:3]==['-c','core.fsmonitor=false'] for command in policy_calls)
         assert any(command[6:8]==['cat-file','blob'] for command in policy_calls)
         assert frontdoor and all(command[:2]==['git','--literal-pathspecs'] for command in frontdoor)
         assert _raw(vault,'config','--local','--get','core.fsmonitor').strip()==b'true'

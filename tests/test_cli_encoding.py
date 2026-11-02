@@ -47,7 +47,7 @@ def test_cli_json_is_utf8_even_when_parent_requests_cp1252(pipe_environment, mon
                            capture_output=True, timeout=10)
     assert child.returncode == 0, child.stderr.decode('utf-8', errors='backslashreplace')
     result = json.loads(child.stdout.decode('utf-8'))
-    assert result == {'path': source, 'requeue_unverified': False, 'dry_run': False}
+    assert result == {'path': source, 'requeue_unverified': False, 'dry_run': False,'hold_id':None}
     assert source.encode('utf-8') in child.stdout
 
 

@@ -77,7 +77,7 @@ def test_ordinary_incoming_tree_uses_local_file_backed_transport_and_merges(brai
         if list(command)[4:5]==['ls-tree']:
             queries.append((list(command),dict(kwargs)))
             assert kwargs['stdout'] not in (None,subprocess.PIPE) and kwargs['stderr']==subprocess.DEVNULL
-            assert kwargs['timeout']==90
+            assert 0<kwargs['timeout']<=90
             assert kwargs['env']['GIT_ALLOW_PROTOCOL']=='' and kwargs['env']['GIT_NO_LAZY_FETCH']=='1'
             assert kwargs['env']['GIT_NO_REPLACE_OBJECTS']=='1' and kwargs['env']['GIT_OPTIONAL_LOCKS']=='0'
         return shipping(command,**kwargs)

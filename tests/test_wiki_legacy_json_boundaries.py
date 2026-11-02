@@ -86,8 +86,9 @@ def test_unreadable_legacy_input_does_not_fabricate_missing_claim_evidence(brain
 def test_fatal_memory_error_is_not_reclassified_as_unreadable_legacy_data(brain,monkeypatch,artifact):
     _,packet,result=fixture(brain);folder=make_legacy(packet,w.apply(packet,result))
     (folder/'output.json').write_text(json.dumps(result),encoding='utf-8')
-    target=folder/artifact; original=Path.read_bytes if artifact=='journal.json' else Path.read_text
-    method='read_bytes' if artifact=='journal.json' else 'read_text'
+    target=folder/artifact
+    method='read_bytes' if artifact=='journal.json' else ('open' if artifact=='output.json' else 'read_text')
+    original=getattr(Path,method)
     def fail(path,*args,**kwargs):
         if path==target: raise MemoryError('synthetic fatal allocation')
         return original(path,*args,**kwargs)

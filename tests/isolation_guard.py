@@ -11,6 +11,7 @@ from urllib.request import url2pathname
 _POPEN = subprocess.Popen
 SANDBOX = Path(os.environ['SB_TEST_SANDBOX']).resolve()
 LIVE = ('e:/second-brain', 'e:/second-brain-system')
+PRIVATE_OWNER=()
 
 
 def validate_sandbox(value, real_home, repo):
@@ -158,10 +159,20 @@ def check(command, *, cwd=None, env=None):
     values += list((os.environ if env is None else env).values())
     if any(live_path(value) for value in values):
         raise AssertionError('Test guard refuses a live Second Brain path.')
+    if any(re.search(re.escape(root)+r'(?=$|[/;"\s])',text) for text in map(canonical,values) for root in PRIVATE_OWNER):
+        raise AssertionError('Test guard refuses an owner credential/configuration path.')
     for value in args:
         if any(name in value.casefold() for name in ('secondbrainlocalservice', 'local.second-brain', 'second-brain.service')):
             raise AssertionError('Test guard refuses a production service identity.')
     executable = Path(args[0]).name.casefold().removesuffix('.exe')
+    if executable in ('cmd','powershell','pwsh','bash','sh','wsl'):
+        tokens=[value.casefold() for value in args[1:]]
+        if executable=='cmd' and tokens[:1]==['/d']:tokens=tokens[1:]
+        safe_junction=(executable=='cmd' and len(tokens)==5 and tokens[:3]==['/c','mklink','/j']
+                       and all(inside(value) and not any(char in value for char in '&|<>^%\r\n') for value in args[-2:]))
+        if not safe_junction:raise AssertionError('Test guard refuses shell-wrapped commands except an exact sandbox junction fixture.')
+    if executable in ('codex','codex.cmd','claude','claude.cmd'):
+        raise AssertionError('Test guard refuses an external inference CLI.')
     if executable in ('uv', 'uvx'):
         raise AssertionError('Test guard refuses dependency/model provisioning in tests.')
     if (executable in ('schtasks', 'launchctl', 'systemctl', 'sc')
@@ -172,6 +183,8 @@ def check(command, *, cwd=None, env=None):
         position=args.index('-c')
         code=args[position+1] if position+1<len(args) else ''
         lowered=code.casefold()
+        if 'fastembed' in lowered:
+            raise AssertionError('Test guard refuses an inline embedding/model launch; use a reviewed synthetic fixture script.')
         if any(name in lowered for name in ('brain_cli','brain_client','brain_supervisor','brain_service','install.py','update.py')) or any(statement in lowered for statement in ('import install','from install ','import update','from update ')):
             raise AssertionError('Test guard refuses an inline service-capable product entrypoint.')
     if '-m' in args:
@@ -214,8 +227,52 @@ class GuardedPopen(_POPEN):
         super().__init__(args, **kwargs)
 
 
-def install():
+def install(real_home=None):
+    global PRIVATE_OWNER
+    if real_home is not None:
+        PRIVATE_OWNER=tuple(canonical(Path(real_home)/name) for name in
+            ('.codex/auth.json','.codex/config.toml','.claude.json','.claude/.credentials.json','.ssh','.aws','.gnupg','.config/gcloud'))
     subprocess.Popen = GuardedPopen
+    import asyncio
+    original_async=asyncio.BaseEventLoop.subprocess_exec
+    async def guarded_async(self,factory,program,*args,**kwargs):
+        if kwargs.get('shell'):raise AssertionError('Test guard refuses async shell processes.')
+        check([program,*args],cwd=kwargs.get('cwd'),env=kwargs.get('env'))
+        return await original_async(self,factory,program,*args,**kwargs)
+    async def no_async_shell(*args,**kwargs):raise AssertionError('Test guard refuses async shell processes.')
+    asyncio.BaseEventLoop.subprocess_exec=guarded_async
+    asyncio.BaseEventLoop.subprocess_shell=no_async_shell
+    import socket,ipaddress
+    def local(address):
+        if not isinstance(address,tuple):return # local Unix-domain sockets
+        host=address[0]
+        try:okay=ipaddress.ip_address(host).is_loopback
+        except ValueError:okay=False
+        if not okay:raise AssertionError('Test guard refuses a non-loopback Python socket connection.')
+    connect=socket.socket.connect;connect_ex=socket.socket.connect_ex;resolve=socket.getaddrinfo
+    def guarded_connect(self,address):local(address);return connect(self,address)
+    def guarded_connect_ex(self,address):local(address);return connect_ex(self,address)
+    def guarded_resolve(host,*args,**kwargs):
+        if host not in (None,'localhost','127.0.0.1','::1'):
+            try:okay=ipaddress.ip_address(host).is_loopback
+            except ValueError:okay=False
+            if not okay:raise AssertionError('Test guard refuses non-loopback Python DNS resolution.')
+        return resolve(host,*args,**kwargs)
+    socket.socket.connect=guarded_connect;socket.socket.connect_ex=guarded_connect_ex;socket.getaddrinfo=guarded_resolve
+    sendto=socket.socket.sendto
+    def guarded_sendto(self,data,*args):
+        if args:local(args[-1])
+        return sendto(self,data,*args)
+    socket.socket.sendto=guarded_sendto
+    if os.name=='nt':
+        from asyncio.windows_events import IocpProactor
+        connect_native=IocpProactor.connect;sendto_native=IocpProactor.sendto
+        def guarded_iocp_connect(self,connection,address):local(address);return connect_native(self,connection,address)
+        def guarded_iocp_sendto(self,connection,buffer,flags=0,addr=None):
+            if addr is not None:local(addr)
+            return sendto_native(self,connection,buffer,flags,addr)
+        IocpProactor.connect=guarded_iocp_connect;IocpProactor.sendto=guarded_iocp_sendto
+
     if os.name == 'nt':
         # Git uses CreateProcessW directly for Job containment, bypassing Popen.
         import brain_windows_process

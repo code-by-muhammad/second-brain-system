@@ -87,7 +87,7 @@ def test_git_timeout_reason_and_retry_policy(brain,tmp_path,monkeypatch,remainin
     page,claims,_=history_fixture(brain,tmp_path,claims=1,revisions=2)
     control=w._EvidenceHistory();old=list(control._versions(page['path']))[1]
     old_sha=old['_meta']['source_hashes'][claims[0]['source']]
-    original=w._GIT_POPEN;calls=[]
+    original=w._GIT_RUN;calls=[]
     class Timeout:
         returncode=0
         def __enter__(self):return self
@@ -98,8 +98,9 @@ def test_git_timeout_reason_and_retry_policy(brain,tmp_path,monkeypatch,remainin
         def kill(self):pass
     def first_timeout(*args,**kwargs):
         calls.append(True)
-        return Timeout() if len(calls)==1 else original(*args,**kwargs)
-    monkeypatch.setattr(w,'_GIT_POPEN',first_timeout)
+        if len(calls)==1:raise subprocess.TimeoutExpired('synthetic Git',kwargs['timeout'])
+        return original(*args,**kwargs)
+    monkeypatch.setattr(w,'_GIT_RUN',first_timeout)
     now=w.time.monotonic();monkeypatch.setattr(w.time,'monotonic',lambda:now)
     history=w._EvidenceHistory();history.deadline=w.time.monotonic()+remaining
     serial=history.failure_serial

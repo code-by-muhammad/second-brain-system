@@ -1,12 +1,14 @@
 """Local, file-first write boundary. No shell/network execution or arbitrary writes."""
 from __future__ import annotations
 import hashlib, json, os, re, tempfile
+import time,stat
+from brain_walk import walk,WalkLimit
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from filelock import FileLock
 import yaml
-from brain_markdown import frontmatter
+from brain_markdown import frontmatter,bounded_file_bytes,bounded_json_file
 import brain_settings as cfg
 
 ROOT, VAULT, STATE = cfg.ROOT, cfg.VAULT, cfg.STATE
@@ -89,9 +91,7 @@ def _check_note_size(path):
     if size>NOTE_LIMIT: raise ValueError(_NOTE_LIMIT_ERROR)
 
 def _note_bytes(path):
-    with path.open('rb') as stream: raw=stream.read(NOTE_LIMIT+1)
-    if len(raw)>NOTE_LIMIT: raise ValueError(_NOTE_LIMIT_ERROR)
-    return raw
+    return bounded_file_bytes(path,NOTE_LIMIT,_NOTE_LIMIT_ERROR)
 
 def _read_reference(relative: str) -> Path:
     """Resolve an exact read reference; writes still require safe_path directly."""
@@ -99,11 +99,11 @@ def _read_reference(relative: str) -> Path:
         raise ValueError('Provide an exact vault-relative Markdown path or wikilink.')
     # An explicit filename can contain a literal selector character. Never
     # reinterpret an existing exact Markdown path as a heading reference.
+    try: exact=safe_path(relative)
+    except ValueError: pass
+    else:
+        if exact.is_file(): return exact
     if not relative.startswith('[['):
-        try: exact=safe_path(relative)
-        except ValueError: pass
-        else:
-            if exact.is_file(): return exact
         target=relative
         if any(mark in target for mark in ('[[',']]', '![')):
             raise ValueError('Malformed note reference; use the exact path from brain_search.')
@@ -133,6 +133,7 @@ def read(relative: str, start_line=1, max_lines=160):
 
 def _write(p:Path,text:str,kind:str,expected_sha256:str|None=None):
     raw=text.encode('utf-8')
+    if len(raw)>NOTE_LIMIT: raise ValueError(_NOTE_LIMIT_ERROR)
     old=_note_bytes(p) if p.exists() else None
     before=digest(old) if old is not None else None
     if expected_sha256 is not None and before!=expected_sha256:
@@ -140,15 +141,37 @@ def _write(p:Path,text:str,kind:str,expected_sha256:str|None=None):
     if old==raw: return {'path':p.relative_to(VAULT).as_posix(),'status':'unchanged','sha256':before}
     if old is not None:
         archive=STATE/'write-backups'/before
+        if any(item.is_symlink() or os.path.isjunction(item) for item in (archive.parent,*archive.parent.parents)):
+            raise ValueError('Linked write backup folder refused.')
         archive.parent.mkdir(parents=True,exist_ok=True)
-        if not archive.exists(): archive.write_bytes(old)
+        if archive.is_symlink() or os.path.isjunction(archive):raise ValueError('Linked write backup refused.')
+        if archive.exists():
+            if not archive.is_file() or archive.stat().st_size!=len(old):raise ValueError('Write backup integrity failed; preserve it for review.')
+            with archive.open('rb') as saved:stored=saved.read(len(old)+1)
+            if stored!=old:raise ValueError('Write backup integrity failed; preserve it for review.')
+        else:
+            descriptor,temporary=tempfile.mkstemp(prefix='.backup-',dir=archive.parent)
+            try:
+                with os.fdopen(descriptor,'wb') as output:
+                    output.write(old);output.flush();os.fsync(output.fileno())
+                os.replace(temporary,archive)
+            finally:
+                if os.path.exists(temporary):os.unlink(temporary)
     p.parent.mkdir(parents=True,exist_ok=True)
     fd,tmp=tempfile.mkstemp(prefix='.brain-',suffix='.tmp',dir=p.parent)
     replaced=False
     try:
         try:
             with os.fdopen(fd,'wb') as f: f.write(raw); f.flush(); os.fsync(f.fileno())
-            os.replace(tmp,p)
+            # Includes the staging/fsync window; this is a cooperative editor
+            # guard, not OS-level compare-and-swap against arbitrary editors.
+            safe_path(p.relative_to(VAULT).as_posix())
+            current=_note_bytes(p) if p.exists() else None
+            if current!=old:raise ValueError('Concurrent change detected. Read the current note and merge before retrying.')
+            if old is None:
+                if os.name=='nt':os.rename(tmp,p)  # Atomic create, never overwrite a new owner file.
+                else:os.link(tmp,p)
+            else:os.replace(tmp,p)
             replaced=True
         finally:
             if os.path.exists(tmp): os.unlink(tmp)
@@ -184,6 +207,7 @@ def capture(event_id:str,title:str,outcome:str,source_app:str,source_reference:s
     p=safe_path(f'00-Inbox/AI-Captures/{key}.md')
     _check_note_size(p)
     with FileLock(str(STATE/'writer.lock'),timeout=20):
+        cfg.write_admission()
         if p.exists():
             existing=_note_bytes(p)
             previous=frontmatter(existing.decode('utf-8'),strict=True)
@@ -219,6 +243,7 @@ def update_current(path:str,title:str,content:str,source_paths:list[str],expecte
         _check_note_size(source)
     _check_note_size(p)
     with FileLock(str(STATE/'writer.lock'),timeout=20):
+        cfg.write_admission()
         if p.exists() and expected_sha256 is None: raise ValueError('Read current SHA256 before updating an existing page.')
         now=stamp()
         meta={'date':now[:10],'type':'note','tags':['ai-memory','derived'],'updated_at':now,
@@ -227,20 +252,48 @@ def update_current(path:str,title:str,content:str,source_paths:list[str],expecte
         body=f'# {title}\n\n{content}\n\n## Sources\n'+'\n'.join('- '+note_link(source,rel) for source in source_paths)
         return _write(p,note_text(meta,body),'update_current',expected_sha256)
 
+class FreshMatches(list):
+    """List compatibility plus explicit coverage of the bounded file fallback."""
+    def __init__(self,rows,scope):super().__init__(rows);self.scope=scope
+
+
 def fresh_search(query:str,limit:int=6):
     clean_text(query,1000)
     stop={'the','and','for','with','was','were','where','what','which','how','does','this','that','from','about','built','project'}
     terms=[t for t in re.findall(r'[\w]+',query.lower()) if len(t)>2 and t not in stop]
-    found=[]
-    for p in VAULT.rglob('*.md',case_sensitive=False):
+    found=[];started=time.monotonic();files=0;total=0;skipped=0;reason=None
+    def check():
+        if time.monotonic()-started>=10:raise WalkLimit('fresh_search_time_limit')
+    def errors(error):
+        nonlocal skipped
+        skipped+=1
+    def paths():
+        for directory,dirs,names in walk(VAULT,check=check,onerror=errors,max_entries=100_000,max_path_bytes=16*1024*1024):
+            parent=Path(directory)
+            dirs[:]=[name for name in dirs if not name.startswith('.') and not (parent/name).is_symlink() and not os.path.isjunction(parent/name)]
+            for name in names:
+                if name.lower().endswith('.md'):yield parent/name
+    try:
+      for p in paths():
         try:
+            check();files+=1
+            if files>10_000:raise WalkLimit('fresh_search_file_limit')
             rel=p.relative_to(VAULT).as_posix(); _safe_discovered_path(p)
-            if p.stat().st_size>NOTE_LIMIT: continue
-            text=_note_bytes(p).decode('utf-8-sig').replace('\r\n','\n').replace('\r','\n'); low=text.lower()
+            info=p.stat()
+            if not stat.S_ISREG(info.st_mode) or info.st_size>NOTE_LIMIT or getattr(info,'st_file_attributes',0)&(0x1000|0x40000|0x400000):skipped+=1;continue
+            if total+info.st_size>64*1024*1024:raise WalkLimit('fresh_search_byte_limit')
+            raw=_note_bytes(p);total+=len(raw)
+            if total>64*1024*1024:raise WalkLimit('fresh_search_byte_limit')
+            text=raw.decode('utf-8-sig').replace('\r\n','\n').replace('\r','\n'); low=text.lower()
             title=p.stem.lower()
             score=sum(1 for t in terms if t in low)+sum(5 for t in terms if t in title)
             if score:
                 line=next((i+1 for i,l in enumerate(text.splitlines()) if any(t in l.lower() for t in terms)),1)
                 found.append({'path':rel,'line':line,'matches':score,'mtime':p.stat().st_mtime})
-        except (OSError,ValueError,UnicodeError): continue
-    return sorted(found,key=lambda x:(-x['matches'],-x['mtime']))[:max(1,min(limit,15))]
+        except WalkLimit:raise
+        except (OSError,ValueError,UnicodeError):skipped+=1;continue
+    except WalkLimit as error:reason=str(error)
+    return FreshMatches(sorted(found,key=lambda x:(-x['matches'],-x['mtime']))[:max(1,min(limit,15))],
+        {'status':'partial' if reason or skipped else 'complete within Markdown file scope','reason':reason,
+         'files_examined':min(files,10_000),'bytes_read':total,'skipped':skipped,
+         'scope':'visible regular .md files; hidden/linked directories excluded; 10 seconds/10000 files/64 MiB; ranking is lexical'})

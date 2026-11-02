@@ -29,7 +29,23 @@ jobs:
         with:
           version: '0.9.16'
           enable-cache: false
+      - name: Record qualification source identity
+        shell: pwsh
+        env:
+          QUAL_SHA: ${{ github.sha }}
+          QUAL_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          QUAL_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          QUAL_EVENT: ${{ github.event_name }}
+          QUAL_REF: ${{ github.ref }}
+          QUAL_RUN: ${{ github.run_id }}
+        run: |
+          New-Item -ItemType Directory -Path reports -Force -ErrorAction Stop | Out-Null
+          $qualificationCommit = (git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD).Trim()
+          $qualificationTree = (git --no-optional-locks -c core.fsmonitor=false rev-parse 'HEAD^{tree}').Trim()
+          @{ commit = $env:QUAL_SHA; checked_out_commit = $qualificationCommit; checked_out_tree = $qualificationTree; pr_head = $env:QUAL_PR_HEAD; pr_base = $env:QUAL_PR_BASE; event = $env:QUAL_EVENT; ref = $env:QUAL_REF; run_id = $env:QUAL_RUN; manifest_sha256 = (Get-FileHash -LiteralPath release-manifest.json -Algorithm SHA256).Hash.ToLowerInvariant(); profile_sha256 = (Get-FileHash -LiteralPath security-exceptions.json -Algorithm SHA256).Hash.ToLowerInvariant() } | ConvertTo-Json | Set-Content -LiteralPath reports/source.json -Encoding utf8
       - run: uv sync --locked --python 3.12
+      - name: Verify shipped payload manifest consistency
+        run: uv run --locked python -I -B -c "import runpy; from pathlib import Path; runpy.run_path('update.py')['verify'](Path.cwd())"
       - name: Windows guarded regression (synthetic state only)
         shell: pwsh
         run: |
@@ -61,16 +77,29 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - run: uv run --locked python -m compileall -q app install.py update.py setup_runtime.py build_release.py
       - run: uv run --locked python tests/smoke_import.py
-      - run: uv export --locked --no-dev --no-hashes --output-file audit-requirements.txt
+      - run: uv export --locked --no-dev --no-hashes --output-file reports/audit-requirements.txt
       - name: Raw dependency audit and scoped profile gate
         shell: pwsh
         run: |
-          $dependencyReport = Join-Path $env:RUNNER_TEMP 'second-brain-dependency-audit.json'
-          uvx --python 3.12 --from pip-audit==2.9.0 pip-audit --disable-pip --no-deps -r audit-requirements.txt --format json --output $dependencyReport
+          $dependencyReport = 'reports/dependency-audit.json'
+          uvx --python 3.12 --from pip-audit==2.9.0 pip-audit --disable-pip --no-deps -r reports/audit-requirements.txt --format json --output $dependencyReport
           $dependencyAuditExit = $LASTEXITCODE
           if ($dependencyAuditExit -notin @(0,1)) { exit $dependencyAuditExit }
-          uv run --locked python -I -B check_dependency_audit.py $dependencyReport
+          uv run --locked python -I -B check_dependency_audit.py $dependencyReport 2>&1 | Tee-Object -FilePath reports/dependency-profile.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain bounded synthetic qualification reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-qualification-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            reports/source.json
+            reports/windows-regression.xml
+            reports/audit-requirements.txt
+            reports/dependency-audit.json
+            reports/dependency-profile.txt
+          if-no-files-found: warn
+          retention-days: 30
   library-import:
     name: Library import only (${{ matrix.os }})
     strategy:

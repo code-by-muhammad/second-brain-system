@@ -1,6 +1,6 @@
 # Verification and device acceptance
 
-Revision: 29 October 2026. The v0.1.8 candidate's native qualification is Windows only. Accepted v0.1.7 remains the Mac/Linux onboarding baseline. Never turn a library import, configuration entry or historical test into a new physical-device claim.
+Revision: 2 November 2026. The v0.1.8 candidate's native qualification is Windows only. Accepted v0.1.7 remains the Mac/Linux onboarding baseline. Never turn a library import, configuration entry or historical test into a new physical-device claim.
 
 ## Automated regression boundary
 
@@ -11,6 +11,10 @@ The default pytest suite uses disposable synthetic roots outside the checkout an
 Windows CI supplies an allowlisted process environment before pytest, keeps real HOME only until conftest establishes private fixture HOME, disables plugin autoload and explicitly loads `pytest_asyncio.plugin`. Checkout credentials are not persisted. CI invokes the full regression with JUnit; compile/import checks follow. The pinned dependency audit runs in the Windows job. Ubuntu/macOS jobs compile/import libraries only; they do not install or accept the v0.1.8 service. A hosted run is a pass only after it actually completes; billing/unavailable runners remain unverified.
 
 Inspect failures, exact source hashes, skips and async results. No raw environment/credentials, private notes or installed SQLite should enter the test fixtures or shared report. A test guard is a tripwire, not an OS security sandbox.
+
+CI uploads only its source identity, synthetic JUnit, exported runtime requirements, raw dependency audit and separate profile-check output, including after failures where a report exists. The SHA-pinned artifact action retains them for 30 days; missing reports remain visible, not inferred passes. Keep the final curated handoff beyond that hosted retention window. No runtime environment, owner inputs or private runner logs are uploaded.
+
+Local fixtures scrub ambient proxy/certificate/auth overrides before imports and use private model/config homes. Python subprocess and asyncio routes refuse external inference and shell wrappers except an exact sandbox junction fixture; the wiki model boundary is refused unless explicitly mocked. Python socket connections/DNS are limited to loopback, and known real-owner credential/config paths are refused in child arguments/environment. This is not an OS network or filesystem sandbox: native extensions/children require their own isolation controls. Actual synthetic MCP/proxy controls disable environment and registry proxy routing. The synthetic Windows MCP server uses a private Job and verified cleanup; this transport test and mocked listener controls do not establish production native service ownership. POSIX two-peer rename cases remain skipped on Windows and are a retained qualification gap.
 
 The audit gate reconciles all 160 packages in the qualified Windows runtime graph. It retains raw findings and separately applies only the exact, source-bound and time-limited FastMCP OAuth exception in [the security profile](../SECURITY.md). Missing/unscanned packages, other advisories, protected source changes and expiry fail the gate. LiteLLM exclusion, provider/reranker refusal, static-token routing, native lock contention and the patched embedding/model behavior need their own tests; package resolution is insufficient.
 

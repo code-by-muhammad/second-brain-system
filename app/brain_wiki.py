@@ -5,17 +5,26 @@ from pathlib import Path
 from datetime import datetime, date
 from contextlib import contextmanager
 from filelock import FileLock, Timeout as LockTimeout
-from brain_markdown import frontmatter
+from brain_markdown import frontmatter,bounded_date_label,bounded_json_file
 import brain_store as s
 import brain_settings as cfg
 import brain_git
-_GIT_POPEN=subprocess.Popen  # Keep read-only evidence processes separate from the model runner.
+_GIT_RUN=brain_git._run_git  # Read-only history uses the same owned process transport.
 
 BASE='02-Areas/AI-Memory/Wiki/'
 SOURCE_POLICY='02-Areas/AI-Memory/Wiki-Source-Policy.md'
 SOURCE_ROOTS=('00-Inbox','01-Projects','02-Areas','03-Resources','04-Archive','06-People','07-Meetings')
 KINDS=('Projects','People','Concepts','Decisions','Experience')
 SHORT_PART_REASON='Deterministic skip: this exact source part contains fewer than 12 characters after trimming whitespace and cannot support a substantive evidence quote.'
+MODEL_OUTPUT_BYTES=8_000_000
+
+def _read_model_output(path):
+    if any(item.is_symlink() or item.is_junction() for item in (path,*path.parents)):
+        raise WikiOutputError('Linked model output is refused.')
+    if path.stat().st_size>MODEL_OUTPUT_BYTES:raise WikiOutputError('Structured model output exceeds its byte budget; preserve it for review.')
+    with path.open('rb') as stream:raw=stream.read(MODEL_OUTPUT_BYTES+1)
+    if len(raw)>MODEL_OUTPUT_BYTES:raise WikiOutputError('Structured model output exceeds its byte budget; preserve it for review.')
+    return json.loads(raw)
 def normalized(text): return text.replace('\r\n','\n').replace('\r','\n')
 SCHEMA={'type':'object','additionalProperties':False,'required':['pages'], 'properties':{'pages':{
  'type':'array','items':{'type':'object','additionalProperties':False,'required':['category','slug','title','claims','related'],
@@ -596,12 +605,13 @@ def _short_disposition(row):
 def _read_worker_state():
     path=cfg.STATE/'wiki-worker-status.json'
     default={'status':'idle','attention_required':False,'consecutive_failures':0,'retry_after':0}
-    if not path.exists(): return default
+    if not path.exists() and not path.is_symlink() and not path.is_junction(): return default
     try:
-        value=json.loads(path.read_text(encoding='utf-8'))
+        value=bounded_json_file(path,65536)
         if not isinstance(value,dict): raise ValueError('Invalid worker state.')
         value={**default,**value}
-        if value['status'] not in ('idle','complete','error','blocked','retryable','retry requested','output_backoff','worker_backoff','attention'): raise ValueError('Invalid worker status.')
+        if value['status'] not in ('idle','complete','error','blocked','retryable','retry requested','output_backoff','worker_backoff','attention','cleanup pending'): raise ValueError('Invalid worker status.')
+        if value['status']=='cleanup pending':value.update(attention_required=True,reason='owned model cleanup pending; worker lock retained; inspect private lifetime evidence')
         if not isinstance(value['attention_required'],bool) or type(value['consecutive_failures']) is not int or not 0<=value['consecutive_failures']<=3: raise ValueError('Invalid worker failure state.')
         retry=value['retry_after']
         if type(retry) not in (int,float) or not math.isfinite(retry) or retry<0: raise ValueError('Invalid worker backoff.')
@@ -743,7 +753,10 @@ def _policy_summary(policy):
         'matching':'case-sensitive exact paths and slash-terminated directory prefixes'}
 
 def _policy_excluded(path,policy):
-    return path in policy['exclude_paths'] or any(path.startswith(prefix) for prefix in policy['exclude_prefixes'])
+    if path in policy['exclude_paths'] or any(path.startswith(prefix) for prefix in policy['exclude_prefixes']):return True
+    if os.name=='nt' and (any(path.casefold()==rule.casefold() for rule in policy['exclude_paths']) or any(path.casefold().startswith(rule.casefold()) for rule in policy['exclude_prefixes'])):
+        raise WikiPolicyError('An exclusion differs only by case from a current source; review exact rule spelling before compilation.',policy.get('sha256'))
+    return False
 
 def _policy_attention(exc):
     return {'status':'attention','attention_required':True,'reason':str(exc),
@@ -780,7 +793,7 @@ def inventory(include_excluded=False,policy=None):
                 chunks=[text[i:i+24000] for i in range(0,len(text),23000)] or ['']
                 for part,chunk in enumerate(chunks,1):
                     result.append({'path':rel,'job_key':rel+'::part'+str(part),'part':part,'parts':len(chunks),
-                                   'sha256':s.digest(raw),'date':str(info.get('date','unknown'))[:10],
+                                   'sha256':s.digest(raw),'date':bounded_date_label(info.get('date','unknown')),
                                    'title':next((line[2:] for line in text.splitlines() if line.startswith('# ')),p.stem),'text':chunk})
             except (ValueError,OSError,UnicodeError): continue
     # Project briefs first; then new captures, then other evidence. Never use mtime as factual date.
@@ -789,9 +802,11 @@ def inventory(include_excluded=False,policy=None):
 def status():
     try: policy=source_policy()
     except WikiPolicyError as exc: return _policy_attention(exc)
-    all_sources=inventory(include_excluded=True,policy=policy)
-    sources=[row for row in all_sources if not _policy_excluded(row['path'],policy)]
-    excluded=[row for row in all_sources if _policy_excluded(row['path'],policy)]
+    try:
+        all_sources=inventory(include_excluded=True,policy=policy)
+        sources=[row for row in all_sources if not _policy_excluded(row['path'],policy)]
+        excluded=[row for row in all_sources if _policy_excluded(row['path'],policy)]
+    except WikiPolicyError as exc:return _policy_attention(exc)
     portable=_hydrate_receipts(all_sources)
     verified=set(portable['verified_job_keys'])
     with db() as conn:
@@ -1082,7 +1097,7 @@ def _hydrate_receipts(sources):
     verified_keys=sorted({entry['job_key'] for entry in verified})
     return {'verified_parts':len(verified_keys),'verified_job_keys':verified_keys,'issues':issues}
 
-def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
+def migrate_legacy_receipts(requeue_unverified=False,dry_run=False,hold_id=None):
     """Explicit, audited upgrade step; never infer part coverage from Source notes.
 
     Existing local completion state is accepted only with a matching complete
@@ -1092,6 +1107,7 @@ def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
     """
     cfg.require_maintainer()
     with FileLock(str(cfg.STATE/'writer.lock'),timeout=30):
+        cfg.write_admission(hold_id)
         rows={row['job_key']:row for row in inventory(include_excluded=True)}; cache=_claim_cache()
         with db() as conn:
             local={row['path']:dict(row) for row in conn.execute('SELECT * FROM sources')}
@@ -1144,7 +1160,7 @@ def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
             output_proofs=None
             if exact_packet:
                 try:
-                    output=json.loads((packet_path.parent/'output.json').read_text(encoding='utf-8'))
+                    output=_read_model_output(packet_path.parent/'output.json')
                     _validate_shape(output)
                     output_proofs={BASE+page['category']+'/'+page['slug']+'.md':{_claim_hash(claim) for claim in page['claims']} for page in output['pages']}
                 except (OSError,ValueError,TypeError,KeyError,AttributeError,RecursionError): pass
@@ -1187,10 +1203,11 @@ def migrate_legacy_receipts(requeue_unverified=False,dry_run=False):
                 'unverified_parts':unverified,'requeued_parts':len(unverified) if requeue_unverified and not dry_run else 0,'dry_run':dry_run,
                 'complete_journals_verified':len(verified_batches),'rejected_batches':rejected,'receipts_created':written}
 
-def rebuild_source_links():
+def rebuild_source_links(hold_id=None):
     """Correct old batch-cohort navigation from actual claim attribution only."""
     cfg.require_maintainer()
     with FileLock(str(cfg.STATE/'writer.lock'),timeout=30):
+        cfg.write_admission(hold_id)
         links={}
         for page in _checked_pages():
             for claim in _list(page['meta'].get('wiki_claims')):
@@ -1384,7 +1401,7 @@ def _source_bytes(raw,active=None):
     if active is not None and not active(): return None
     metadata=meta(text)
     return {'text':text,'variants':variants,'text_sha256':s.digest(text.encode()),
-            'date':str(metadata.get('date','unknown'))[:10],'raw_sha256':s.digest(raw),'_meta':metadata}
+            'date':bounded_date_label(metadata.get('date','unknown')),'raw_sha256':s.digest(raw),'_meta':metadata}
 
 class _EvidenceHistory:
     """Read-only, bounded Git evidence. No filters, network, or receipt attestation.
@@ -1427,15 +1444,14 @@ class _EvidenceHistory:
         # on supported older Git releases without GIT_NO_LAZY_FETCH.
         env.update(GIT_OPTIONAL_LOCKS='0',GIT_TERMINAL_PROMPT='0',GIT_NO_LAZY_FETCH='1',GIT_ALLOW_PROTOCOL='',GIT_NO_REPLACE_OBJECTS='1')
         try:
-            with _GIT_POPEN(['git','--no-pager','--literal-pathspecs','-c','log.showSignature=false','-C',str(s.VAULT),*args],
-                            stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=env,**cfg.child_options()) as proc:
-                try: stdout,_=proc.communicate(timeout=min(3,remaining))
-                except subprocess.TimeoutExpired:
-                    self._incomplete('deadline' if remaining<3 else 'git-timeout')
-                    proc.kill(); proc.communicate(); return None
-                if proc.returncode==0: return stdout
-                self._incomplete('git-error'); return None
-        except (OSError,subprocess.TimeoutExpired):
+            options={'max_output_bytes':2_000_001} if os.name=='nt' else {}
+            proc=_GIT_RUN(['git','--no-pager','--literal-pathspecs','-c','log.showSignature=false','-C',str(s.VAULT),*args],
+                          capture_output=True,env=env,timeout=min(3,remaining),**options)
+            if proc.returncode==0:return proc.stdout
+            self._incomplete('git-error');return None
+        except subprocess.TimeoutExpired:
+            self._incomplete('deadline' if remaining<3 else 'git-timeout');return None
+        except (OSError,brain_git.GitSyncError):
             self._incomplete('git-error'); return None
 
     def _versions(self,relative):
@@ -1588,7 +1604,14 @@ class _EvidenceHistory:
         return None
 
 _BEFORE_UNSET=object()
+
+def _planned_text_size(text,kind):
+    limit=LOG_LIMIT if kind=='wiki_log' else s.NOTE_LIMIT
+    if not isinstance(text,str) or len(text.encode('utf-8'))>limit:
+        raise WikiOutputError('Derived output exceeds its readable byte limit; split into narrower topics before retrying.')
+
 def _plan_write(writes,path,text,kind,before=_BEFORE_UNSET):
+    _planned_text_size(text,kind)
     if before is _BEFORE_UNSET: before=_current_hash(path)
     writes.append({'path':path.relative_to(s.VAULT).as_posix(),'text':text,'kind':kind,
                    'before':before,'after':s.digest(text.encode())})
@@ -1778,6 +1801,7 @@ def _verify_publication_plan(plan,packet,result):
             raise WikiOutputError('Saved topic before image differs from its supplied snapshot.')
         if not isinstance(text,str) or s.digest(text.encode())!=write.get('after') or (before is not None and (not isinstance(before,str) or not re.fullmatch('[a-f0-9]{64}',before))):
             raise WikiOutputError('Saved publication plan text/hash integrity check failed.')
+        _planned_text_size(text,write['kind'])
     if plan['version']==3:
         logs=[write for write in writes if write['path']==log_path]
         expected=_rotated_log(rotation['path'],_log_entry(rotation['at'],packet,result))
@@ -1795,7 +1819,7 @@ def _publication_started(plan):
 def _saved_publication_started(packet,publication):
     if not publication.exists(): return False
     try:
-        result=json.loads((publication.parent/'output.json').read_text(encoding='utf-8'))
+        result=_read_model_output(publication.parent/'output.json')
         plan=json.loads(publication.read_text(encoding='utf-8'))
         _validate(packet,result,screen_paths=False); _verify_publication_plan(plan,packet,result)
         return _publication_started(plan)
@@ -1845,7 +1869,7 @@ def _hold_prior_publication(packet,publication,plan=None):
     if not publication.exists(): return
     try:
         if plan is None:
-            result=json.loads((publication.parent/'output.json').read_text(encoding='utf-8'))
+            result=_read_model_output(publication.parent/'output.json')
             plan=json.loads(publication.read_text(encoding='utf-8'))
             _validate(packet,result,screen_paths=False); _verify_publication_plan(plan,packet,result)
         if _publication_started(plan): return
@@ -1890,6 +1914,7 @@ def apply(packet,result):
     _validate(packet,result,screen_paths=not repairing); dispositions=_dispositions(packet,result)
     folder=cfg.STATE/'wiki/batches'/ident; journal=folder/'journal.json'; publication=folder/'publication.json'
     with FileLock(str(cfg.STATE/'writer.lock'),timeout=30):
+        cfg.write_admission()
         already_planned=publication.exists()
         _hold_prior_publication(packet,publication)
         _assert_source_policy(packet,allow_durable=_saved_publication_started(packet,publication))
@@ -2229,7 +2254,7 @@ def _resume_packet(policy=None):
             # Invalid durable recovery input stays visible even if a portable
             # source receipt already covers its parts. It grants no authority.
             try:
-                output=json.loads((folder/'output.json').read_text(encoding='utf-8'))
+                output=_read_model_output(folder/'output.json')
                 plan=json.loads(publication.read_text(encoding='utf-8'))
                 _validate(packet,output,screen_paths=False); _verify_publication_plan(plan,packet,output)
             except WikiIntegrityError as exc:
@@ -2326,9 +2351,61 @@ def reset_retries():
         _atomic_json(cfg.STATE/'wiki-worker-status.json',{'status':'retry requested','at':s.stamp(),'retry_after':0,'consecutive_failures':0,'attention_required':False})
     return {'status':'retry queue and worker backoff reset; pending work preserved'}
 
+def _native_model_identity(executable):
+    if os.name!='nt':raise RuntimeError('This compiler model runner is qualified for the designated Windows maintainer only.')
+    if not isinstance(executable,str):raise ValueError('Select an absolute native codex.exe path.')
+    path=Path(executable)
+    if not path.is_absolute() or path.name.lower()!='codex.exe' or not path.is_file():
+        raise ValueError('Select an existing absolute native codex.exe, not a shell shim.')
+    if any(item.is_symlink() or item.is_junction() for item in (path,*path.parents)):
+        raise ValueError('Linked model executable paths are refused.')
+    path=path.resolve()
+    if any(path.is_relative_to(Path(folder).resolve()) for folder in (cfg.ROOT,cfg.STATE,cfg.VAULT,Path.cwd(),cfg.PYTHON.parent)):
+        raise ValueError('Model executable must be outside runtime, vault, checkout/current directory and Python folder.')
+    before=path.stat()
+    if not 0<before.st_size<=512*1024*1024:raise ValueError('Model executable exceeds its identity bound.')
+    checksum=hashlib.sha256()
+    with path.open('rb') as stream:
+        size=0
+        for block in iter(lambda:stream.read(1024*1024),b''):
+            size+=len(block)
+            if size>512*1024*1024:raise ValueError('Model executable grew beyond its identity bound.')
+            checksum.update(block)
+    after=path.stat()
+    if (before.st_size,before.st_mtime_ns,before.st_ino)!=(after.st_size,after.st_mtime_ns,after.st_ino) or size!=before.st_size:
+        raise ValueError('Model executable changed during identity checking.')
+    return {'path':str(path),'sha256':checksum.hexdigest(),'bytes':size}
+
+def configure_model(executable):
+    cfg.require_maintainer()
+    with FileLock(str(cfg.STATE/'wiki-worker.lock'),timeout=1):
+        identity=_native_model_identity(executable)
+        _atomic_json(cfg.STATE/'wiki-model.json',{'format':1,'executable':identity['path']})
+    return {'status':'configured; native CLI/authentication and compiler acceptance remain pending','executable':identity}
+
+def _model_executable():
+    path=cfg.STATE/'wiki-model.json'
+    if any(item.is_symlink() or item.is_junction() for item in (path,*path.parents)):
+        raise ValueError('Linked model configuration is refused.')
+    if not path.is_file():raise RuntimeError('Configure an explicitly selected native codex.exe with wiki configure-model; no model called.')
+    with path.open('rb') as stream:raw=stream.read(16385)
+    if len(raw)>16384:raise ValueError('Model configuration exceeds its bound.')
+    value=json.loads(raw)
+    if not isinstance(value,dict) or set(value)!={'format','executable'} or type(value['format']) is not int or value['format']!=1:
+        raise ValueError('Invalid model configuration; no model called.')
+    return _native_model_identity(value['executable'])
+
+def _run_model(command,model_input,timeout,*,cwd,log,on_started,on_cleanup_wait):
+    if os.name!='nt':raise RuntimeError('The v0.1.8 compiler requires the qualified Windows maintainer.')
+    from brain_windows_process import run
+    return run(command,input=model_input,text=True,encoding='utf-8',cwd=str(cwd),
+               stdout=log,stderr=log,direct_output=True,timeout=timeout,max_output_bytes=5_000_000,
+               on_started=on_started,on_cleanup_wait=on_cleanup_wait)
+
 def run(limit=4,timeout=480):
     cfg.require_maintainer()
     with FileLock(str(cfg.STATE/'wiki-worker.lock'),timeout=1):
+        cfg.write_admission()
         try: policy=source_policy()
         except WikiPolicyError as exc: return _policy_attention(exc)
         worker_state=cfg.STATE/'wiki-worker-status.json'
@@ -2340,6 +2417,7 @@ def run(limit=4,timeout=480):
                     'pending_parts':_public_pending_parts(saved.get('pending_parts')),
                     **{key:value for key,value in summary.items() if key in ('integrity_page','integrity_page_sha256','integrity_field','recovery_action')}}
         try: packet=_resume_packet(policy)
+        except WikiPolicyError as exc:return _policy_attention(exc)
         except WikiIntegrityError as exc:
             attention={'status':'attention','at':s.stamp(),'reason':'WikiIntegrityError','retry_after':0,'backoff_seconds':0,
                        'consecutive_failures':saved.get('consecutive_failures',0),'attention_required':True,
@@ -2402,8 +2480,7 @@ def run(limit=4,timeout=480):
         folder=cfg.STATE/'wiki'/'batches'/packet['batch_id']; output=folder/'output.json'; schema=folder/'schema.json'
         short_sources=[row for row in packet['sources'] if _short_part(row)]
         substantive_sources=[row for row in packet['sources'] if not _short_part(row)]
-        binary=shutil.which('codex.cmd' if os.name=='nt' else 'codex')
-        command=[binary,'exec','--ignore-user-config','--ignore-rules','--skip-git-repo-check','--ephemeral',
+        command=['exec','--ignore-user-config','--ignore-rules','--skip-git-repo-check','--ephemeral',
                  '--sandbox','read-only','-c','approval_policy="never"','-c','features.shell_tool=false',
                  '-c','features.apps=false','-c','features.plugins=false','-c','web_search="disabled"','--output-schema',str(schema),'-o',str(output),'-']
         # Fresh directory, no project instructions, no configured MCP, no credentials in model input.
@@ -2429,23 +2506,25 @@ def run(limit=4,timeout=480):
             current_policy=_assert_source_policy(packet,allow_durable=repairing)
             recovered_excluded=sum(_policy_excluded(row['path'],current_policy) for row in packet['sources']) if repairing else 0
             if model_ran:
-                if not binary: raise RuntimeError('Install official Codex CLI and sign in before running the wiki worker.')
+                try:executable=_model_executable()
+                except (OSError,ValueError) as error:
+                    raise RuntimeError('Native model configuration requires review; no model called.') from error
+                command.insert(0,executable['path'])
+                _atomic_json(folder/'model-executable.json',executable)
                 if output.exists(): output.unlink()
+                def started():
+                    nonlocal proc
+                    proc=subprocess.CompletedProcess(command,None)
+                def cleanup_wait():
+                    _atomic_json(worker_state,{'status':'cleanup pending','at':s.stamp(),'batch_id':packet['batch_id'],
+                                 'attention_required':True,'model_called':True,'pending_work':'preserved',
+                                 'cleanup':'worker lock retained until all owned process lifetimes are verified exited'})
                 with tempfile.TemporaryDirectory(prefix='brain-wiki-') as cwd:
-                    with (folder/'runner.log').open('w',encoding='utf-8') as log:
-                        proc=subprocess.Popen(command,stdin=subprocess.PIPE,text=True,encoding='utf-8',cwd=cwd,stdout=log,stderr=log,
-                                              start_new_session=os.name!='nt',**cfg.child_options())
-                        try: proc.communicate(model_input,timeout=timeout)
-                        except subprocess.TimeoutExpired:
-                            if os.name=='nt': subprocess.run(['taskkill','/PID',str(proc.pid),'/T','/F'],capture_output=True)
-                            else:
-                                import signal
-                                os.killpg(proc.pid,signal.SIGTERM)
-                            proc.wait(timeout=15)
-                            raise
+                    with (folder/'runner.log').open('wb') as log:
+                        proc=_run_model(command,model_input,timeout,cwd=cwd,log=log,on_started=started,on_cleanup_wait=cleanup_wait)
                 if proc.returncode!=0 or not output.exists(): raise RuntimeError('Wiki model failed; inspect private batch runner.log; no claims published.')
             if substantive_sources:
-                result=json.loads(output.read_text(encoding='utf-8'))
+                result=_read_model_output(output)
                 _validate_shape(result,output_schema(model_packet,strict=True) if model_ran else SCHEMA)
                 if model_ran:
                     _validate(model_packet,result)
@@ -2477,7 +2556,9 @@ def run(limit=4,timeout=480):
                 return {'status':'policy_changed','reason':str(exc),'batch_id':packet['batch_id'],
                         'source_policy':_policy_summary(changed_policy),'model_called':proc is not None}
             from jsonschema.exceptions import ValidationError
-            runner=(folder/'runner.log').read_text(encoding='utf-8',errors='replace') if (folder/'runner.log').exists() else ''
+            runner=''
+            if (folder/'runner.log').exists():
+                with (folder/'runner.log').open('rb') as stream:runner=stream.read(65536).decode('utf-8',errors='replace')
             global_failure=_model_auth_quota_failure(proc.returncode if proc else None,runner,model_input)
             transient=isinstance(exc,(WikiTransientError,LockTimeout,OSError)) or ((folder/'publication.json').exists() and not isinstance(exc,(WikiOutputError,ValidationError,json.JSONDecodeError)))
             unattributed_output=isinstance(exc,(WikiOutputError,ValueError,ValidationError)) and not isinstance(exc,WikiTransientError) and not getattr(exc,'source',None)

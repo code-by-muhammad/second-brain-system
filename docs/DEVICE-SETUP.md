@@ -1,6 +1,25 @@
 # Set up or update a Second Brain device
 
-Workflow revision: **29 October 2026**. Windows v0.1.8 is a hardening candidate, not automatic deployment approval. Use the trusted handover's exact commit, manifest SHA256 and qualification report. Mac/Linux stay on accepted v0.1.7; do not clone or provision v0.1.8 on an owner device. Current dated deployment decisions take precedence over historical preparation notes.
+Workflow revision: **2 November 2026**. Windows v0.1.8 is a hardening candidate, not automatic deployment approval. Use the trusted handover's exact commit, manifest SHA256 and qualification report. Mac/Linux stay on accepted v0.1.7; do not clone or provision v0.1.8 on an owner device. Current dated deployment decisions take precedence over historical preparation notes.
+
+Read the [November review follow-through](REVIEW-FOLLOWUP-20261102.md) with this guide. Before compiling on v0.1.8, the designated maintainer must explicitly select a native `codex.exe`; the previous `.cmd` discovery has no fallback. Capture-only devices skip that compiler selection. The follow-through also explains generated index-history scope, byte capacity, guarded writes, update admission and retained evidence. It does not authorize deployment or change the existing v0.1.7 installation/schedule.
+
+## Recover an interrupted initial Windows setup
+
+Initial setup and upgrading an installed runtime are separate operations. A sealed client-settings plan cannot authorize replacing a running installation. Use the approved forward updater for existing devices.
+
+If initial setup fails, preserve its runtime and retained Python. Inspect only the non-secret recovery receipt; do not print/share `state/install-transaction.json`, which can contain a planned credential and selected client configuration:
+
+```powershell
+& $brainPython -I "$brainRelease/install.py" --root $brainRoot --vault $brainVault --inspect-install
+if ($LASTEXITCODE -ne 0) { throw 'Initial setup inspection failed; preserve state for review.' }
+```
+
+The receipt supplies the initial-install UUID, phase and original options. Repeat the initial install command with its exact retained `--reuse-python` and original role/model/service/client options, adding `--resume-install <UUID>`. Resume does not reprovision. An edited device, authentication or application payload, changed software, foreign Task or mismatched identity is refused. Already applied client settings are preserved during later model/service retries, including later owner edits. Deferred client configuration remains explicit in the result and still needs selected-client acceptance.
+
+If no device, app, auth, index configuration or ignore file was published, an attended `--abandon-install <UUID>` can archive a non-secret abandoned record and remove the unused private plan. It refuses after any runtime publication. Then a new initial attempt can make a new client plan. Never delete runtime state or hand-edit a secret transaction to bypass recovery. A service-registration response lost after the native call needs positive owned-Task/absence inspection on resume, not an assumption that registration failed. A completed transaction cannot authorize another deployment.
+
+These recovery commands do not establish named-client search, remote publication, reboot or another physical device's acceptance. Run the device testing record after setup completes.
 
 ## Choose a route and protect the inputs
 
@@ -57,7 +76,7 @@ Set `$brainRoot`, `$brainVault` and `$brainRelease` to the inspected absolute pa
 
 ```powershell
 Set-Location -LiteralPath $brainRelease
-& $BrainBasePython -I -B (Join-Path $brainRelease 'install.py') --root $brainRoot --vault $brainVault --role capture --uv $BrainUv --download-model --install-service
+& $BrainBasePython -I -B (Join-Path $brainRelease 'install.py') --root $brainRoot --vault $brainVault --role capture --uv $BrainUv --download-model
 if ($LASTEXITCODE -ne 0) { throw 'Setup did not complete; preserve its private receipts' }
 ```
 
@@ -68,12 +87,14 @@ Use the verified locked profile: FastEmbed only, with reranking disabled. LiteLL
 The same isolated entrypoint, using the already recorded absolute host executables:
 
 ```powershell
-& $BrainBasePython -I -B install.py --root <new runtime> --vault <existing vault> --role capture --uv $BrainUv --download-model --install-service
+& $BrainBasePython -I -B install.py --root <new runtime> --vault <existing vault> --role capture --uv $BrainUv --download-model
 ```
 
-Before service startup, read `device.json`; from ordinary host PowerShell verify that exact lexical `.venv/Scripts/python.exe`, its sibling `pythonw.exe`, absolute `pyvenv.cfg` base home and base executables exist and run. Do not replace the venv path with the resolved base path. Store/AppData-only visibility failures leave startup pending; do not repeatedly rebuild in the same invisible location.
+These commands create the runtime without registering a service. Before any registration or startup, use the trusted team kit's sealed `prepare_device.py` plan/apply workflow to select the actual IANA timezone and bootstrap Control only for an explicitly new independent maintainer. Asia/Karachi is a compatibility default, not a detected timezone. The helper validates and preserves the complete private install journal, then applies the chosen timezone before the first service/capture. Do not hand-edit device.json, a journal or plan hashes; without a matching qualified kit, leave first-start acceptance pending.
 
-Then use that recorded Python with `<runtime>/app/brain_cli.py service start`, authenticated `health`, and `index status`. The owned task is `SecondBrainLocalService`, limited to the intended interactive user. An existing task for another root/owner is preserved and refused. Never install over the existing maintainer merely because an example path looks convenient.
+Read `device.json`; from ordinary host PowerShell verify that exact lexical `.venv/Scripts/python.exe`, its sibling `pythonw.exe`, absolute `pyvenv.cfg` base home and base executables exist and run. Do not replace the venv path with the resolved base path. Store/AppData-only visibility failures leave startup pending; do not repeatedly rebuild in the same invisible location.
+
+Then follow the prepared kit receipt's explicit service-registration/start workflow and use that recorded Python for authenticated `health` and `index status`. The owned task is `SecondBrainLocalService`, limited to the intended interactive user. An existing task for another root/owner is preserved and refused. Never install over the existing maintainer merely because an example path looks convenient.
 
 ## Client configuration and proof
 
@@ -92,6 +113,8 @@ Claude Code and Desktop use their actual discovered JSON settings; Codex uses th
 `brain_read` accepts exact vault-relative Markdown paths with optional `.md`, or full-path wikilinks such as `[[Maps/AI-Context|label]]`. It handles selectors inside wikilinks and preserves literal `#` in plain filenames. A bare basename such as `Device-Setup.md` is not resolved across the vault; search for the real path first. Preserve original notes rather than globally rewriting their links.
 
 ## Approved import and current index acceptance
+
+Bootstrap or explicit retry adds one anchored generated-archive rule to private `state/.bmignore`, preserving owner bytes and a private backup. It leaves wiki source exclusions, vault Git rules and originals unchanged. Old out-of-scope archive entities can remain searchable and are counted separately; current eligible-note verification is not a claim of database erasure. See the [scope and recovery procedure](REVIEW-FOLLOWUP-20261102.md).
 
 If service Git publication is already active, obtain a verified stopped window before an approved import. `service stop` disables the owned Windows task, admits only after active writers finish, drains verified processes and publishes an empty receipt. Automatic clients cannot override an explicit stop. A busy refusal preserves work and restores prior enabled state; it does not prove an empty runtime. Never copy a library during an assumed 15-minute review window.
 

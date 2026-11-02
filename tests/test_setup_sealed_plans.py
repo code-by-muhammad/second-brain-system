@@ -98,7 +98,7 @@ def test_refresh_cas_before_stop_and_deferred_concurrent_edit(owner):
     receipt=helpers.apply(value,lambda *args:writes.append(args),lambda *args:None,root)
     assert not writes and len(receipt['deferred'])==1 and path.read_text()=='{"new owner edit":true}'
     path.write_bytes(original)
-    receipt=helpers.apply(value,lambda path,text:path.write_bytes(text.encode('utf-8')),lambda *args:None,root)
+    receipt=helpers.apply(value,lambda path,text,**kwargs:path.write_bytes(text.encode('utf-8')),lambda *args:None,root)
     assert receipt['changed']==[str(path)] and helpers.after_check(value)==[]
     path.write_text('{"later app edit":true}')
     assert helpers.after_check(value)==[str(path)]

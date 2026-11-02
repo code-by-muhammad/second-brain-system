@@ -124,7 +124,9 @@ def test_log_and_history_budgets_preserve_actionable_failure(brain,monkeypatch):
     path=cfg.STATE/'index-bootstrap-status.json';before=path.read_bytes()
     history=cfg.STATE/'index-bootstrap-history';history.mkdir()
     for number in range(256):(history/(str(number)+'.json')).write_bytes(b'{}')
-    with pytest.raises(ValueError,match='status_history_count_limit'):bootstrap.main(retry=True)
+    report=bootstrap.main(retry=True)
+    assert report['status']=='needs attention' and report['reason']=='status_history_count_limit' and report['prior_status_preserved']
+    assert json.loads((cfg.STATE/'index-bootstrap-attention.json').read_text())==report
     assert path.read_bytes()==before
 
 

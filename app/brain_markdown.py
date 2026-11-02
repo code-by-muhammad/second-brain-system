@@ -1,9 +1,50 @@
 """Read YAML metadata without mistaking quoted evidence for a closing fence."""
 import yaml
+import json,os,stat
+from datetime import date,datetime
+
+def bounded_file_bytes(path,limit,limit_error='File exceeds its byte limit.'):
+    info=path.stat()
+    if not stat.S_ISREG(info.st_mode):raise ValueError('Non-regular file is refused.')
+    if info.st_size>limit:raise ValueError(limit_error)
+    if os.name=='posix':
+        descriptor=os.open(path,os.O_RDONLY|os.O_NONBLOCK|getattr(os,'O_NOFOLLOW',0))
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):raise ValueError('Non-regular file is refused.')
+            with os.fdopen(descriptor,'rb') as stream:
+                descriptor=None;raw=stream.read(limit+1)
+        finally:
+            if descriptor is not None:os.close(descriptor)
+    else:
+        with path.open('rb') as stream:raw=stream.read(limit+1)
+    if len(raw)>limit:raise ValueError(limit_error)
+    return raw
+
+def bounded_json_file(path,limit):
+    if any(item.is_symlink() or item.is_junction() for item in (path,*path.parents)):
+        raise ValueError('Linked cache is refused.')
+    return json.loads(bounded_file_bytes(path,limit))
+
+def bounded_date_label(value):
+    """Metadata can be an aliased container: never ask it for a representation."""
+    kind=type(value)
+    if kind is str:return value[:10]
+    if kind in (date,datetime):return value.isoformat()[:10]
+    if kind is int:return str(value)[:10] if value.bit_length()<=256 else 'unknown'
+    if kind in (bool,float) or value is None:return str(value)[:10]
+    return 'unknown'
+
+def bounded_capture_datetime(value):
+    if type(value) is datetime:return value
+    if type(value) is date:return datetime.combine(value,datetime.min.time())
+    if type(value) is str and len(value)<=200:return datetime.fromisoformat(value)
+    raise ValueError('Invalid capture date.')
 
 
 # Count aggregate mapping visits and copied pair slots, including overridden
 # merge entries. Raw text size and the final dict size do not bound this work.
+_YAML_NODE_LIMIT = 100_000
+_YAML_DEPTH_LIMIT = 128
 _YAML_WORK_LIMIT = 100_000
 _YAML_INT_WORK_LIMIT = 8_000_000
 
@@ -13,6 +54,15 @@ class _BoundedSafeLoader(yaml.SafeLoader):
         super().__init__(stream)
         self._mapping_work = 0
         self._integer_work = 0
+        self._node_work = 0
+        self._compose_depth = 0
+
+    def compose_node(self,parent,index):
+        if self._node_work>=_YAML_NODE_LIMIT or self._compose_depth>_YAML_DEPTH_LIMIT:
+            raise yaml.YAMLError('YAML composition exceeds its node/depth budget.')
+        self._node_work+=1;self._compose_depth+=1
+        try:return super().compose_node(parent,index)
+        finally:self._compose_depth-=1
 
     def _reserve(self, amount):
         if amount > _YAML_WORK_LIMIT - self._mapping_work:

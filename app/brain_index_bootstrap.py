@@ -38,8 +38,9 @@ def _save(value,*,terminal=False):
             time.sleep(.05)
 
 
-def _counts():
+def _counts(deadline=None):
     with closing(sqlite3.connect((cfg.STATE/'memory.db').resolve().as_uri()+'?mode=ro',uri=True,timeout=.1)) as connection:
+        if deadline is not None:connection.set_progress_handler(lambda:int(time.monotonic()>=deadline),1000)
         present={row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         return {table:connection.execute('SELECT count(*) FROM '+table).fetchone()[0] if table in present else None
                 for table in ('entity','search_vector_chunks','search_vector_embeddings_rowids')}
@@ -108,15 +109,32 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
         raise ValueError('Use integer budgets: 1 <= stall-seconds < overall-seconds <= 86400.')
     cfg.STATE.mkdir(parents=True,exist_ok=True)
     with FileLock(str(cfg.STATE/'index-bootstrap.lock'),timeout=0):
-        history=_archive_previous() if retry else None
+        cfg.write_admission()
+        try:history=_archive_previous() if retry else None
+        except index.IndexAttention as error:
+            attention={'status':'needs attention','stage':'retry admission','reason':str(error),
+                       'prior_status_preserved':True,'history_folder':str(cfg.STATE/'index-bootstrap-history'),
+                       'guidance':'Preserve the prior status/history; in a verified quiet window archive history privately, then retry.'}
+            target=cfg.STATE/'index-bootstrap-attention.json'
+            if target.is_symlink() or os.path.isjunction(target):raise index.IndexAttention('linked_attention_refused')
+            temporary=target.with_name('.index-bootstrap-attention-'+uuid.uuid4().hex+'.tmp')
+            try:
+                with temporary.open('x',encoding='utf-8') as output:json.dump(attention,output);output.flush();os.fsync(output.fileno())
+                os.replace(temporary,target)
+            finally:temporary.unlink(missing_ok=True)
+            return attention
         started=time.monotonic(); changed=started; observed=None;last_saved=started
+        deadline=started+overall_seconds
+        def check():
+            if time.monotonic()>=deadline:raise index.IndexAttention('overall_time_limit')
         progress={'status':'indexing','stage':'checking source-safe configuration','started_at':_now(),
                   'progress_signal':'whole-DB counts from any writer; not attributed to this process',
                   'overall_seconds':overall_seconds,'stall_seconds':stall_seconds,'full':bool(full),'history_record':history}
         _save(progress)
         try:
-            index.configuration()
-            notes,manifest=index.inventory()
+            check();index.configuration();check()
+            progress['index_scope_migration']=index.ensure_history_scope()
+            check();notes,manifest=index.inventory(check);check()
             if not notes:
                 return _save({**progress,'status':'needs review','stage':'complete','reason':'no_eligible_markdown',
                               'finished_at':_now(),'elapsed_seconds':time.monotonic()-started},terminal=True)
@@ -131,7 +149,8 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
             _save(progress)
             def tick():
                 nonlocal changed,observed,last_saved
-                try: current=_counts()
+                check()
+                try: current=_counts(deadline)
                 except (sqlite3.Error,OSError): current=None
                 now=time.monotonic()
                 if current is not None and any(value is not None for value in current.values()) and current!=observed:
@@ -146,12 +165,14 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
                 progress.update(stage='containment cleanup pending',cleanup='bootstrap lock retained until owned processes exit')
                 _save(progress,terminal=True)
             with log_path.open('ab') as log:
-                result=_run_reindex(command,log,overall_seconds,tick,cleanup_wait)
+                check()
+                result=_run_reindex(command,log,deadline-time.monotonic(),tick,cleanup_wait)
+            check()
             if log_path.stat().st_size>LOG_LIMIT:raise index.IndexAttention('private_log_budget_exceeded')
             progress.pop('cleanup',None)
             progress['stage']='verifying current coverage'
             _save(progress)
-            counts=_counts(); coverage=index.status()
+            counts=_counts(deadline);check();coverage=index.status(deadline=deadline);check()
             stable=coverage.get('coverage',{}).get('manifest_sha256')==manifest and coverage.get('inventory_stable') is True
             good=result.returncode==0 and coverage.get('status')=='verified' and stable
             outcome='verified' if good else ('needs attention' if result.returncode or coverage.get('status')=='needs attention' else 'needs review')
@@ -162,7 +183,7 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
         except Exception as error:
             if 'cleanup' in progress:progress['cleanup']='runner returned after cleanup; inspect native receipt for platform scope'
             return _save({**progress,'status':'needs attention','error_type':type(error).__name__,
-                          'reason':str(error) if isinstance(error,index.IndexAttention) else 'local_indexing_failed',
+                          'reason':str(error) if isinstance(error,(index.IndexAttention,index.WalkLimit)) else 'local_indexing_failed',
                           'error':'Indexing did not verify. Preserve the database and private log; use index status, then an explicit index retry after repair.',
                           'finished_at':_now(),'elapsed_seconds':time.monotonic()-started},terminal=True)
 

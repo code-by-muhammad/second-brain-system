@@ -94,7 +94,7 @@ async def brain_search(query:str,english_query:str='',limit:int=8) -> dict:
         row=fused.setdefault(hit['path'],{**hit,'fusion_score':0})
         row['fusion_score']+=1/(30+rank)
     combined=sorted(fused.values(),key=lambda h:-h['fusion_score'])[:limit]
-    return {'results':combined,'indexed':results,'fresh_file_matches':fresh,
+    return {'results':combined,'indexed':results,'fresh_file_matches':fresh,'fresh_file_scope':getattr(fresh,'scope',{'status':'unknown'}),
             'guidance':'Verify current files and dates with brain_read. Newer file modification time alone does not supersede a decision.'}
 
 @mcp.tool(annotations={'readOnlyHint':True,'openWorldHint':False})
@@ -122,25 +122,30 @@ def brain_health() -> dict:
     health['current_index_coverage']={'status':'not checked','command':'brain_cli.py index status',
                                     'guidance':'Run the read-only current coverage check after imports; cached bootstrap is historical.'}
     try:
-        from brain_wiki import status as wiki_status
-        health['wiki']=wiki_status()
+        from brain_wiki import _worker_summary
+        health['wiki']={'worker':_worker_summary(),'coverage':'not checked; cached worker metadata only','command':'brain_cli.py wiki status'}
+    except RecursionError: health['wiki']={'status':'unavailable; inspect local logs'}
+    except (MemoryError,RuntimeError): raise
     except Exception: health['wiki']={'status':'unavailable; inspect local logs'}
     p=store.STATE/'maintenance-status.json'
-    if p.exists():
+    if p.exists() or p.is_symlink() or p.is_junction():
         from brain_maintenance import health_status
         health['maintenance']=health_status(p)
     p=store.STATE/'index-bootstrap-status.json'
-    if p.exists():
-        try: initial_index=json.loads(p.read_text())
+    if p.exists() or p.is_symlink() or p.is_junction():
+        try: initial_index=store.bounded_json_file(p,65536)
         except (OSError,ValueError,RecursionError): initial_index=None
         health['initial_index_validation']=initial_index if isinstance(initial_index,dict) else {
             'status':'needs attention','error':'Initial index status is unavailable or invalid; inspect local logs.'}
     try:
-        import sqlite3
+        import sqlite3,time
         from contextlib import closing
         with closing(sqlite3.connect((store.STATE/'memory.db').resolve().as_uri()+'?mode=ro',uri=True,timeout=2)) as conn:
+            deadline=time.monotonic()+2
+            conn.set_progress_handler(lambda:int(time.monotonic()>=deadline),1000)
             health['index']={t:conn.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in ('entity','search_vector_chunks','search_vector_embeddings_rowids')}
-    except Exception: health['index']={'status':'initializing or unavailable'}
+    except (MemoryError,RuntimeError): raise
+    except Exception: health['index']={'status':'unavailable; inspect index status and local logs'}
     return health
 
 ALLOWED={'brain_context','brain_search','brain_read','brain_capture','brain_update_current','brain_health'}

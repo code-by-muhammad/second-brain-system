@@ -79,6 +79,9 @@ BEGIN='<!-- BEGIN SECOND-BRAIN -->'
 END='<!-- END SECOND-BRAIN -->'
 CLIENTS=('claude-code','claude-desktop','codex','hooks')
 
+class ConcurrentWriteError(ValueError):
+    """Destination changed while a private replacement was being prepared."""
+
 
 def host_context():
     if os.name!='nt':return {'packaged':False,'platform':sys.platform}
@@ -262,8 +265,17 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
         if refresh and before is None:skipped.append({'client':client,'path':str(path),'reason':'absent; refresh creates no client file'});continue
         # Declined clients are never opened. Malformed unrelated existing files
         # without an owned entry remain byte-for-byte untouched in refresh mode.
-        if refresh and kind not in ('protocol',) and str(root).replace('\\','/').lower() not in (before or b'').decode('utf-8-sig',errors='replace').replace('\\\\','/').replace('\\','/').lower():
-            skipped.append({'client':client,'path':str(path),'reason':'no runtime path; not owned'});continue
+        if refresh and kind!='protocol':
+            try:
+                if kind=='toml':
+                    import tomllib
+                    tomllib.loads(before.decode('utf-8-sig'))
+                else:json_object(before)
+            except (ValueError,UnicodeError):
+                literal=str(root).replace('\\','/').casefold()
+                raw=before.decode('utf-8-sig',errors='replace').replace('\\\\','/').replace('\\','/').casefold()
+                if literal in raw:raise
+                skipped.append({'client':client,'path':str(path),'reason':'unparseable; ownership not inspected'});continue
         if kind=='json':
             data=json_object(before);servers=data.get('mcpServers',{})
             if not isinstance(servers,dict):raise ValueError('Invalid MCP parent object: '+str(path))
@@ -338,6 +350,23 @@ def load_plan(path,root,python=None):
     return validate_plan(json_object(read(Path(path))),root,python)
 
 
+def authorize_plan(value,*,selected=None,desktop=None,skip_desktop=False):
+    """Public plan bytes cannot grant themselves filesystem write authority."""
+    home=Path.home();selected=set(CLIENTS if selected is None else selected)
+    allowed={}
+    if not selected<=set(CLIENTS):raise ValueError('Unrecognized client selection.')
+    if 'claude-code' in selected:allowed['claude-code']={_path(home/'.claude.json')}
+    if 'codex' in selected:allowed['codex']={_path(home/'.codex/config.toml'),_path(home/'.codex/AGENTS.md')}
+    if 'hooks' in selected:allowed['hooks']={_path(home/'.claude/settings.json')}
+    if 'claude-desktop' in selected:
+        target=desktop_path(home,desktop,skip_desktop)
+        allowed['claude-desktop']={_path(target)} if target is not None else set()
+    for row in value['files']:
+        if _path(row['path']) not in allowed.get(row['client'],set()):
+            raise ValueError('Sealed client plan target is outside the selected client scope; no writes made.')
+    return value
+
+
 def current(value):
     if any(row['client']=='claude-desktop' for row in value['files']) and desktop_busy():raise ValueError('Claude Desktop reopened; re-plan while the old service is healthy.')
     changed=[]
@@ -357,9 +386,11 @@ def apply(value,atomic,backup,root):
             backup(path,root)
             if digest(read(path))!=row['before_sha256']:reason='concurrent edit during backup; preserved'
             else:
-                atomic(path,row['after']);changed.append(str(path));continue
+                try:atomic(path,row['after'],expected_sha256=row['before_sha256'])
+                except ConcurrentWriteError:reason='concurrent edit during staging; preserved'
+                else:changed.append(str(path));continue
         deferred.append({'path':str(path),'client':row['client'],'reason':reason})
-    return {'changed':changed,'deferred':deferred,'client_acceptance':'pending' if deferred else 'configuration written; named-client check pending'}
+    return {'changed':changed,'deferred':deferred,'skipped':value.get('skipped',[]),'client_acceptance':'pending' if deferred else 'configuration written; named-client check pending'}
 
 
 def after_check(value):

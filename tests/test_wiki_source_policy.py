@@ -1,6 +1,7 @@
 """Owner exclusions alter only the shared wiki queue, never original evidence."""
 import copy
 import json
+import os
 
 import pytest
 
@@ -63,7 +64,7 @@ def test_excluded_historical_receipts_remain_verified_and_reinclude_without_mode
     assert report['portable_receipt_parts']==report['excluded_verified_source_parts']==1
     assert report['eligible_portable_receipt_parts']==report['eligible_source_parts']==report['pending_source_parts']==0
     assert report['excluded_source_parts']==1 and report['excluded_pending_source_parts']==0
-    monkeypatch.setattr(w.shutil,'which',lambda name:pytest.fail('Excluded work must not resolve or call the model'))
+    monkeypatch.setattr(w,'_model_executable',lambda:pytest.fail('Excluded work must not resolve or call the model'))
     assert w.run()['status']=='idle'
     policy.unlink()
     report=w.status()
@@ -80,8 +81,12 @@ def test_policy_hash_and_case_sensitive_matching_are_deterministic_across_eol_bo
     assert first['rules_sha256']==second['rules_sha256'] and first['sha256']!=second['sha256']
     assert w.inventory()==[]
     write_policy([relative.replace('Example.md','example.md')])
-    assert len(w.inventory())==1  # Exact case is portable and never OS-casefolded.
-    assert w.status()['excluded_sources']==0
+    if os.name=='nt':
+        with pytest.raises(w.WikiPolicyError,match='differs only by case'):w.inventory()
+        assert w.status()['status']=='attention'
+    else:
+        assert len(w.inventory())==1  # Exact matching remains unchanged on case-sensitive platforms.
+        assert w.status()['excluded_sources']==0
 
 
 INVALID_RULES=[
@@ -115,7 +120,7 @@ INVALID_RULES=[
 def test_invalid_policy_stops_status_and_run_without_omitting_or_completing_sources(brain,monkeypatch,rules):
     source,packet,_=fixture(brain); original=source.read_bytes(); database=(cfg.STATE/'wiki-jobs.db').read_bytes()
     write_policy(raw='```json\n'+json.dumps(rules)+'\n```\n')
-    monkeypatch.setattr(w.shutil,'which',lambda name:pytest.fail('Invalid policy must block model access'))
+    monkeypatch.setattr(w,'_model_executable',lambda:pytest.fail('Invalid policy must block model access'))
     report=w.status()
     assert report['status']=='attention' and report['source_policy']['valid'] is False
     assert report['pending_source_parts'] is None and report['eligible_source_parts'] is None
@@ -154,7 +159,7 @@ def test_unused_pending_output_is_superseded_after_exclusion_without_model(brain
     output=cfg.STATE/'wiki/batches'/packet['batch_id']/'output.json'
     output.write_text(json.dumps(explicit(packet,result)),encoding='utf-8')
     write_policy([source.relative_to(s.VAULT).as_posix()])
-    monkeypatch.setattr(w.shutil,'which',lambda name:pytest.fail('Excluded unused work must not call model'))
+    monkeypatch.setattr(w,'_model_executable',lambda:pytest.fail('Excluded unused work must not call model'))
     assert w.run()['status']=='idle'
     assert output.exists()
     with w.db() as conn: assert conn.execute('SELECT status FROM batches WHERE id=?',(packet['batch_id'],)).fetchone()[0]=='superseded'
@@ -306,7 +311,7 @@ def test_unchanged_planned_notes_do_not_prove_partial_publication(brain,monkeypa
     assert any(write['before']==write['after'] for write in plan['writes'])
     assert not w._saved_publication_started(retry,publication)
     write_policy([source.relative_to(s.VAULT).as_posix()]); monkeypatch.setattr(s,'_write',original)
-    monkeypatch.setattr(w.shutil,'which',lambda *_:pytest.fail('Unused excluded plan cannot call model'))
+    monkeypatch.setattr(w,'_model_executable',lambda:pytest.fail('Unused excluded plan cannot call model'))
     assert w.run()['status']=='idle'
     assert '<!-- wiki-batch:'+retry['batch_id'] not in (s.VAULT/w.BASE/'Log.md').read_text()
     with w.db() as conn: assert conn.execute('SELECT status FROM batches WHERE id=?',(retry['batch_id'],)).fetchone()[0]=='superseded'

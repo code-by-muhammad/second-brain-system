@@ -126,7 +126,8 @@ def test_direct_writer_destination_read_is_also_bounded_and_preserved(brain, mon
         result = captured(lambda: s._write(target, '# Synthetic replacement\n', 'synthetic-test'))
     evidence = record(tmp_path, result, reads, locks, before)
     assert result.get('error') == 'ValueError' and '2 MB' in result.get('message', ''), evidence
-    assert reads and all(0 < item['requested'] <= LIMIT + 1 for item in reads), evidence
+    # Known oversize refuses before opening; growth-after-stat is tested above.
+    assert reads==[], evidence
     assert protected() == before and not (s.STATE / 'write-backups').exists(), evidence
 
 
