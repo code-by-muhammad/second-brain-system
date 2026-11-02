@@ -105,20 +105,27 @@ def test_known_constructed_types_share_finite_source_metadata_budgets(brain,monk
     else:header='a: &same '+binary(b'A'*700000)+'\nb: *same\nc: *same'
     path,raw=source(header);assert len(raw)<2_000_000 and not s.SECRET.search(raw.decode('utf-8'))
     decoded=w.meta(raw.decode('utf-8'))
-    if kind=='nodes':
-        # Common construction now stops before this oversized set exists.
+    if kind in ('nodes','depth'):
+        # Common construction stops before this oversized/deep value exists.
         # The unchanged source still reaches event screening and attention.
         assert decoded=={}
-    elif kind=='depth':
-        assert decoded
-        value=decoded['annotation']
-        for _ in range(127):value=value[0]
-        assert isinstance(value,set)
     else:
         assert decoded
         assert decoded['a'] is decoded['b'] is decoded['c'] and len(decoded['a'])==700000
     rows=w.inventory();calls=provider(monkeypatch,rows)
     assert_attention(path,raw,rows,calls)
+    assert w._read_worker_state()['consecutive_failures']==0
+    with w.db() as conn:
+        assert conn.execute('SELECT count(*) FROM sources WHERE attempts>0').fetchone()[0]==0
+
+
+def test_known_set_at_exact_composition_depth_stays_admitted(brain,monkeypatch):
+    path,raw=source('annotation: '+'['*126+'!!set {ordinary: null}'+']'*126)
+    value=w.meta(raw.decode('utf-8'))['annotation']
+    for _ in range(126):value=value[0]
+    assert value=={'ordinary'}
+    rows=w.inventory();calls=provider(monkeypatch,rows);report=w.run(1)
+    assert report['status']=='complete' and len(calls)==1 and path.read_bytes()==raw
 
 @pytest.mark.parametrize('header',[
     'outer: &same [!!set {ordinary: null}, *same]',

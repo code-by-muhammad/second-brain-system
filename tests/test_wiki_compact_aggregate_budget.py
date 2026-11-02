@@ -29,8 +29,42 @@ def skip_output():
             'reason': 'This synthetic source needs no new topic.', 'quote': QUOTE}]}
 
 
-def test_valid_aggregate_structural_context_is_omitted_with_complete_catalog_and_safe_saved_input(brain):
-    source, topic = source_and_topic(brain, [[0] * 17000 for _ in range(6)])
+def compact(page):
+    return {**page, 'claim_count': len(page['meta']['wiki_claims']),
+            'meta': {key: page['meta'].get(key) for key in ('title', 'wiki_kind', 'wiki_claims')}}
+
+
+def assert_character_omission(topic):
+    page = next(p for p in w._checked_pages() if p['path'] == topic.relative_to(s.VAULT).as_posix())
+    claims = page['meta']['wiki_claims']
+    assert all(c['extra'] is claims[0]['extra'] for c in claims)
+    w._validate_existing_claims(page['path'], claims)
+    with pytest.raises(w._JSONTooLarge):
+        w._bounded_json(compact(page), 40000, default=str)
+
+
+def structural_component(monkeypatch, topic, extras, bad_text=False):
+    """Supply a graph at the component seam, NOT via raw YAML admission.
+
+    The real page stays small. Only prepare's metadata input is expanded; its
+    actual aggregate/individual guards remain unpatched. Lint reads real YAML.
+    """
+    pages = w._checked_pages()
+    page = next(p for p in pages if p['path'] == topic.relative_to(s.VAULT).as_posix())
+    template = page['meta']['wiki_claims'][0]
+    page['meta']['wiki_claims'] = [{**template, 'extra': extra} for extra in extras]
+    if bad_text:
+        page['meta']['wiki_claims'][0]['text'] = ''
+    with pytest.raises(w._JSONStructureTooLarge):
+        w._bounded_json(compact(page), 40000, default=str)
+    monkeypatch.setattr(w, '_checked_pages', lambda: pages)
+    return page
+
+
+def test_valid_alias_aggregate_character_context_is_omitted_with_complete_catalog_and_safe_saved_input(brain):
+    shared = [0] * 17000
+    source, topic = source_and_topic(brain, [shared] * 6)
+    assert_character_omission(topic)
     originals = source.read_bytes(), topic.read_bytes()
     assert w.lint()['issues'] == []
     packet = w.prepare(1)
@@ -42,7 +76,9 @@ def test_valid_aggregate_structural_context_is_omitted_with_complete_catalog_and
 
 
 def test_omitted_aggregate_work_finishes_only_from_verified_disposition_and_part_receipt(brain, monkeypatch):
-    source, topic = source_and_topic(brain, [[0] * 17000 for _ in range(6)])
+    shared = [0] * 17000
+    source, topic = source_and_topic(brain, [shared] * 6)
+    assert_character_omission(topic)
     originals = source.read_bytes(), topic.read_bytes()
     calls = fake_model(monkeypatch, skip_output())
     report = w.run(1)
@@ -57,7 +93,7 @@ def test_omitted_aggregate_work_finishes_only_from_verified_disposition_and_part
 
 
 @pytest.mark.parametrize('bad', ['empty-text', 'deep', 'cycle', 'individual-nodes'])
-def test_aggregate_omission_does_not_hide_invalid_individual_context(brain, monkeypatch, bad):
+def test_structural_component_omission_does_not_hide_invalid_individual_context(brain, monkeypatch, bad):
     extras = [[0] * 17000 for _ in range(6)]
     if bad == 'deep':
         value = 0
@@ -66,12 +102,41 @@ def test_aggregate_omission_does_not_hide_invalid_individual_context(brain, monk
     elif bad == 'cycle':
         value = []; value.append(value); extras.insert(0, value)
     elif bad == 'individual-nodes': extras.insert(0, [0] * 20001)
-    source, topic = source_and_topic(brain, extras, bad_text=bad == 'empty-text')
+    source, topic = source_and_topic(brain, [[]])
     originals = source.read_bytes(), topic.read_bytes()
     calls = fake_model(monkeypatch, skip_output())
-    report = w.run(1)
+    with monkeypatch.context() as component:
+        structural_component(component, topic, extras, bad_text=bad == 'empty-text')
+        report = w.run(1)
     assert report['status'] == 'attention' and report['integrity_field'] == 'wiki_claims' and not calls
+    assert report['claim_index'] == 0
     assert not list((cfg.STATE / 'wiki/batches').glob('*/input.json'))
+    assert (source.read_bytes(), topic.read_bytes()) == originals
+
+
+def test_structural_component_omits_valid_individual_graphs_before_saved_input(brain, monkeypatch):
+    source, topic = source_and_topic(brain, [[]])
+    originals = source.read_bytes(), topic.read_bytes()
+    with monkeypatch.context() as component:
+        page = structural_component(component, topic, [[0] * 17000 for _ in range(6)])
+        w._validate_existing_claims(page['path'], page['meta']['wiki_claims'])
+        packet = w.prepare(1)
+    assert packet['current_pages'] == [] and packet['catalog'][0]['claim_count'] == 6
+    saved = w._read_saved_packet(cfg.STATE / 'wiki/batches' / packet['batch_id'] / 'input.json', packet['batch_id'])
+    w._validate_packet_context(saved)
+    assert (source.read_bytes(), topic.read_bytes()) == originals
+
+
+def test_raw_unaliased_composition_overflow_stops_before_model_or_saved_input(brain, monkeypatch):
+    source, topic = source_and_topic(brain, [[0] * 17000 for _ in range(6)])
+    originals = source.read_bytes(), topic.read_bytes()
+    assert w.meta(originals[1].decode()) == {}
+    calls = fake_model(monkeypatch, skip_output())
+    report = w.run(1)
+    assert report['status'] == 'attention' and report['integrity_field'] == 'frontmatter' and not calls
+    assert report['integrity_page'] == topic.relative_to(s.VAULT).as_posix()
+    assert not list((cfg.STATE / 'wiki/batches').glob('*/input.json'))
+    assert w.status()['pending_source_parts'] == 1
     assert (source.read_bytes(), topic.read_bytes()) == originals
 
 
@@ -83,15 +148,25 @@ def test_fitting_context_remains_selected_with_original_claims(brain):
     assert packet['catalog'][0]['claim_count'] == 1 and w.lint()['issues'] == []
 
 
-@pytest.mark.parametrize('ordinary_claims', [5, 6], ids=['character-omission-control', 'structural-omission'])
-def test_omitted_raw_alias_graph_keeps_existing_decoded_expansion_policy(brain, ordinary_claims):
+@pytest.mark.parametrize('ordinary_claims', [5, 6], ids=['raw-character-omission-control', 'component-structural-omission'])
+def test_omitted_raw_alias_graph_keeps_existing_decoded_expansion_policy(brain, monkeypatch, ordinary_claims):
     shared = [0] * 2000
-    source, topic = source_and_topic(brain, [[shared] * 10] + [[0] * 17000 for _ in range(ordinary_claims)])
+    ordinary = [0] * 17000
+    extras = [[shared] * 10] + ([[0] * 17000 for _ in range(5)] if ordinary_claims == 5 else [ordinary] * ordinary_claims)
+    source, topic = source_and_topic(brain, extras)
     original = source.read_bytes(), topic.read_bytes()
     parsed = w.meta(topic.read_text('utf-8'))['wiki_claims'][0]
     w._validate_existing_claim(topic.relative_to(s.VAULT).as_posix(), parsed, 0)
     with pytest.raises(w.WikiIntegrityError):
         w._validate_existing_claim(topic.relative_to(s.VAULT).as_posix(), json.loads(w._bounded_json(parsed)), 0)
-    packet = w.prepare(1)
+    with monkeypatch.context() as component:
+        if ordinary_claims == 6:
+            structural_component(component, topic, [[shared] * 10] + [[0] * 17000 for _ in range(ordinary_claims)])
+        else:
+            page = w._checked_pages()[0]
+            with pytest.raises(w._JSONTooLarge):
+                w._bounded_json(compact(page), 40000, default=str)
+        packet = w.prepare(1)
     assert packet['current_pages'] == [] and packet['catalog'][0]['claim_count'] == ordinary_claims + 1
+    # This lint checks the actual admitted alias YAML, not the component graph.
     assert w.lint()['issues'] == [] and (source.read_bytes(), topic.read_bytes()) == original

@@ -109,10 +109,16 @@ def fake_sync_git(monkeypatch, expected_text):
     def run(command, **kwargs):
         nonlocal added
         assert command[:2] == ['git', '--literal-pathspecs']
+        assert command[2] == '-C' and Path(command[3]) == s.VAULT
         args = command[4:]
         calls.append(args)
         if args == ['--version']:
             output = 'git version 2.44.0\n'
+        elif args == ['rev-parse', '--git-path', 'info/grafts']:
+            graft = s.VAULT / '.git/info/grafts'
+            assert not graft.exists()
+            assert not any(p.is_symlink() or p.is_junction() for p in (graft, *graft.parents))
+            output = '.git/info/grafts\n'
         elif args and args[0] == 'diff':
             output = ''
         elif args == ['ls-files', '--stage', '-z']:
@@ -131,7 +137,7 @@ def fake_sync_git(monkeypatch, expected_text):
             kwargs['stdout'].write(encoded)
             kwargs['stdout'].flush()
             return subprocess.CompletedProcess(command, 0, None, None)
-        elif args == ['status', '--porcelain']:
+        elif args == ['status', '--porcelain', '--untracked-files=all']:
             output = '?? synthetic-unrelated.txt\n'
         else:
             raise AssertionError('Unapproved synthetic Git operation: ' + repr(args))
@@ -166,6 +172,9 @@ def test_r135_sync_requests_bounded_decoded_characters_before_loading_tiny_origi
         record('sync-tiny-request', requests=requests, git_calls=calls)
     assert requests and result.startswith('paused: other local changes')
     assert any(command[0] == 'add' for command in calls)
+    assert calls.index(['rev-parse', '--git-path', 'info/grafts']) < next(i for i, command in enumerate(calls) if command[0] == 'add')
+    assert ['status', '--porcelain', '--untracked-files=all'] in calls
+    assert not (s.VAULT / '.git/info/grafts').exists()
     with io.open(path, 'rb') as stream:
         assert stream.read(len(raw) + 1) == raw
 

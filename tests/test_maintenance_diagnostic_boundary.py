@@ -89,12 +89,35 @@ def test_cached_unknown_and_structured_attributes_are_never_copied_verbatim(brai
 def test_safe_ordinary_diagnostics_and_api_key_discussion_remain_useful(brain,reason):
     path=brain[1]/'maintenance-status.json';row={'path':'02-Areas/AI-Memory/Current.md','reasons':[reason]*20}
     cache={'at':'2026-10-15T10:00:00+00:00','status':'completed','stage':'finished','git':'synced','aggregation':'skipped: capture/search device',
-        'captures_linked':3,'completed_private_artifacts_removed':4,'review':[row]*1000}
-    path.write_text(json.dumps(cache),encoding='utf-8');before=path.read_bytes();result=m.health_status(path)
-    assert result['review_count']==1000 and len(result['review'])==20 and result['review_truncated'] is True
+        'captures_linked':3,'completed_private_artifacts_removed':4,'review':[row]*100}
+    raw=json.dumps(cache).encode('utf-8');assert len(raw)<1_000_000
+    path.write_bytes(raw);before=path.read_bytes();result=m.health_status(path)
+    assert result['review_count']==100 and len(result['review'])==20 and result['review_truncated'] is True
     assert result['review'][0]['reasons']==[reason]*5 and result['review'][0]['reason_count']==20 and result['review'][0]['reasons_truncated'] is True
     assert result['review'][0]['path']==row['path'] and all(result[key]==cache[key] for key in ('at','status','stage','git','aggregation','captures_linked','completed_private_artifacts_removed'))
     assert path.read_bytes()==before
+
+
+def test_oversize_valid_cache_is_refused_before_open_and_preserved(brain,monkeypatch):
+    path=brain[1]/'maintenance-status.json'
+    cache={'status':'completed','review':[],'padding':''}
+    cache['padding']='P'*(1_000_001-len(json.dumps(cache).encode('utf-8')))
+    raw=json.dumps(cache).encode('utf-8')
+    assert len(raw)==1_000_001 and json.loads(raw)==cache
+    path.write_bytes(raw);before=s.digest(raw)
+    original_path_open,original_os_open=Path.open,os.open
+    def path_open(target,*args,**kwargs):
+        assert target!=path,'Oversize cache contents were opened'
+        return original_path_open(target,*args,**kwargs)
+    def os_open(target,*args,**kwargs):
+        assert Path(target)!=path,'Oversize cache contents were opened'
+        return original_os_open(target,*args,**kwargs)
+    with monkeypatch.context() as guarded:
+        guarded.setattr(Path,'open',path_open);guarded.setattr(os,'open',os_open)
+        result=m.health_status(path)
+    assert result['status']=='needs attention' and '1 MB health-read limit' in result['error']
+    assert 'review_count' not in result and 'P'*100 not in json.dumps(result)
+    assert path.read_bytes()==raw and s.digest(path.read_bytes())==before
 
 
 def test_fresh_git_sync_diagnostic_does_not_echo_rejected_filename(brain,monkeypatch):
