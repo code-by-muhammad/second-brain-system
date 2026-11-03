@@ -10,25 +10,37 @@ on:
         description: Bounded diagnostic scope
         type: choice
         default: inventory
-        options: [inventory, contracts, linux-contract, focused-controls, mac-product, setup-controls]
+        options: [inventory, contracts, linux-contract, focused-controls, mac-product, linux-product, setup-controls]
       candidate_tag:
-        description: Official nonapproved candidate tag, mac-product only
+        description: Official nonapproved candidate tag, product qualification only
         type: string
       candidate_commit:
-        description: Reviewed full candidate commit, mac-product only
+        description: Reviewed full candidate commit, product qualification only
         type: string
       manifest_sha256:
-        description: Reviewed candidate manifest SHA256, mac-product only
+        description: Reviewed candidate manifest SHA256, product qualification only
         type: string
       harness_sha256:
-        description: Reviewed native Mac harness SHA256, mac-product only
+        description: Reviewed native harness SHA256, product qualification only
+        type: string
+      wrapper_sha256:
+        description: Reviewed privileged wrapper SHA256, linux-product only
         type: string
 concurrency:
   group: portable-brain-${{ github.ref }}-${{ inputs.scope || 'default' }}
-  cancel-in-progress: ${{ inputs.scope != 'mac-product' }}
+  cancel-in-progress: ${{ inputs.scope != 'mac-product' && inputs.scope != 'linux-product' }}
 permissions:
   contents: read
 jobs:
+  linux-product:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && inputs.scope == 'linux-product'
+    uses: ./.github/workflows/linux-product-candidate.yml
+    with:
+      candidate_tag: ${{ inputs.candidate_tag }}
+      candidate_commit: ${{ inputs.candidate_commit }}
+      manifest_sha256: ${{ inputs.manifest_sha256 }}
+      harness_sha256: ${{ inputs.harness_sha256 }}
+      wrapper_sha256: ${{ inputs.wrapper_sha256 }}
   setup-posix-cleanup:
     name: Native setup group cleanup (${{ matrix.os }})
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && inputs.scope == 'setup-controls'

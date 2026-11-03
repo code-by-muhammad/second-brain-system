@@ -1,0 +1,101 @@
+name: Isolated Linux product candidate qualification
+on:
+  workflow_call:
+    inputs:
+      candidate_tag:
+        required: true
+        type: string
+      candidate_commit:
+        required: true
+        type: string
+      manifest_sha256:
+        required: true
+        type: string
+      harness_sha256:
+        required: true
+        type: string
+      wrapper_sha256:
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: linux-product-candidate-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  qualify:
+    name: Linux 017 external checkout to candidate (${{ matrix.mode }})
+    if: github.ref == 'refs/heads/feature/posix-native-diagnostics'
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        mode: [forward, rollback, recovery]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+      CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+      CANDIDATE_MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
+      REVIEWED_HARNESS_SHA256: ${{ inputs.harness_sha256 }}
+      REVIEWED_WRAPPER_SHA256: ${{ inputs.wrapper_sha256 }}
+    steps:
+      - name: Check out separately pinned qualification harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Check out official frozen candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.candidate_tag }}
+          path: software
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify independently supplied source, harness and wrapper pins
+        shell: bash
+        run: |
+          [[ "$CANDIDATE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$CANDIDATE_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$CANDIDATE_MANIFEST_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$REVIEWED_HARNESS_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$REVIEWED_WRAPPER_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$(/usr/bin/git -C software rev-parse HEAD)" == "$CANDIDATE_COMMIT" ]]
+          [[ "$(/usr/bin/git -C software rev-parse "refs/tags/$CANDIDATE_TAG^{commit}")" == "$CANDIDATE_COMMIT" ]]
+          qualification_origin=$(/usr/bin/git -C software config --get remote.origin.url)
+          case "$qualification_origin" in
+            https://github.com/code-by-muhammad/second-brain-system.git) ;;
+            https://github.com/code-by-muhammad/second-brain-system) /usr/bin/git -C software remote set-url origin https://github.com/code-by-muhammad/second-brain-system.git ;;
+            *) exit 1 ;;
+          esac
+          [[ "$(/usr/bin/sha256sum software/release-manifest.json | cut -d' ' -f1)" == "$CANDIDATE_MANIFEST_SHA256" ]]
+          [[ "$(/usr/bin/sha256sum harness/tests/native_linux_upgrade.py | cut -d' ' -f1)" == "$REVIEWED_HARNESS_SHA256" ]]
+          [[ "$(/usr/bin/sha256sum harness/tests/prepare_linux_product.sh | cut -d' ' -f1)" == "$REVIEWED_WRAPPER_SHA256" ]]
+          mkdir reports
+          /usr/bin/git -C harness rev-parse HEAD > reports/harness-commit.txt
+          /usr/bin/git -C software rev-parse HEAD > reports/candidate-commit.txt
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.9.16'
+          checksum: '3adbf5322471b53a61483b4a5d091e70c32231ebc63fd327fae7b844cbcd3e01'
+          enable-cache: false
+      - name: Exercise real product code in a fresh disposable ordinary account
+        shell: bash
+        env:
+          QUALIFICATION_MODE: ${{ matrix.mode }}
+          QUALIFICATION_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          umask 022
+          qualification_uv=$(/usr/bin/readlink -f "$(command -v uv)")
+          /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" GITHUB_ACTIONS=true GITHUB_SHA="$GITHUB_SHA" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" GITHUB_WORKFLOW_SHA="$GITHUB_WORKFLOW_SHA" RUNNER_OS=Linux RUNNER_ENVIRONMENT="$QUALIFICATION_RUNNER_ENVIRONMENT" /bin/bash harness/tests/prepare_linux_product.sh "$GITHUB_WORKSPACE/software" "$GITHUB_WORKSPACE/harness/tests/native_linux_upgrade.py" "$qualification_uv" "$QUALIFICATION_MODE" "$CANDIDATE_TAG" "$CANDIDATE_COMMIT" "$CANDIDATE_MANIFEST_SHA256" "$REVIEWED_HARNESS_SHA256" "$GITHUB_WORKFLOW_SHA" "$GITHUB_WORKSPACE/reports"
+      - name: Retain sanitized actual receipts only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-product-${{ matrix.mode }}-${{ inputs.candidate_commit }}-${{ github.run_attempt }}
+          path: |
+            reports/linux-product-qualification.json
+            reports/harness-commit.txt
+            reports/candidate-commit.txt
+          if-no-files-found: error
+          retention-days: 30
