@@ -25,7 +25,7 @@ sha256sum app/brain_service.py tests/native_linux_manager_contract.py
 sudo /usr/bin/install -m 0444 tests/native_linux_manager_contract.py "$contract_home/contract.py"
 sudo /usr/bin/install -m 0444 app/brain_service.py "$contract_home/renderer-source.py"
 set +e
-sudo /usr/bin/timeout --kill-after=10 240 /usr/sbin/runuser -u "$contract_user" -- /usr/bin/env -i HOME="$contract_home" USER="$contract_user" LOGNAME="$contract_user" PATH=/usr/bin:/bin XDG_RUNTIME_DIR="/run/user/$contract_uid" GITHUB_ACTIONS=true /usr/bin/python3 -I -B "$contract_home/contract.py" --expected-user "$contract_user" --renderer-file "$contract_home/renderer-source.py" --receipt "$contract_home/contract-receipt.json"
+sudo /usr/bin/timeout --kill-after=10 240 /usr/sbin/runuser -u "$contract_user" -- /usr/bin/env -i HOME="$contract_home" USER="$contract_user" LOGNAME="$contract_user" PATH=/usr/bin:/bin XDG_RUNTIME_DIR="/run/user/$contract_uid" GITHUB_ACTIONS=true /usr/bin/python3 -I -B "$contract_home/contract.py" --expected-user "$contract_user" --renderer-file "$contract_home/renderer-source.py" --receipt "$contract_home/contract-receipt.json" --attestation-only
 contract_exit=$?
 set -e
 mkdir -p reports

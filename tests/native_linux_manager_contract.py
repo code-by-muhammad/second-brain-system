@@ -1,9 +1,9 @@
 """Disposable Ubuntu CI systemd-user contract observations, not product acceptance.
 
-Run only as the fresh ordinary account made by the companion CI harness. It
-creates one UUID unit and a bounded synthetic supervisor. No notes, credentials,
-pre-existing manager, process-ID signals, provider or product service is used.
-Only its own UUID unit in the fresh CI account is mutated.
+Run only as the fresh ordinary account made by the companion CI harness. The
+required attestation-only mode creates no UUID unit. Historical fixture code is
+unreachable until a separately reviewed CLI change. No notes, credentials,
+pre-existing owner manager, process-ID signals, provider or product service is used.
 """
 import argparse
 import ast
@@ -47,8 +47,8 @@ def protected(path):
     return str(resolved)
 
 
-def bus(tool,runtime,destination,obj,interface,method,signature=None,*arguments):
-    argv=[tool,'--address=unix:path='+str(runtime/'bus'),'--auto-start=no',
+def bus(tool,runtime,destination,obj,interface,method,signature=None,*arguments,socket_path=None):
+    argv=[tool,'--address=unix:path='+str(socket_path or runtime/'bus'),'--auto-start=no',
           '--allow-interactive-authorization=no','--json=short','--timeout=10s',
           'call',destination,obj,interface,method]
     if signature is not None:argv.extend((signature,*arguments))
@@ -95,7 +95,8 @@ def loaded_snapshot(call,obj):
 
 
 def cgroup_observation(path):
-    if not path.startswith('/user.slice/') or '..' in path.split('/'):
+    if ((not path.startswith('/user.slice/') and path not in
+         ('/system.slice/dbus.service','/system.slice/dbus-broker.service')) or '..' in path.split('/')):
         raise RuntimeError('invalid-cgroup-observation-path')
     actual=Path('/sys/fs/cgroup')/path.lstrip('/')
     try:
@@ -118,11 +119,113 @@ def stopped(call,obj,group):
     raise RuntimeError('synthetic-unit-stop-not-empty')
 
 
+def typed(props,key,signature):
+    item=props.get(key)
+    if not isinstance(item,dict) or set(item)!={'type','data'} or item['type']!=signature:
+        raise RuntimeError('attestation-property-contract-unavailable')
+    return item['data']
+
+
+def peer_identity(raw,uid,pid=None):
+    peer=result(raw('org.freedesktop.DBus','/org/freedesktop/DBus',
+                    'org.freedesktop.DBus','GetNameOwner','s',INTERFACE),'s')[0]
+    if not re.fullmatch(r':[0-9]+\.[0-9]+',peer):raise RuntimeError('manager-unique-name-unavailable')
+    credentials=result(raw('org.freedesktop.DBus','/org/freedesktop/DBus',
+        'org.freedesktop.DBus','GetConnectionCredentials','s',peer),'a{sv}')[0]
+    actual=typed(credentials,'ProcessID','u')
+    if (typed(credentials,'UnixUserID','u')!=uid or type(actual) is not int or not 0<actual<0x80000000
+        or (pid is not None and actual!=pid)):
+        raise RuntimeError('manager-peer-credentials-mismatch')
+    return peer,actual,{key:item.get('type') for key,item in credentials.items()}
+
+
+def root_manager_attestation(tool,runtime,uid,prefix,report):
+    """Read-only PID1 attestation; active same-UID/root adversaries are out of scope."""
+    report['stage']='system-bus-preconnect'
+    groups=[path for path in ('/system.slice/dbus.service','/system.slice/dbus-broker.service')
+            if cgroup_observation(path)['populated']]
+    if not groups:raise RuntimeError('preexisting-system-bus-not-populated-no-connect')
+    socket_path=Path('/run/dbus/system_bus_socket')
+    info=socket_path.lstat()
+    if not stat.S_ISSOCK(info.st_mode) or info.st_uid!=0:
+        raise RuntimeError('system-bus-not-root-owned-socket')
+    for directory in socket_path.parents:
+        info=directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022:
+            raise RuntimeError('system-bus-ancestor-not-protected')
+    raw_system=lambda dest,obj,interface,method,sig=None,*argv:bus(
+        tool,runtime,dest,obj,interface,method,sig,*argv,socket_path=socket_path)
+    raw_user=lambda dest,obj,interface,method,sig=None,*argv:bus(tool,runtime,dest,obj,interface,method,sig,*argv)
+    report['stage']='system-manager-peer'
+    sys_peer,_,sys_credentials=peer_identity(raw_system,0,1)
+    system=lambda obj,interface,method,sig=None,*argv:raw_system(sys_peer,obj,interface,method,sig,*argv)
+    variant=result(system(MANAGER,'org.freedesktop.DBus.Properties','Get','ss',INTERFACE+'.Manager','Version'),'v')[0]
+    version=typed({'Version':variant},'Version','s')
+    release=Path(protected('/etc/os-release')).read_bytes()
+    if len(release)>65536:raise RuntimeError('os-release-exceeds-bound')
+    os_release={key:val.strip('"') for key,val in (line.partition('=')[::2]
+        for line in release.decode('utf-8').splitlines()) if key in ('ID','VERSION_ID')}
+    if not isinstance(version,str) or not version.startswith('255.') or os_release!={'ID':'ubuntu','VERSION_ID':'24.04'}:
+        raise RuntimeError('attestation-host-outside-ubuntu2404-systemd255')
+    name='user@'+str(uid)+'.service'
+    obj=result(system(MANAGER,INTERFACE+'.Manager','GetUnit','s',name),'o')[0]
+    def snapshot():
+        unit=properties(system,obj,INTERFACE+'.Unit')
+        service=properties(system,obj,INTERFACE+'.Service')
+        report.setdefault('root_user_unit_s1_shape',{
+            'unit':selected(unit,('Id','LoadState','ActiveState','SubState','Job','InvocationID','FragmentPath','DropInPaths')),
+            'service':selected(service,('User','Type','ControlGroup','MainPID','ExecMainPID','RootDirectory','RootImage','ExecStart'))})
+        for key,expected in (('Id',name),('LoadState','loaded'),('ActiveState','active'),('SubState','running')):
+            if typed(unit,key,'s')!=expected:raise RuntimeError('root-user-unit-not-loaded-active')
+        invocation=typed(unit,'InvocationID','ay')
+        if (not isinstance(invocation,list) or len(invocation)!=16 or not any(invocation)
+            or any(type(item) is not int or not 0<=item<=255 for item in invocation)
+            or typed(unit,'Job','(uo)')!=[0,'/']):raise RuntimeError('root-user-unit-invocation-not-idle')
+        main=typed(service,'MainPID','u')
+        if (type(main) is not int or not 1<main<0x80000000 or typed(service,'ExecMainPID','u')!=main
+            or typed(service,'User','s')!=str(uid) or typed(service,'ControlGroup','s')!=prefix
+            or typed(service,'RootDirectory','s') or typed(service,'RootImage','s')):
+            raise RuntimeError('root-user-unit-process-context-mismatch')
+        execute=typed(service,'ExecStart','a(sasbttttuii)')
+        expected='/usr/lib/systemd/systemd'
+        if (not isinstance(execute,list) or len(execute)!=1 or not isinstance(execute[0],list)
+            or len(execute[0])!=10 or execute[0][:3]!=[expected,[expected,'--user'],False]):
+            raise RuntimeError('root-user-unit-executable-context-mismatch')
+        protected(expected)
+        proof={'invocation':invocation,'main_pid':main,'exec_main_pid':typed(service,'ExecMainPID','u'),
+               'active':typed(unit,'ActiveState','s'),'sub':typed(unit,'SubState','s'),
+               'job':typed(unit,'Job','(uo)'),'execute':execute}
+        observed={'unit':selected(unit,('Id','LoadState','ActiveState','SubState','Job','InvocationID','FragmentPath','DropInPaths')),
+                  'service':selected(service,('User','Type','ControlGroup','MainPID','ExecMainPID','RootDirectory','RootImage','ExecStart')),
+                  'exec_pid_matches_main':execute[0][7]==main}
+        return proof,observed
+    report['stage']='user-unit-s1'
+    first,observed=snapshot()
+    report['stage']='user-peer-bind'
+    user_peer,pid,user_credentials=peer_identity(raw_user,uid,first['main_pid'])
+    if (Path('/proc')/str(pid)/'cgroup').read_text().splitlines()!=['0::'+prefix+'/init.scope']:
+        raise RuntimeError('manager-peer-wrong-cgroup')
+    report['stage']='user-unit-s2'
+    second,_=snapshot()
+    if first!=second:raise RuntimeError('root-user-unit-invocation-changed')
+    report['stage']='bracket-close'
+    for raw,peer in ((raw_system,sys_peer),(raw_user,user_peer)):
+        owner=result(raw('org.freedesktop.DBus','/org/freedesktop/DBus',
+                        'org.freedesktop.DBus','GetNameOwner','s',INTERFACE),'s')[0]
+        if owner!=peer:raise RuntimeError('attested-manager-owner-changed')
+    report['root_attestation']={'scope':'root/OS trusted; active same-UID adversary out of scope',
+        'system_version':version,'os_release':os_release,'system_peer':sys_peer,'user_peer':user_peer,
+        'system_credential_types':sys_credentials,'user_credential_types':user_credentials,
+        'snapshot':observed,'snapshots_equal':True,'system_bus_groups':groups}
+    return raw_user,user_peer,pid
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--expected-user',required=True)
     parser.add_argument('--renderer-file',type=Path,required=True)
     parser.add_argument('--receipt',type=Path,required=True)
+    parser.add_argument('--attestation-only',action='store_true',required=True)
     args=parser.parse_args()
     uid=os.geteuid();account=pwd.getpwuid(uid);home=Path(account.pw_dir)
     receipt=args.receipt.resolve()
@@ -152,23 +255,7 @@ def main():
         report['preexisting_bus_groups']=bus_groups
         report['stage']='native-tool-proof'
         tool=protected('/usr/bin/busctl')
-        raw_call=lambda dest,obj,interface,method,sig=None,*argv:bus(tool,runtime,dest,obj,interface,method,sig,*argv)
-        report['stage']='manager-unique-owner'
-        peer=result(raw_call('org.freedesktop.DBus','/org/freedesktop/DBus',
-                            'org.freedesktop.DBus','GetNameOwner','s',INTERFACE),'s')[0]
-        if not re.fullmatch(r':[0-9]+\.[0-9]+',peer):raise RuntimeError('manager-unique-name-unavailable')
-        report['stage']='manager-peer-credentials'
-        credentials=result(raw_call('org.freedesktop.DBus','/org/freedesktop/DBus',
-            'org.freedesktop.DBus','GetConnectionCredentials','s',peer),'a{sv}')[0]
-        manager_pid=credentials['ProcessID']['data']
-        if credentials['UnixUserID']['data']!=uid:raise RuntimeError('manager-peer-wrong-uid')
-        report['stage']='manager-peer-cgroup'
-        if (Path('/proc')/str(manager_pid)/'cgroup').read_text().splitlines()!=['0::'+prefix+'/init.scope']:
-            raise RuntimeError('manager-peer-wrong-cgroup')
-        report['stage']='manager-peer-executable'
-        executable=(Path('/proc')/str(manager_pid)/'exe').resolve(strict=True)
-        report['stage']='manager-executable-tool-proof'
-        if executable!=Path(protected('/usr/lib/systemd/systemd')):raise RuntimeError('manager-peer-wrong-executable')
+        raw_call,peer,manager_pid=root_manager_attestation(tool,runtime,uid,prefix,report)
         call=lambda obj,interface,method,sig=None,*argv:raw_call(peer,obj,interface,method,sig,*argv)
         report['stage']='manager-properties'
         manager=properties(call,MANAGER,INTERFACE+'.Manager')
@@ -181,6 +268,9 @@ def main():
         if value(manager,'ControlGroup')!=prefix:raise RuntimeError('manager-controlgroup-mismatch')
         directory=home/'.config/systemd/user'
         if str(directory) not in value(manager,'UnitPath'):raise RuntimeError('home-unit-directory-not-in-search-path')
+        if args.attestation_only:
+            report.update(status='attestation observed; not qualification',stage='finished',attestation_observed=True)
+            return
         report['stage']='manager-introspect'
         introspection=result(call(MANAGER,'org.freedesktop.DBus.Introspectable','Introspect'),'s')[0]
         methods=('LoadUnit','ListUnitFilesByPatterns','GetUnitFileLinks','EnableUnitFiles','DisableUnitFiles',
@@ -320,12 +410,13 @@ def main():
                 if report.get('manager_methods',{}).get('GetUnitFileLinks') is not False:continue
                 observations=observations.get('file_links',{})
             if observations.get('available') is False:report['unavailable'].append(label+'-file-links')
-        if not report.get('cleanup_verified') or report['unavailable']:report['status']='incomplete'
+        if (not report.get('cleanup_verified') and not report.get('attestation_observed')) or report['unavailable']:
+            report['status']='incomplete'
         report['finished_at']=time.time()
         text=json.dumps(report,indent=2)
         with receipt.open('x',encoding='utf-8') as output:output.write(text)
-    print(json.dumps({'status':report['status'],'stage':report['stage'],'receipt':str(receipt)}))
-    if report['status']=='incomplete':raise SystemExit(1)
+        print(json.dumps({'status':report['status'],'stage':report['stage'],'receipt':str(receipt)}))
+        if report['status']=='incomplete':raise SystemExit(1)
 
 
 if __name__=='__main__':main()
