@@ -27,24 +27,74 @@ def run(command,*,source_app,**options):
         result=module.run(command,**options)
         if check:result.check_returncode()
         return result
-    # Each POSIX child has a dedicated group. On timeout/cancellation signal it
-    # before reaping its leader; native POSIX descendant qualification is separate.
-    import signal
+    # One local waiter owns this session leader. Its unreaped PID reserves
+    # the PGID through TERM/grace/KILL; never signal after a recorded reap.
+    import signal,time
+    if signal.getsignal(signal.SIGCHLD) is not signal.SIG_DFL:
+        raise ValueError('Setup refuses an overriding child-reaping disposition.')
     timeout=options.pop('timeout',None)
     capture=options.pop('capture_output',False)
     if capture:options.update(stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-    child=subprocess.Popen(command,start_new_session=True,**options)
-    try:stdout,stderr=child.communicate(timeout=timeout)
-    except BaseException:
-        try:os.killpg(child.pid,signal.SIGTERM)
-        except ProcessLookupError:pass
-        try:child.communicate(timeout=2)
-        except subprocess.TimeoutExpired:
-            try:os.killpg(child.pid,signal.SIGKILL)
-            except ProcessLookupError:pass
-            child.communicate(timeout=5)
-        raise
-    result=subprocess.CompletedProcess(command,child.returncode,stdout,stderr)
+    child=None;stopped=False;handlers={}
+    def check_interrupt():
+        if stopped:raise InterruptedError('Setup operation interrupted.')
+    def interrupted(signum,frame):
+        nonlocal stopped
+        stopped=True
+        # Let Popen return the ownership object before raising cancellation.
+        # Never raise inside subprocess waitpid/exit-status bookkeeping.
+        # A short communicate timeout checks the flag outside that boundary.
+    try:
+        for signum in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP):
+            previous=signal.getsignal(signum)
+            if previous is None:raise ValueError('Setup refuses an unrestoreable native signal handler.')
+            if previous is not signal.SIG_IGN:handlers[signum]=previous
+        for signum in handlers:signal.signal(signum,interrupted)
+        check_interrupt()
+        child=subprocess.Popen(command,start_new_session=True,**options)
+        check_interrupt()
+        deadline=None if timeout is None else time.monotonic()+timeout
+        while True:
+            check_interrupt()
+            remaining=None if deadline is None else deadline-time.monotonic()
+            if remaining is not None and remaining<=0:raise subprocess.TimeoutExpired(command,timeout)
+            try:
+                stdout,stderr=child.communicate(timeout=.1 if remaining is None else min(.1,remaining))
+                break
+            except subprocess.TimeoutExpired:
+                check_interrupt()
+        check_interrupt()
+        result=subprocess.CompletedProcess(command,child.returncode,stdout,stderr)
+    finally:
+        try:
+            if child is not None:
+                if child.returncode is None:
+                    for signum in (signal.SIGTERM,signal.SIGKILL):
+                        try:os.killpg(child.pid,signum)
+                        except OSError:pass
+                        if signum==signal.SIGTERM:time.sleep(2)
+                try:child.wait(timeout=5)
+                except (subprocess.TimeoutExpired,OSError):pass
+                notified=False
+                while True:
+                    # A reaped leader grants no further signal authority.
+                    # Unknown/remaining membership retains the caller's admission.
+                    try:reaped=child.poll() is not None
+                    except OSError:reaped=False
+                    if reaped:
+                        try:os.killpg(child.pid,0)
+                        except ProcessLookupError:break
+                        except OSError:pass
+                    if not notified:
+                        notified=True
+                        try:print('Setup cleanup pending: group absence remains unverified; admission remains held.',file=sys.stderr,flush=True)
+                        except (OSError,ValueError):pass
+                    time.sleep(.1)
+                for stream in (child.stdin,child.stdout,child.stderr):
+                    if stream is not None:stream.close()
+        finally:
+            for signum,previous in handlers.items():signal.signal(signum,previous)
+    check_interrupt()
     if check:result.check_returncode()
     return result
 

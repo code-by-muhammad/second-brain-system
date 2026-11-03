@@ -10,7 +10,7 @@ on:
         description: Bounded diagnostic scope
         type: choice
         default: inventory
-        options: [inventory, contracts, linux-contract, focused-controls, mac-product]
+        options: [inventory, contracts, linux-contract, focused-controls, mac-product, setup-controls]
       candidate_tag:
         description: Official nonapproved candidate tag, mac-product only
         type: string
@@ -29,6 +29,48 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  setup-posix-cleanup:
+    name: Native setup group cleanup (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && inputs.scope == 'setup-controls'
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        os: [ubuntu-24.04, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.9.16'
+          enable-cache: false
+      - run: uv sync --locked --python 3.12
+      - name: Record exact source and execute bounded synthetic native cases
+        shell: bash
+        run: |
+          mkdir reports
+          git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD > reports/checked-out-commit.txt
+          shasum -a 256 setup_runtime.py tests/test_setup_posix_group_cleanup.py tests/conftest.py tests/isolation_guard.py > reports/setup-source-sha256.txt
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            setup_sandbox=$(mktemp -d /private/tmp/sb-setup-controls.XXXXXXXX)
+          else
+            setup_sandbox=$(mktemp -d /tmp/sb-setup-controls.XXXXXXXX)
+          fi
+          env -i PATH="$PATH" HOME="$HOME" SB_TEST_SANDBOX="$setup_sandbox" PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 ./.venv/bin/python -B -m pytest -q -p no:cacheprovider -p pytest_asyncio.plugin tests/test_setup_posix_group_cleanup.py --basetemp "$setup_sandbox/tmp" --junitxml reports/setup-native-controls.xml
+      - name: Retain sanitized bounded test receipts only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: setup-native-cleanup-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            reports/setup-native-controls.xml
+            reports/checked-out-commit.txt
+            reports/setup-source-sha256.txt
+          if-no-files-found: error
+          retention-days: 30
   mac-product:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && inputs.scope == 'mac-product'
     uses: ./.github/workflows/mac-product-candidate.yml
