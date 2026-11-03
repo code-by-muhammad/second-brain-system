@@ -175,7 +175,7 @@
     "app/brain_markdown.py": "3bc18c92524364acdce8bbf0abf00e69d7acf72d0d9cfbc809461424c3379892",
     "app/brain_process.py": "e6f239f179571847ef06a6f681d15ddcb71edfa98fc629082f11a144a3a3924e",
     "app/brain_server.py": "256979525793b388577c7a3a3c7dbf0b490666da76c69d5cf696068ee0793acd",
-    "app/brain_service.py": "18fd9975e65a329150d364abeb340b900cfaccfcd94418e8a162dcee91048759",
+    "app/brain_service.py": "6c24ce303b8e186ff18df279cbb89093b9048783c934b7129724df1e12835cfe",
     "app/brain_settings.py": "267b4b27dd6bae32d5427078ab15d82093ea76f04d8af8316cdd29ce5d660a42",
     "app/brain_store.py": "e08620b687a14fbdc2daa0ebaf46c566f49a5b2277508566d61a57810d806067",
     "app/brain_supervisor.py": "abe2565f1802cad288ab2202bf4b91f02740d01e41476bad57508fc3989312f6",

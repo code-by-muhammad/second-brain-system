@@ -6,6 +6,11 @@ from filelock import FileLock,Timeout
 import brain_settings as cfg
 import brain_process as processes
 
+
+def _qualified_native_platform():
+    if sys.platform!='win32':
+        raise processes.OwnershipError('Native service changes are qualified for Windows only; no service or state changes made.')
+
 LABEL='local.second-brain'
 TASK=cfg.DEVICE.get('service_name','SecondBrainLocalService')
 LINUX_UNIT='second-brain.service'
@@ -247,6 +252,7 @@ def definition(platform=None,*,enabled=True):
     return '[Unit]\nDescription=Local Second Brain MCP\nAfter=network.target\n\n[Service]\nType=simple\nExecStart='+quote(cfg.PYTHON)+' '+quote(script)+'\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n'
 
 def install():
+    _qualified_native_platform()
     processes.validate_environment()
     (cfg.ROOT/'logs').mkdir(parents=True,exist_ok=True)
     if sys.platform=='win32':
@@ -316,6 +322,7 @@ def _wait_started(attempt,since,legacy,deadline):
 
 
 def start(*,explicit=False,hold_id=None,since=None,allow_legacy=False,deadline=None):
+    _qualified_native_platform()
     processes.validate_environment()
     attempt=processes.filetime_now()
     if since is not None and (type(since) is not int or attempt<since):raise processes.OwnershipError('Startup clock predates verified quiescence.')
@@ -369,6 +376,7 @@ def start(*,explicit=False,hold_id=None,since=None,allow_legacy=False,deadline=N
 
 
 def stop(*,hold_id=None,wait_seconds=30):
+    _qualified_native_platform()
     processes.validate_environment()
     if type(wait_seconds) is not int or not 1<=wait_seconds<=300:raise ValueError('Use a stop wait between 1 and 300 seconds.')
     owned=[];task=None;disabled=False;end_attempted=False;phase='task preflight'
