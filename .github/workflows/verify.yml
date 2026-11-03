@@ -10,12 +10,12 @@ on:
         description: Bounded diagnostic scope
         type: choice
         default: inventory
-        options: [inventory, contracts, linux-contract, focused-controls, mac-product, linux-product, setup-controls, store-case-fixed, nested-setup-baseline]
+        options: [inventory, contracts, linux-contract, focused-controls, mac-product, linux-product, setup-controls, store-case-fixed, nested-setup-baseline, setup-index-controls]
       candidate_tag:
         description: Official nonapproved candidate tag, product qualification only
         type: string
       candidate_commit:
-        description: Reviewed full candidate commit, product qualification only
+        description: Reviewed full candidate commit for product qualification or source controls
         type: string
       manifest_sha256:
         description: Reviewed candidate manifest SHA256, product qualification only
@@ -32,6 +32,73 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  setup-index-controls:
+    name: Native setup and index source controls (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-nested-setup-diagnostic' && inputs.scope == 'setup-index-controls'
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        os: [ubuntu-24.04, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+    steps:
+      - name: Require the reviewed full source commit
+        shell: bash
+        run: '[[ "$CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]'
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.candidate_commit }}
+          path: software
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.9.16'
+          enable-cache: false
+      - run: uv sync --project software --locked --python 3.12
+      - name: Bind actual source, tests and guarded SDK
+        id: source-binding
+        shell: bash
+        run: |
+          mkdir reports
+          test "$(git -C software --no-optional-locks -c core.fsmonitor=false rev-parse HEAD)" = "$CANDIDATE_COMMIT"
+          git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD > reports/diagnostic-commit.txt
+          git -C software --no-optional-locks -c core.fsmonitor=false rev-parse HEAD > reports/source-commit.txt
+          shasum -a 256 .github/workflows/verify.yml > reports/workflow-sha256.txt
+          shasum -a 256 software/app/*.py software/setup_runtime.py software/install.py software/pyproject.toml software/uv.lock software/tests/conftest.py software/tests/isolation_guard.py software/tests/test_setup_posix_group_cleanup.py software/tests/test_setup_delegated_cleanup.py software/tests/native_nested_setup_delegation.py software/tests/test_posix_index_group_cleanup.py software/tests/test_index_interrupt_admission.py > reports/source-before-sha256.txt
+          software/.venv/bin/python -I -B -c 'import json,platform,sys,pytest,psutil,filelock;print(json.dumps(dict(python=sys.version,pytest=pytest.__version__,psutil=psutil.__version__,filelock=filelock.__version__,system=platform.system(),machine=platform.machine(),release=platform.release(),macos=platform.mac_ver()[0])))' > reports/native-tools.json
+      - name: Exercise bounded synthetic source controls
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            controls_sandbox=$(mktemp -d /private/tmp/sb-setup-index.XXXXXXXX)
+          else
+            controls_sandbox=$(mktemp -d /tmp/sb-setup-index.XXXXXXXX)
+          fi
+          cd software
+          env -i PATH="$PATH" HOME="$HOME" SB_TEST_SANDBOX="$controls_sandbox" PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 ./.venv/bin/python -B -m pytest -q -p no:cacheprovider -p pytest_asyncio.plugin tests/test_setup_posix_group_cleanup.py tests/test_setup_delegated_cleanup.py tests/test_posix_index_group_cleanup.py tests/test_index_interrupt_admission.py --basetemp "$controls_sandbox/tmp" --junitxml ../reports/setup-index-controls.xml
+      - name: Verify source inputs remain unchanged
+        if: always() && steps.source-binding.outcome == 'success'
+        shell: bash
+        run: |
+          shasum -a 256 .github/workflows/verify.yml > reports/workflow-after-sha256.txt
+          cmp reports/workflow-sha256.txt reports/workflow-after-sha256.txt
+          shasum -a 256 software/app/*.py software/setup_runtime.py software/install.py software/pyproject.toml software/uv.lock software/tests/conftest.py software/tests/isolation_guard.py software/tests/test_setup_posix_group_cleanup.py software/tests/test_setup_delegated_cleanup.py software/tests/native_nested_setup_delegation.py software/tests/test_posix_index_group_cleanup.py software/tests/test_index_interrupt_admission.py > reports/source-after-sha256.txt
+          cmp reports/source-before-sha256.txt reports/source-after-sha256.txt
+          git -C software --no-optional-locks -c core.fsmonitor=false diff --exit-code -- .
+      - name: Retain scoped source and test receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: setup-index-controls-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: reports/
+          if-no-files-found: error
+          retention-days: 30
   nested-setup-baseline:
     name: Bounded synthetic nested setup cancellation (Ubuntu)
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-nested-setup-diagnostic' && inputs.scope == 'nested-setup-baseline'
