@@ -33,6 +33,7 @@ def run(arguments, **kwargs):
     kwargs.pop('source_app',None)  # This lane intercepts the reviewed contained boundary.
     assert '--install-service' not in arguments
     if str(release / 'install.py') in arguments:
+        assert kwargs.pop('delegated_cleanup') is True
         assert route=='bootstrap-child' and arguments[:3]==[str(selected),'-I',str(release/'install.py')]
         assert '--reuse-python' in arguments and '--download-model' not in arguments
         record({'kind': 'actual-child', 'argv': arguments})

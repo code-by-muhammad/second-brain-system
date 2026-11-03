@@ -353,12 +353,31 @@ def controller(python,checkout,root,command,action=None,*flags):
     app=Path(checkout)/'app';script=app/'brain_cli.py'
     code='import runpy,sys;sys.path.insert(0,'+repr(str(app))+');runpy.run_path('+repr(str(script))+',run_name="__main__")'
     support=installer().setup_helpers()
-    arguments=[*support.isolated_python(python,root),'-c',code,command]+([action] if action else [])+list(flags)
-    result=support.run(arguments,source_app=Path(__file__).resolve().parent/'app',env=cli_environment(root),capture_output=True,text=True,encoding='utf-8',timeout=900,check=False)
-    if result.returncode:raise RuntimeError('Verified controller refused '+command+' '+str(action or '')+' (exit '+str(result.returncode)+'); inspect private service control receipt.')
-    value=json.loads(result.stdout)
-    if not isinstance(value,dict):raise ValueError('Invalid controller receipt.')
-    return value
+    isolated=support.isolated_python(python,root)
+    cache=Path(isolated[-1].removeprefix('pycache_prefix='))
+    cache_parent=Path(root)/'state/import-cache'
+    before=None
+    try:
+        if (isolated[-1].startswith('pycache_prefix=') and cache.parent==cache_parent
+                and cache.name.startswith('run-') and cache.name!='run-'
+                and not any(p.is_symlink() or p.is_junction() for p in (cache,*cache.parents)) and cache.resolve()==cache):
+            before=cache.stat(follow_symlinks=False)
+    except (OSError,RuntimeError):pass
+    arguments=[*isolated,'-c',code,command]+([action] if action else [])+list(flags)
+    try:
+        result=support.run(arguments,source_app=Path(__file__).resolve().parent/'app',env=cli_environment(root),capture_output=True,text=True,encoding='utf-8',timeout=900,check=False)
+        if result.returncode:raise RuntimeError('Verified controller refused '+command+' '+str(action or '')+' (exit '+str(result.returncode)+'); inspect private service control receipt.')
+        value=json.loads(result.stdout)
+        if not isinstance(value,dict):raise ValueError('Invalid controller receipt.')
+        return value
+    finally:
+        if before is not None:
+            try:
+                after=cache.stat(follow_symlinks=False)
+                if (before.st_ino>0 and not any(p.is_symlink() or p.is_junction() for p in (cache,*cache.parents))
+                        and cache.resolve()==cache and (before.st_dev,before.st_ino)==(after.st_dev,after.st_ino)):
+                    cache.rmdir()  # Atomic empty-directory removal only; retain nonempty/uncertain paths.
+            except (OSError,RuntimeError):pass
 
 
 def wait_health(python,root,version,timeout=120,*,checkout=None):
@@ -476,6 +495,24 @@ def _recovery_binding(root,hold):
     return saved,value,selected
 
 
+def _recovery_receipt_fields(root,hold,saved):
+    """Only advertise a recovery UUID when its matching active hold is readable."""
+    try:
+        raw=_read(root/'state/service-transaction.json')
+        if raw is None:observed='absent'
+        else:
+            value=json.loads(raw)
+            if (isinstance(value,dict) and value.get('hold_id')==hold and value.get('root')==str(root)
+                    and isinstance(value.get('snapshot'),str) and saved is not None
+                    and Path(value['snapshot']).resolve()==Path(saved).resolve()):
+                return {'status':'recovery required','hold_id':hold}
+            observed='mismatch'
+    except FileNotFoundError:observed='absent'
+    except (OSError,ValueError,TypeError,RecursionError,RuntimeError):observed='unreadable'
+    return {'status':'transaction outcome inspection required','attempt_hold_id':hold,
+            'observed_transaction':observed,'transaction_evidence_path':str(root/'state/service-transactions'/(hold+'.json'))}
+
+
 def recover(root,hold,checkout=None):
     _qualified_platform()
     saved,value,selected=_recovery_binding(root,hold)
@@ -486,7 +523,7 @@ def recover(root,hold,checkout=None):
     try:
         result=_restart_previous(root,saved,python,checkout,hold)
     except BaseException as error:
-        _receipt(root,{'status':'recovery required','hold_id':hold,'snapshot':str(saved) if saved is not None else None,'error_type':type(error).__name__,'pending_work':'preserved'})
+        _receipt(root,{**_recovery_receipt_fields(root,hold,saved),'snapshot':str(saved) if saved is not None else None,'error_type':type(error).__name__,'pending_work':'preserved'})
         raise
     return _receipt(root,{'status':'recovered','hold_id':hold,'snapshot':str(saved) if saved is not None else None,'recovery':result})
 
@@ -598,15 +635,23 @@ def perform(root,version,migrate_wiki=False,requeue_unverified=False,*,uv=None,d
                 _restore_previous_binding(root,saved)
                 cancellation=controller(python,release,root,'service','cancel','--hold-id',hold)
             except Exception as recovery_error:
-                _receipt(root,{'status':'recovery required','hold_id':hold,'snapshot':str(saved) if saved is not None else None,'phase':'stop refused; no runtime switch','error_type':type(error).__name__,'recovery_error_type':type(recovery_error).__name__,'pending_work':'preserved'})
+                _receipt(root,{**_recovery_receipt_fields(root,hold,saved),'snapshot':str(saved) if saved is not None else None,'phase':'stop refused; no runtime switch','error_type':type(error).__name__,'recovery_error_type':type(recovery_error).__name__,'pending_work':'preserved'})
                 raise error
             _receipt(root,{'status':'update deferred; runtime not switched','hold_id':hold,'snapshot':str(saved) if saved is not None else None,'cancellation':cancellation,'error_type':type(error).__name__,'pending_work':'preserved'})
             raise RuntimeError('Update deferred before runtime switch. The exact pre-End refusal was verified; no recovery hold remains.') from error
+        outcome=_recovery_receipt_fields(root,hold,saved)
+        if outcome['status']!='recovery required':
+            _receipt(root,{**outcome,'snapshot':str(saved) if saved is not None else None,'phase':'post-stop transaction outcome',
+                           'error_type':type(error).__name__,'pending_work':'preserved'})
+            raise RuntimeError('Transaction outcome is uncertain; preserve the current runtime and inspect '+outcome['transaction_evidence_path']+' and service recover before further action.') from error
         try:
             recovery=_restart_previous(root,saved,python,release,hold,restore_bytes=switched)
             _receipt(root,{'status':'update failed; previous runtime verified','hold_id':hold,'snapshot':str(saved) if saved is not None else None,'recovery':recovery,'error_type':type(error).__name__})
         except Exception as recovery_error:
-            _receipt(root,{'status':'recovery required','hold_id':hold,'snapshot':str(saved) if saved is not None else None,'error_type':type(error).__name__,'recovery_error_type':type(recovery_error).__name__,'pending_work':'preserved'})
+            outcome=_recovery_receipt_fields(root,hold,saved)
+            _receipt(root,{**outcome,'snapshot':str(saved) if saved is not None else None,'error_type':type(error).__name__,'recovery_error_type':type(recovery_error).__name__,'pending_work':'preserved'})
+            if outcome['status']!='recovery required':
+                raise RuntimeError('Recovery outcome is uncertain; preserve the current runtime and inspect '+outcome['transaction_evidence_path']+' and service recover before further action.') from recovery_error
             raise RuntimeError('Upgrade recovery is incomplete; preserve pending work and use the recorded exact recovery UUID.') from recovery_error
         raise RuntimeError('Upgrade failed; previous runtime health verified. Inspect upgrade-status.json for preserved client edits.') from error
     clients=installed.get('client_result',{})

@@ -216,9 +216,10 @@ def _daily_link(p,raw,meta,when):
     link=_capture_link(p)
     day=when.strftime('%Y-%m-%d-%A')
     target=s.safe_path('05-Daily/'+day+'.md'); marker='<!-- brain-capture:'+meta['event_id']+' -->'
-    before=None
+    before=None; preserve_bom=False
     if target.exists():
         raw_daily,body=_read_derived(target); before=s.digest(raw_daily)
+        preserve_bom=raw_daily.startswith(codecs.BOM_UTF8)
     else:
         _,body=_read_derived(s.safe_path('Templates/daily-note.md'))
         replacements={
@@ -241,6 +242,7 @@ def _daily_link(p,raw,meta,when):
     start=body.index('## Work Log')+len('## Work Log'); end=body.find('\n## ',start)
     if end<0: body=body.rstrip()+'\n'+entry
     else: body=body[:end].rstrip()+'\n'+entry+'\n'+body[end:]
+    if preserve_bom:body='\ufeff'+body
     if len(body.encode('utf-8'))>2_000_000: raise ValueError('Daily note exceeds the bounded note-size contract.')
     if _current_hash(target)!=before: raise ValueError('Daily note changed during linking; owner content preserved.')
     s._write(target,body,'daily_capture_link',expected_sha256=before)

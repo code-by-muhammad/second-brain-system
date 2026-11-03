@@ -55,20 +55,22 @@ def _run_reindex(command,log,overall,on_tick,on_cleanup_wait):
     # invalidate the unreaped-child PID reservation used during cancellation.
     if signal.getsignal(signal.SIGCHLD) is not signal.SIG_DFL:
         raise index.IndexAttention('child_reaping_disposition_refused')
-    stopped=False
-    cleaning=False
+    stopped=0
     def check_interrupt():
+        if stopped==signal.SIGINT:raise KeyboardInterrupt
         if stopped:raise InterruptedError('Local index operation interrupted.')
     def interrupted(signum,frame):
         nonlocal stopped
-        stopped=True
-        # Popen must finish handing back ownership before cancellation raises.
-        if process is not None and not cleaning:check_interrupt()
+        if not stopped or signum==signal.SIGINT:stopped=signum
+        # Signal delivery only records cancellation. Raising is synchronous at
+        # owned-child checkpoints, never across Popen or finally admission.
+        # Signals already dispatched into cleanup do not re-raise afterward.
     handlers={signal.SIGINT:signal.getsignal(signal.SIGINT)}
     process=None
     deadline=time.monotonic()+overall
     try:
-        for signum in (signal.SIGTERM,signal.SIGHUP):
+        for signum in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP):
+            if signum==signal.SIGINT and handlers[signum]==signal.SIG_IGN:continue
             handlers[signum]=signal.signal(signum,interrupted)
         check_interrupt()
         process=subprocess.Popen(command,env=cfg.environment(),stdin=subprocess.DEVNULL,stdout=log,stderr=log,start_new_session=True)
@@ -85,7 +87,6 @@ def _run_reindex(command,log,overall,on_tick,on_cleanup_wait):
         check_interrupt()
         return subprocess.CompletedProcess(command,process.returncode)
     finally:
-        cleaning=True
         try:
             if process is not None:
                 while True:

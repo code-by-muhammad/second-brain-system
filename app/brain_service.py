@@ -618,6 +618,8 @@ def install():
         with _control():
             active=transaction();snapshot=_held_install(active)
             previous=_windows_task()
+            if active is None and previous is not None and previous.get('state') in ('Running','Queued'):
+                raise processes.OwnershipError('Stop the owned Windows Task before replacing its registration.')
             if active is not None and (previous is None or previous['enabled'] or previous.get('state')!='Disabled'):
                 raise processes.OwnershipError('Held Windows install requires the exact disabled inactive owned Task.')
             enabled=active is None and (previous is None or previous['enabled'])
@@ -1098,9 +1100,16 @@ def inspect():
             native=registration.inspect()
             listening=processes.listener_identity()
             if listening is not None:_native_listener_binding(listening,native)
+            expected=hashlib.sha256(definition(sys.platform).encode('utf-8')).hexdigest()
+            pending_initial_enable=False
+            if native['file_present'] and native['enabled'] is False and native['definition_sha256']==expected:
+                try:
+                    prior,requested=_native_install_intent(native,expected)
+                    pending_initial_enable=prior['file_present'] is False and requested is True
+                except processes.OwnershipError:pass
             return {'status':'inspected','task_present':native['file_present'] and native['loaded'],
                     'task_enabled':native['enabled'],'native':native,'registration':_registration_descriptor(native,registration),
-                    'expected_native_definition_sha256':hashlib.sha256(definition(sys.platform).encode('utf-8')).hexdigest()}
+                    'expected_native_definition_sha256':expected,'pending_initial_install_enable':pending_initial_enable}
         task=_windows_task(include_xml=True) if sys.platform=='win32' else None
         return {'status':'inspected','task_present':task is not None,
                 'task_enabled':task['enabled'] if task is not None else None,'registration':_registration_descriptor(task)}

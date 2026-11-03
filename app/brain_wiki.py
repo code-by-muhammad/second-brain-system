@@ -45,6 +45,15 @@ SCHEMA['properties']['dispositions']={'type':'array','items':{'type':'object','a
 class WikiTransientError(ValueError):
     """A revision race is retryable and says nothing about source quality."""
 
+class WikiAdmissionDeferred(ValueError):
+    """A runtime hold defers publication without invalidating saved model output."""
+
+class WikiHistoryDeferred(ValueError):
+    """A history timeout defers publication until exact evidence can be verified."""
+    def __init__(self,page,claim_index,reasons):
+        super().__init__('Historical evidence verification timed out; saved output preserved for retry.')
+        self.page=page; self.claim_index=claim_index; self.reasons=tuple(sorted(reasons))
+
 class _WikiLogChanged(WikiTransientError):
     """An unused Log-only CAS race may reuse its already saved model output."""
 
@@ -1427,6 +1436,9 @@ class _EvidenceHistory:
     def incomplete_since(self,serial):
         return self.failure_reason if self.failure_serial!=serial else None
 
+    def reasons_since(self,serial):
+        return tuple(reason for reason,last in sorted(self.failure_serial_by_reason.items(),key=lambda pair:pair[1]) if last>serial)
+
     def _retryable_since(self,serial):
         return self.failure_serial_by_reason.get('git-timeout',0)>serial
 
@@ -1528,7 +1540,7 @@ class _EvidenceHistory:
         except (ValueError,TypeError): return None
         key=(source,sha256,normalized(quote) if quote is not None else None,text_sha256)
         if key in self.results:
-            if key in self.result_failures: self._incomplete(self.result_failures[key])
+            for reason in self.result_failures.get(key,()): self._incomplete(reason)
             return self.results[key]
         serial=self.failure_serial
         current=self._current(source)
@@ -1546,7 +1558,7 @@ class _EvidenceHistory:
         reason=self.incomplete_since(serial)
         if not self._retryable_since(serial):
             self.results[key]=None
-            if reason: self.result_failures[key]=reason
+            if reason: self.result_failures[key]=self.reasons_since(serial)
         return None
 
     def _revision_origins(self,old):
@@ -1662,7 +1674,11 @@ def _render_topic(page,packet,ident,result_hash,history=None):
             # Missing, undecodable and oversized current files are unavailable,
             # not alternate evidence. Only the exact recorded Git origin may help.
             proof=history.claim(old_page,claim)
-            if not proof: raise WikiIntegrityError(rel,index,'source_revision')
+            if not proof:
+                reasons=set(history.reasons_since(verification_serial))
+                if reasons and reasons<={'deadline','git-timeout'}:
+                    raise WikiHistoryDeferred(rel,index,reasons)
+                raise WikiIntegrityError(rel,index,'source_revision')
             hashes[claim['source']]=proof['sha256']
         if proof:
             claim.setdefault('source_revision',{'sha256':proof['sha256'],'text_sha256':proof['text_sha256'],'date':proof['date']})
@@ -1899,6 +1915,24 @@ def _hold_prior_publication(packet,publication,plan=None):
     except (OSError,ValueError,KeyError,TypeError,RecursionError): raise _recovery_integrity(packet['batch_id']) from None
 
 
+def _source_revision_unchanged(row):
+    path=s.safe_path(row['path'])
+    try:
+        canonical=s._existing_write_path(path).relative_to(s.VAULT).parts
+        selected=Path(row['path']).parts
+        # Inventory intentionally uses the declared source-root spelling.
+        # Preserve its existing filesystem alias, but require every component
+        # below that root to retain its exact observed canonical name.
+        if canonical!=selected:
+            if (not canonical or not selected or canonical[1:]!=selected[1:]
+                    or canonical[0].casefold()!=selected[0].casefold()
+                    or not (s.VAULT/canonical[0]).samefile(s.VAULT/selected[0])):
+                return False
+    except (OSError,ValueError) as exc:
+        raise OSError('Source spelling could not be verified; preserve the source and retry.') from exc
+    return _current_hash(path)==row['sha256']
+
+
 def apply(packet,result):
     cfg.require_maintainer()
     _validate_shape(result)
@@ -1917,7 +1951,8 @@ def apply(packet,result):
     _validate(packet,result,screen_paths=not repairing); dispositions=_dispositions(packet,result)
     folder=cfg.STATE/'wiki/batches'/ident; journal=folder/'journal.json'; publication=folder/'publication.json'
     with FileLock(str(cfg.STATE/'writer.lock'),timeout=30):
-        cfg.write_admission()
+        try: cfg.write_admission()
+        except ValueError as exc: raise WikiAdmissionDeferred(str(exc)) from exc
         already_planned=publication.exists()
         _hold_prior_publication(packet,publication)
         _assert_source_policy(packet,allow_durable=_saved_publication_started(packet,publication))
@@ -1931,7 +1966,7 @@ def apply(packet,result):
                 _atomic_json(journal,{'version':2,'state':'complete','packet_sha256':plan['packet_sha256'],'result_sha256':plan['result_sha256'],'entries':plan['entries'],'receipts':receipts})
             return receipts
         for row in packet['sources']:
-            if _current_hash(s.safe_path(row['path']))!=row['sha256']: raise WikiTransientError('Source changed since prepare; rebuild the batch.')
+            if not _source_revision_unchanged(row): raise WikiTransientError('Source changed since prepare; rebuild the batch.')
         if publication.exists():
             plan=json.loads(publication.read_text(encoding='utf-8'))
             if plan.get('packet_sha256')!=_json_hash(packet) or plan.get('result_sha256')!=_json_hash(result): raise WikiOutputError('Batch output changed during recovery.')
@@ -1968,7 +2003,7 @@ def apply(packet,result):
             _verify_publication_plan(plan,packet,result)
         _assert_source_policy(packet,allow_durable=_publication_started(plan))
         for row in packet['sources']:
-            if _current_hash(s.safe_path(row['path']))!=row['sha256']: raise WikiTransientError('Source changed during publication planning; rebuild the batch.')
+            if not _source_revision_unchanged(row): raise WikiTransientError('Source changed during publication planning; rebuild the batch.')
         # The whole plan is durable before the first note write. A process killed
         # after os.replace and before journaling is recovered by the planned hash.
         for write in plan['writes']:
@@ -2348,6 +2383,7 @@ def reset_retries():
     """Explicit operator retry after the cause is fixed; never starts another worker."""
     cfg.require_maintainer()
     with FileLock(str(cfg.STATE/'wiki-worker.lock'),timeout=1):
+        cfg.write_admission()
         with db() as conn:
             conn.execute('UPDATE sources SET error=NULL,attempts=0,attempt_hash=NULL,deferred_until=0')
             conn.execute('UPDATE batches SET attempts=0')
@@ -2382,6 +2418,7 @@ def _native_model_identity(executable):
 def configure_model(executable):
     cfg.require_maintainer()
     with FileLock(str(cfg.STATE/'wiki-worker.lock'),timeout=1):
+        cfg.write_admission()
         identity=_native_model_identity(executable)
         _atomic_json(cfg.STATE/'wiki-model.json',{'format':1,'executable':identity['path']})
     return {'status':'configured; native CLI/authentication and compiler acceptance remain pending','executable':identity}
@@ -2563,17 +2600,20 @@ def run(limit=4,timeout=480):
             if (folder/'runner.log').exists():
                 with (folder/'runner.log').open('rb') as stream:runner=stream.read(65536).decode('utf-8',errors='replace')
             global_failure=_model_auth_quota_failure(proc.returncode if proc else None,runner,model_input)
-            transient=isinstance(exc,(WikiTransientError,LockTimeout,OSError)) or ((folder/'publication.json').exists() and not isinstance(exc,(WikiOutputError,ValidationError,json.JSONDecodeError)))
+            transient=isinstance(exc,(WikiTransientError,WikiAdmissionDeferred,WikiHistoryDeferred,LockTimeout,OSError)) or ((folder/'publication.json').exists() and not isinstance(exc,(WikiOutputError,ValidationError,json.JSONDecodeError)))
             unattributed_output=isinstance(exc,(WikiOutputError,ValueError,ValidationError)) and not isinstance(exc,WikiTransientError) and not getattr(exc,'source',None)
             reason='model authentication/quota requires attention' if global_failure else type(exc).__name__
             failures=int(saved.get('consecutive_failures',0)); backoff=0
             attributed=isinstance(exc,WikiOutputError) and bool(exc.source)
             if attributed: failures=0
-            counted=not global_failure and not attributed and not isinstance(exc,(LockTimeout,WikiIntegrityError)) and (proc is not None or saved_output)
+            counted=not global_failure and not attributed and not isinstance(exc,(WikiAdmissionDeferred,WikiHistoryDeferred,LockTimeout,WikiIntegrityError)) and (proc is not None or saved_output)
             if counted: failures+=1
             integrity=isinstance(exc,WikiIntegrityError)
             no_cli=proc is None and not saved_output and isinstance(exc,(RuntimeError,FileNotFoundError))
-            attention=failures>=3 or integrity or no_cli
+            history_deferrals=saved.get('history_deferrals',0) if saved.get('batch_id')==packet['batch_id'] else 0
+            if type(history_deferrals) is not int or history_deferrals<0: history_deferrals=0
+            if isinstance(exc,WikiHistoryDeferred): history_deferrals+=1
+            attention=failures>=3 or integrity or no_cli or history_deferrals>=3
             if counted and not attention: backoff=3600*(2**(failures-1))
             with db() as conn:
                 if counted:
@@ -2592,6 +2632,11 @@ def run(limit=4,timeout=480):
                          'batch_id':packet['batch_id'],'reason':reason,'retry_after':time.time()+10800 if global_failure else time.time()+backoff if backoff else 0,
                          'backoff_seconds':backoff,'consecutive_failures':failures,'attention_required':attention,
                          'pending_parts':[{'job_key':row['job_key'],'sha256':row['sha256']} for row in packet['sources']]}
+            if history_deferrals: worker_receipt['history_deferrals']=history_deferrals
+            if isinstance(exc,WikiHistoryDeferred):
+                worker_receipt.update(integrity_page=exc.page,integrity_field='source_revision',
+                                      claim_index=exc.claim_index,history_reasons=list(exc.reasons))
+                if attention: worker_receipt['manual_retry_required']=True
             if integrity:
                 worker_receipt.update(integrity_page=exc.page,integrity_field=exc.field,claim_index=exc.claim_index)
                 if isinstance(getattr(exc,'page_sha256',None),str) and re.fullmatch('[a-f0-9]{64}',exc.page_sha256): worker_receipt['integrity_page_sha256']=exc.page_sha256

@@ -12,8 +12,9 @@ import sys
 import uuid
 
 
-def run(command,*,source_app,**options):
-    """Installer children must release their complete private Windows Job first."""
+def run(command,*,source_app,delegated_cleanup=False,**options):
+    """Installer children retain admission until their owned lifetime is complete."""
+    if type(delegated_cleanup) is not bool:raise ValueError('Explicit trusted cleanup policy required.')
     check=options.pop('check',False)
     if os.name=='nt':
         import types
@@ -69,10 +70,27 @@ def run(command,*,source_app,**options):
         try:
             if child is not None:
                 if child.returncode is None:
-                    for signum in (signal.SIGTERM,signal.SIGKILL):
-                        try:os.killpg(child.pid,signum)
+                    if delegated_cleanup:
+                        try:print('Setup delegated cleanup pending: waiting for the trusted installer; admission remains held.',file=sys.stderr,flush=True)
+                        except (OSError,ValueError):pass
+                        # Only our trusted installer handoff delegates nested-session
+                        # cleanup. TERM requests its own runner to drain/reap; KILL
+                        # here could strand that runner's separate child session.
+                        try:os.killpg(child.pid,signal.SIGTERM)
                         except OSError:pass
-                        if signum==signal.SIGTERM:time.sleep(2)
+                        while child.returncode is None:
+                            try:child.communicate(timeout=.1)
+                            except subprocess.TimeoutExpired:pass
+                            except (OSError,ValueError):
+                                # No destructive signals follow this read-only reap.
+                                try:child.poll()
+                                except OSError:pass
+                                time.sleep(.1)
+                    else:
+                        for signum in (signal.SIGTERM,signal.SIGKILL):
+                            try:os.killpg(child.pid,signum)
+                            except OSError:pass
+                            if signum==signal.SIGTERM:time.sleep(2)
                 try:child.wait(timeout=5)
                 except (subprocess.TimeoutExpired,OSError):pass
                 notified=False

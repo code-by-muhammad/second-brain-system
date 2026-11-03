@@ -204,16 +204,22 @@ def test_already_dispatched_term_hup_handlers_cannot_raise_during_cleanup(posix_
     assert [e[1] for e in child.events if e[0]=='signal' and e[1]]==[15,9]
 
 
-def test_sqlite_swallowed_interrupt_is_still_terminal(brain,posix_runner,monkeypatch):
+@pytest.mark.parametrize('sqlite_error',[False,True])
+def test_signal_during_counts_is_checked_after_callback(brain,posix_runner,monkeypatch,sqlite_error):
     from test_index_retry import ready
     ready()
     child=Child([None,None],[-9]);handlers,original,_=posix_runner(child)
     monkeypatch.setattr(bootstrap.time,'monotonic',time.monotonic)
+    completed=[]
     def counts(deadline):
-        try:handlers[bootstrap.signal.SIGTERM](bootstrap.signal.SIGTERM,None)
-        except InterruptedError:raise bootstrap.sqlite3.OperationalError('synthetic sqlite callback interruption')
+        handlers[bootstrap.signal.SIGTERM](bootstrap.signal.SIGTERM,None)
+        completed.append('handler returned')
+        if sqlite_error:raise bootstrap.sqlite3.OperationalError('synthetic callback failure after signal')
+        completed.append('counts returned')
+        return None
     monkeypatch.setattr(bootstrap,'_counts',counts)
     result=bootstrap.main(overall_seconds=20,stall_seconds=5)
+    assert completed==(['handler returned'] if sqlite_error else ['handler returned','counts returned'])
     assert result['status']=='needs attention' and result['error_type']=='InterruptedError'
     assert handlers==original
     assert [e[1] for e in child.events if e[0]=='signal' and e[1]]==[15,9]
@@ -291,3 +297,25 @@ def test_native_abnormal_exit_kills_term_ignoring_descendant_before_reap(brain,t
             bootstrap._run_reindex([sys.executable,'-I','-B',str(leader),str(leaf),str(marker)],log,12,cancel,lambda:None)
     assert [s for s in calls if s]==[signal.SIGTERM,signal.SIGKILL]
     assert children[0].returncode is not None and time.monotonic()-started<8
+
+
+def test_inherited_sigint_ignore_is_preserved(posix_runner,monkeypatch):
+    child=Child([0]);handlers,original,_=posix_runner(child)
+    handlers[2]=original[2]=bootstrap.signal.SIG_IGN
+    native=bootstrap.signal.signal;changed=[]
+    def capture(signum,value):
+        if signum==bootstrap.signal.SIGINT:changed.append(value)
+        return native(signum,value)
+    monkeypatch.setattr(bootstrap.signal,'signal',capture)
+    assert run(child).returncode==0
+    assert handlers==original and changed and all(value==bootstrap.signal.SIG_IGN for value in changed)
+
+
+def test_sigint_raises_keyboardinterrupt_at_safe_checkpoint(posix_runner):
+    child=Child([None,None],[-9]);handlers,original,_=posix_runner(child);returned=[]
+    def tick():
+        handlers[bootstrap.signal.SIGINT](bootstrap.signal.SIGINT,None)
+        returned.append(True)
+    with pytest.raises(KeyboardInterrupt):run(child,tick=tick)
+    assert returned==[True] and handlers==original
+    assert [e[1] for e in child.events if e[0]=='signal' and e[1]]==[15,9]

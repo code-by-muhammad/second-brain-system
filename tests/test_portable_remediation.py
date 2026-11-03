@@ -151,10 +151,10 @@ def test_windows_acl_applied_to_empty_temp_before_sensitive_bytes(portable,monke
 def test_state_and_backups_private_before_token_write(portable,monkeypatch):
     install,_,root,vault,_=portable
     original=install.atomic; checked=[]
-    def atomic(path,text):
+    def atomic(path,text,**kwargs):
         if Path(path).name in ('client-access.json','access.json'):
             checked.append(stat.S_IMODE((root/'state').stat().st_mode))
-        return original(path,text)
+        return original(path,text,**kwargs)
     monkeypatch.setattr(install,'atomic',atomic)
     install.deploy(root,Path(sys.executable),vault)
     assert checked==[0o700,0o700]

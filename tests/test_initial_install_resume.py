@@ -50,9 +50,9 @@ def test_public_resume_after_each_published_artifact(initial,monkeypatch,boundar
 @pytest.mark.parametrize('changed',['device','auth','source','uuid','role','app'])
 def test_unsafe_resume_refuses_before_mutation(initial,monkeypatch,changed):
     module,root,_,run=initial;original=module.atomic
-    def interrupted(path,text):
+    def interrupted(path,text,**kwargs):
         if Path(path)==root/'state/access.json':raise OSError('Synthetic interruption')
-        original(path,text)
+        original(path,text,**kwargs)
     monkeypatch.setattr(module,'atomic',interrupted)
     with pytest.raises(OSError):run()
     journal=json.loads((root/'state/install-transaction.json').read_text())
@@ -163,8 +163,8 @@ def test_unpublished_race_can_be_inspected_without_secrets_and_explicitly_abando
 
 def test_resume_normalizes_relative_python_before_identity_comparison(initial,monkeypatch):
     module,root,_,run=initial;actual=module.atomic
-    def interrupted(path,text):
-        actual(path,text)
+    def interrupted(path,text,**kwargs):
+        actual(path,text,**kwargs)
         if Path(path)==root/'device.json':raise OSError('Synthetic interruption')
     monkeypatch.setattr(module,'atomic',interrupted)
     with pytest.raises(OSError):run()

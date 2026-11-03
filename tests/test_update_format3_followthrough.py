@@ -163,9 +163,11 @@ def test_registration_malformed_refused_before_sealing(h,field,value):
     with pytest.raises(ValueError):seal(h)
     assert set((h.root/'backups').iterdir())==existing
 
-@pytest.mark.parametrize('receipt',[{}, {'restored':'sealed-restored','definition_sha256':'b'*64}])
+@pytest.mark.parametrize('receipt',[{}, {'status':'installed','definition':'standard forward definition'}, {'restored':'sealed-restored','definition_sha256':'b'*64}])
 def test_unverified_native_restore_never_changes_binding_or_starts(h,monkeypatch,receipt):
-    saved=seal(h);_,after=images(h,saved);h.install.atomic(previous(h),after)
+    saved=seal(h);hold='a'*32
+    h.updater.controller(sys.executable,h.release,h.root,'service','hold','--hold-id',hold,'--snapshot',str(saved))
+    _,after=images(h,saved);h.install.atomic(previous(h),after)
     original=h.updater.controller
     def controller(python,checkout,root,command,action=None,*flags):
         result=original(python,checkout,root,command,action,*flags)
@@ -174,6 +176,7 @@ def test_unverified_native_restore_never_changes_binding_or_starts(h,monkeypatch
     with pytest.raises(ValueError,match='registration restoration'):
         h.updater._restart_previous(h.root,saved,sys.executable,h.release,'a'*32)
     assert previous(h).read_bytes()==after
+    assert json.loads((h.root/'state/service-transaction.json').read_bytes())['hold_id']==hold
     assert not any(e.get('action') in ('start','finish') for e in h.events)
 
 @pytest.mark.skipif(sys.platform!='win32',reason='Windows path equality differs from exact strings')

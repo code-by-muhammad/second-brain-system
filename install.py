@@ -311,7 +311,7 @@ def deploy(root,python,vault,role='capture',configure_clients=False,client_value
         expected={name.removeprefix('app/'):sha for name,sha in source_sha256.items() if name.startswith('app/')}
         actual={path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in payload.iterdir()}
         if not expected or actual!=expected:raise ValueError('Prepared application differs from the verified source; runtime not switched.')
-    atomic(device,json.dumps(settings,indent=2)+'\n')
+    atomic(device,json.dumps(settings,indent=2)+'\n',expected_sha256=client_value['device_before_sha256'] if client_value is not None and 'device_before_sha256' in client_value else _OBSERVE_DESTINATION)
     if installed.exists():
         old_digest=hashlib.sha256(b''.join(p.read_bytes() for p in sorted(installed.glob('*.py')))).hexdigest()[:16]
         target=root/'backups'/'app'/old_digest
@@ -323,14 +323,14 @@ def deploy(root,python,vault,role='capture',configure_clients=False,client_value
     access=root/'state/client-access.json'
     if not access.exists():
         token=auth_value if auth_value is not None else secrets.token_urlsafe(48)
-        atomic(access,json.dumps({'token':token})+'\n')
+        atomic(access,json.dumps({'token':token})+'\n',expected_sha256=None)
     if not (root/'state/access.json').exists():
-        atomic(root/'state/access.json',json.dumps({'token_sha256':hashlib.sha256(token.encode()).hexdigest()})+'\n')
+        atomic(root/'state/access.json',json.dumps({'token_sha256':hashlib.sha256(token.encode()).hexdigest()})+'\n',expected_sha256=None)
     for path in (access,root/'state/access.json',device): private(path)
     config=root/'state/config.json'
     if not config.exists():
-        atomic(config,json.dumps(retrieval_settings(root,vault),indent=2)+'\n')
-    if not (root/'state/.bmignore').exists():atomic(root/'state/.bmignore',INDEX_IGNORE_TEXT)
+        atomic(config,json.dumps(retrieval_settings(root,vault),indent=2)+'\n',expected_sha256=None)
+    if not (root/'state/.bmignore').exists():atomic(root/'state/.bmignore',INDEX_IGNORE_TEXT,expected_sha256=None)
     client_result=setup_helpers().apply(client_value,atomic,backup,root) if client_value is not None else {'changed':[],'deferred':[],'client_acceptance':'not selected'}
     return {'status':'installed','root':str(root),'vault':str(vault),'role':settings['role'],'device_id':settings['device_id'],
             'clients':client_result['changed'],'client_result':client_result}
@@ -467,6 +467,26 @@ def _run_fresh(root,python,vault,args,client_value,finish):
         return {**result,'install_id':value['install_id']}
 
 
+def _bootstrap_child_failure(root,error):
+    """Keep captured diagnostics owner-only; never echo possible credentials."""
+    print('Initial setup child failed (exit '+str(error.returncode)+').',file=sys.stderr)
+    def raw(value):return value if isinstance(value,bytes) else (value or '').encode('utf-8',errors='replace')
+    stdout,stderr=raw(error.stdout),raw(error.stderr)
+    if not stdout and not stderr:return
+    try:
+        directory=root/'logs'
+        if any(part.is_symlink() or part.is_junction() for part in (directory,*directory.parents)):
+            raise ValueError('Linked diagnostics directory refused.')
+        private_dir(directory)
+        path=directory/('bootstrap-failure-'+secrets.token_hex(16)+'.json');limit=65536
+        atomic(path,json.dumps({'kind':'bootstrap-child-failure','returncode':error.returncode,
+            'stdout_tail':stdout[-limit:].decode('utf-8',errors='replace'),'stderr_tail':stderr[-limit:].decode('utf-8',errors='replace'),
+            'stdout_truncated':len(stdout)>limit,'stderr_truncated':len(stderr)>limit},ensure_ascii=True)+'\n',expected_sha256=None)
+    except (OSError,ValueError,TypeError,subprocess.SubprocessError):
+        print('Private diagnostics could not be saved. Inspect the initial-install journal if present.',file=sys.stderr)
+    else:print('Private diagnostics saved: '+str(path),file=sys.stderr)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--vault',required=True); parser.add_argument('--root',default=str(Path.home()/'.local/share/second-brain'))
@@ -554,11 +574,12 @@ def main():
         child_arguments[terminator:terminator]=['--reuse-python',str(python)]
         try:
             child=helpers.run([str(python),'-I',str(REPO/'install.py'),*child_arguments],source_app=REPO/'app',
-                              capture_output=True,text=True,encoding='utf-8',check=True,timeout=3600)
+                              capture_output=True,check=True,timeout=3600,delegated_cleanup=True)
         except subprocess.CalledProcessError as exc:
+            _bootstrap_child_failure(root,exc)
             raise SystemExit(exc.returncode) from None
-        if child.stdout:print(child.stdout,end='')
-        if child.stderr:print(child.stderr,end='',file=sys.stderr)
+        if child.stdout:print(child.stdout.decode('utf-8',errors='replace').replace('\r\n','\n').replace('\r','\n') if isinstance(child.stdout,bytes) else child.stdout,end='')
+        if child.stderr:print(child.stderr.decode('utf-8',errors='replace').replace('\r\n','\n').replace('\r','\n') if isinstance(child.stderr,bytes) else child.stderr,end='',file=sys.stderr)
         raise SystemExit(child.returncode)
     value=None
     if resumed is not None:value=resumed.get('client_plan')
@@ -607,11 +628,13 @@ def main():
                 # interpreter, working directory and principal via _windows_task.
                 inspected=control('inspect')
                 if _initial_registration_present(inspected):
-                    if inspected.get('task_enabled') is not True:
+                    if inspected.get('task_enabled') is True:
+                        result['service']={'status':'recovered owned registration'}
+                        checkpoint('service-done');return
+                    if not (stage=='service-intent' and sys.platform in ('darwin','linux')
+                            and inspected.get('pending_initial_install_enable') is True):
                         raise ValueError('The owned initial Task was disabled; preserve that explicit owner action.')
-                    result['service']={'status':'recovered owned registration'}
-                    checkpoint('service-done');return
-                if stage=='service-done':
+                elif stage=='service-done':
                     raise ValueError('The recorded initial Task was removed; preserve that explicit owner action.')
             checkpoint('service-intent')
             result['service']=control('install')

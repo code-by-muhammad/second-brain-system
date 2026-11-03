@@ -51,10 +51,10 @@ def assert_authenticates(client,server):
 def test_first_install_interrupted_after_client_token_retries_without_rotation(auth_install,monkeypatch):
     installer,root,vault,_=auth_install
     original=installer.atomic
-    def interrupted(path,text):
+    def interrupted(path,text,**kwargs):
         if Path(path)==root/'state/access.json':
             raise OSError('Synthetic interruption before server credential publication.')
-        return original(path,text)
+        return original(path,text,**kwargs)
     monkeypatch.setattr(installer,'atomic',interrupted)
     with pytest.raises(OSError,match='Synthetic interruption'):
         installer.deploy(root,Path(sys.executable),vault)

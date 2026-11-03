@@ -155,6 +155,8 @@ Do not manually run `uv sync` first. The updater rebuilds the target `.venv` its
 
 The new flow seals client/device hashes and a verified prior-app snapshot before stop, uses the verified new controller for both forward and rollback actions, releases parent writer locks before any stop, and requires a fresh birth/heartbeat plus authenticated expected-version health before releasing the exact hold. It preserves notes, local index, credentials, identity, role and accepted source policy. Client edits/reopened Desktop are preserved and reported as deferred. Configuration checks do not prove every GUI client has reconnected.
 
+Optional `--migrate-wiki` changes derived wiki state. That state is outside the sealed app/device/client snapshot and is not restored by application rollback or recovery; the default update does not request this migration.
+
 ## Recovery
 
 Read private `state/upgrade-status.json` and `service recover` first. Keep the original verified new checkout, snapshot, UUID and retained/new environments. Do not clear a transaction file, delete a cache, reuse a completed UUID or kill whichever PID owns a port. An unverified partial stop leaves the hold for diagnosis. A positively refused pre-End stop may be cancelled only after unchanged-state proof; it is not a successful shutdown.

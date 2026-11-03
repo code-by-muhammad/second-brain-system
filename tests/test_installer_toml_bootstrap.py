@@ -145,7 +145,7 @@ def test_normal_bootstrap_hands_off_original_arguments_once_before_deploy(tmp_pa
     monkeypatch.setattr(installer.setup_helpers(),'run',run)
     with pytest.raises(SystemExit) as error:installer.main()
     assert error.value.code==(23 if child_fails else 0)
-    assert len(calls)==2 and calls[0]==('provision',(release,root,None)) and calls[1][1]=={'source_app':release/'app','check':True,'capture_output':True,'text':True,'encoding':'utf-8','timeout':3600}
+    assert len(calls)==2 and calls[0]==('provision',(release,root,None)) and calls[1][1]=={'source_app':release/'app','check':True,'capture_output':True,'timeout':3600,'delegated_cleanup':True}
     assert (tree(home),tree(appdata))==before and not root.exists()
 
 
@@ -271,6 +271,7 @@ def run(args,**kwargs):
     assert not child and args[:3]==[str(selected),'-I',str(module.REPO/'install.py')]
     assert '--install-service' not in args and '--download-model' not in args
     assert kwargs.pop('source_app')==module.REPO/'app'
+    assert kwargs.pop('delegated_cleanup') is True
     env=os.environ.copy();env['R133_FIXTURE_CHILD']='1'
     return real_run(args,env=env,**kwargs)
 module.setup_helpers().run=run
