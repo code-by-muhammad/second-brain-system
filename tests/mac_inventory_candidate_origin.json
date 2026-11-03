@@ -1,0 +1,15 @@
+{
+  "source_kind": "uncommitted candidate working-tree bytes; not a qualified release",
+  "source_parent_commit": "ce2daf488a68f4ab50097ef51a831b769211bdee",
+  "source_relative_path": "app/brain_mac_inventory.py",
+  "copied_payload": "tests/fixtures/mac_inventory_candidate.py",
+  "sha256": "e589dbdbbd2a168e4137643b6e2a8e9871eb6900f25909f811896369dcb353dc",
+  "git_blob": "96a31ccbc510a197dd909a74f38e94d3d9d59e89",
+  "local_source_comparison": {
+    "worktree": "second-brain-posix",
+    "relative_path": "app/brain_mac_inventory.py",
+    "sha256": "e589dbdbbd2a168e4137643b6e2a8e9871eb6900f25909f811896369dcb353dc",
+    "verified_at": "2026-11-03T16:04:46.947508+00:00",
+    "scope": "local observed byte equality only; remote CI verifies diagnostic copy, not the uncommitted worktree"
+  }
+}

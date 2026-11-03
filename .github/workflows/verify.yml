@@ -23,7 +23,7 @@ jobs:
           - os: macos-15-intel
             arch: x86_64
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -61,6 +61,19 @@ jobs:
             reports/mac-socket-semantics.json
             reports/checked-out-commit.txt
           if-no-files-found: warn
+          retention-days: 30
+      - name: Measure interpreter topology and actual candidate inventory parser
+        shell: bash
+        run: ./.venv/bin/python -I -B tests/native_mac_identity_inventory.py --expected-arch '${{ matrix.arch }}' --receipt reports/mac-identity-inventory.json
+      - name: Retain create-only identity and inventory observations
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mac-identity-inventory-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            reports/mac-identity-inventory.json
+            reports/checked-out-commit.txt
+          if-no-files-found: error
           retention-days: 30
   test:
     if: github.ref != 'refs/heads/feature/posix-native-diagnostics'
