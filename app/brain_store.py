@@ -131,9 +131,40 @@ def read(relative: str, start_line=1, max_lines=160):
     return {'path':p.relative_to(VAULT).as_posix(),'sha256':digest(raw),'total_lines':len(lines),
             'content':'\n'.join(f'{i+start_line}: {v}' for i,v in enumerate(lines[start_line-1:start_line-1+max_lines]))}
 
+def _existing_write_path(p):
+    """Keep an existing note's directory spelling; never guess a new path."""
+    import unicodedata
+    p=safe_path(p.relative_to(VAULT).as_posix())
+    if not p.exists():return p
+    current=VAULT;seen=0
+    for part in p.relative_to(VAULT).parts:
+        expected=current/part;matches=[];names=[]
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    seen+=1
+                    if seen>100_000:raise ValueError('Existing note spelling exceeds bounded directory inspection.')
+                    names.append(entry.name)
+            if part in names:matches=[part]
+            else:
+                key=unicodedata.normalize('NFC',part).casefold()
+                for name in names:
+                    if unicodedata.normalize('NFC',name).casefold()!=key:continue
+                    candidate=current/name
+                    if candidate.is_symlink() or os.path.isjunction(candidate):
+                        raise ValueError('Linked/reparse paths are refused.')
+                    if expected.samefile(candidate):matches.append(name)
+        except OSError:
+            raise ValueError('Existing note spelling could not be verified; original preserved.') from None
+        if len(matches)!=1:raise ValueError('Existing note spelling is missing or ambiguous; original preserved.')
+        current=current/matches[0]
+    return safe_path(current.relative_to(VAULT).as_posix())
+
+
 def _write(p:Path,text:str,kind:str,expected_sha256:str|None=None):
     raw=text.encode('utf-8')
     if len(raw)>NOTE_LIMIT: raise ValueError(_NOTE_LIMIT_ERROR)
+    p=_existing_write_path(p)
     old=_note_bytes(p) if p.exists() else None
     before=digest(old) if old is not None else None
     if expected_sha256 is not None and before!=expected_sha256:
@@ -166,6 +197,8 @@ def _write(p:Path,text:str,kind:str,expected_sha256:str|None=None):
             # Includes the staging/fsync window; this is a cooperative editor
             # guard, not OS-level compare-and-swap against arbitrary editors.
             safe_path(p.relative_to(VAULT).as_posix())
+            if _existing_write_path(p).relative_to(VAULT).as_posix()!=p.relative_to(VAULT).as_posix():
+                raise ValueError('Concurrent path spelling change detected; original preserved.')
             current=_note_bytes(p) if p.exists() else None
             if current!=old:raise ValueError('Concurrent change detected. Read the current note and merge before retrying.')
             if old is None:

@@ -10,7 +10,7 @@ on:
         description: Bounded diagnostic scope
         type: choice
         default: inventory
-        options: [inventory, contracts, linux-contract, focused-controls, mac-product, linux-product, setup-controls]
+        options: [inventory, contracts, linux-contract, focused-controls, mac-product, linux-product, setup-controls, store-case-fixed]
       candidate_tag:
         description: Official nonapproved candidate tag, product qualification only
         type: string
@@ -32,6 +32,52 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  store-case-fixed:
+    name: Native existing-note identity (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && inputs.scope == 'store-case-fixed'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.9.16'
+          enable-cache: false
+      - run: uv sync --locked --python 3.12
+      - name: Record exact synthetic probe source and tool identity
+        shell: bash
+        run: |
+          mkdir reports
+          git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD > reports/checked-out-commit.txt
+          shasum -a 256 app/*.py pyproject.toml tests/conftest.py tests/isolation_guard.py tests/test_sync_fsmonitor_policy.py tests/native_store_case_identity.py > reports/store-case-source-sha256.txt
+          ./.venv/bin/python -I -B -c 'import json,platform,sys,pytest;print(json.dumps(dict(python=sys.version,pytest=pytest.__version__,machine=platform.machine(),system=platform.system(),release=platform.release(),macos=platform.mac_ver()[0])))' > reports/store-case-tools.json
+          /usr/bin/git --version > reports/store-case-git-version.txt
+      - name: Exercise actual note APIs and local file-only Git in a fresh sandbox
+        shell: bash
+        run: |
+          case_path="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+          env -i PATH="$case_path" HOME="$HOME" PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 ./.venv/bin/python -I -B tests/native_store_case_identity.py --phase fixed --source-repository "$GITHUB_WORKSPACE" --receipt "$GITHUB_WORKSPACE/reports/store-case.json"
+      - name: Retain sanitized scoped proof only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: store-case-fixed-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            reports/store-case.json
+            reports/store-case.xml
+            reports/store-case.summary.json
+            reports/store-case-source-sha256.txt
+            reports/store-case-tools.json
+            reports/store-case-git-version.txt
+            reports/checked-out-commit.txt
+          if-no-files-found: error
+          retention-days: 30
   linux-product:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && inputs.scope == 'linux-product'
     uses: ./.github/workflows/linux-product-candidate.yml
