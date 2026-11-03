@@ -51,7 +51,7 @@ jobs:
         run: |
           mkdir reports
           git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD > reports/checked-out-commit.txt
-          printf '%s  %s\n' '85b2ce4efcfe91c6d36bcee7e6e1339cf82d39921f7732cdd697d7e73979362b' 'tests/native_nested_setup_cancel.py' '02b4ef3568d7cacaeb98cb6749290cb9992665b486970f37ed306847ff53d19c' 'tests/nested_setup_fixture/setup_runtime.py' | sha256sum --check --strict
+          printf '%s  %s\n' '31851a4d21b8bc159048c64141907c54e80e026626b36e1f3a3ff6f4b4fded31' 'tests/native_nested_setup_cancel.py' '02b4ef3568d7cacaeb98cb6749290cb9992665b486970f37ed306847ff53d19c' 'tests/nested_setup_fixture/setup_runtime.py' | sha256sum --check --strict
           sha256sum .github/workflows/verify.yml tests/native_nested_setup_cancel.py tests/nested_setup_fixture/setup_runtime.py pyproject.toml uv.lock > reports/nested-source-sha256.txt
           ./.venv/bin/python -I -B -c 'import json,platform,sys,psutil,filelock; print(json.dumps(dict(python=sys.version,psutil=psutil.__version__,filelock=filelock.__version__,machine=platform.machine(),system=platform.system(),release=platform.release())))' > reports/nested-tools.json
       - name: Observe one finite two-level synthetic interleaving

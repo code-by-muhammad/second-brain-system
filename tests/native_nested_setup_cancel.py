@@ -1,5 +1,5 @@
 """Finite two-level setup.run cancellation observation; no actual installer/service work."""
-import argparse,hashlib,json,os,signal,subprocess,sys,tempfile,threading,time,traceback,types
+import argparse,ast,hashlib,json,os,signal,subprocess,sys,tempfile,threading,time,traceback,types
 from pathlib import Path
 
 
@@ -38,7 +38,7 @@ def launch(*a,**kw):
 def observe(pid,signum):
     assert len(owned)==1 and pid==owned[0].pid
     if signum:assert owned[0].returncode is None,'inner signal after reap'
-    with Path(events).open('a') as stream:stream.write(json.dumps({'group':pid,'signal':int(signum),'at':time.monotonic(),'returncode':owned[0].returncode})+'\n')
+    with Path(events).open('a') as stream:stream.write(json.dumps({'group':pid,'signal':int(signum),'at':time.monotonic(),'returncode':owned[0].returncode})+'\\n')
     result=native(pid,signum)
     if signum==signal.SIGTERM:time.sleep(.35)
     return result
@@ -48,7 +48,7 @@ with FileLock(lock,timeout=0):
     try:setup.run([sys.executable,'-I','-B',leaf,ready,exited],source_app='unused',capture_output=True,text=True,timeout=12)
     except InterruptedError:pass
 """,encoding='utf-8')
-    for p in (leaf,middle):os.chmod(p,0o600)
+    for p in (leaf,middle):ast.parse(p.read_bytes());os.chmod(p,0o600)
     setup=types.ModuleType('observed_outer_setup');setup.__file__=str(args.setup_source);exec(compile(raw,str(args.setup_source),'exec'),setup.__dict__)
     native_popen=subprocess.Popen;native_killpg=os.killpg
     def launch(*a,**kw):
@@ -134,7 +134,7 @@ def main():
     try:result=observe(args,root,raw,initial)
     except BaseException as error:
         trace=root/'probe-error.txt';trace.write_text(traceback.format_exc(),encoding='utf-8')
-        result={'status':'probe-incomplete','error_type':type(error).__name__,'private_traceback':str(trace),'private_fixture':str(root),
+        result={'status':'probe-incomplete','error_type':type(error).__name__,'private_traceback':str(trace),'synthetic_traceback_tail':trace.read_text(encoding='utf-8')[-8192:],'private_fixture':str(root),
             'source_sha256':args.setup_sha256,'initial_signal_state':initial,
             'scope':'Finite synthetic scripts only; no product action; incomplete observation never acceptance.'}
     try:result['source_unchanged']=read_source(args.setup_source,args.setup_sha256)==raw
