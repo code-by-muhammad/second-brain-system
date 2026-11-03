@@ -11,6 +11,44 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  mac-native-capability:
+    name: Native macOS prerequisites only (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/feature/posix-')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+          - os: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.9.16'
+          enable-cache: false
+      - run: uv sync --locked --python 3.12
+      - name: Observe actual GUI domain and unprivileged listener primitives
+        shell: bash
+        run: |
+          mkdir reports
+          git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD > reports/checked-out-commit.txt
+          uv run --locked python -I -B tests/native_mac_capabilities.py --expected-arch '${{ matrix.arch }}' | tee reports/mac-capabilities.json
+      - name: Retain prerequisite receipt only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mac-prerequisites-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            reports/mac-capabilities.json
+            reports/checked-out-commit.txt
+          if-no-files-found: warn
+          retention-days: 30
   test:
     strategy:
       fail-fast: false
