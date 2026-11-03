@@ -12,7 +12,7 @@ permissions:
   contents: read
 jobs:
   mac-native-capability:
-    name: Native macOS prerequisites only (${{ matrix.os }})
+    name: Native macOS prerequisites and socket measurements (${{ matrix.os }})
     if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/feature/posix-')
     strategy:
       fail-fast: false
@@ -49,7 +49,21 @@ jobs:
             reports/checked-out-commit.txt
           if-no-files-found: warn
           retention-days: 30
+      - name: Measure BSD IPv4/IPv6 reuse and TIME_WAIT in disposable CI
+        shell: bash
+        run: uv run --locked python -I -B tests/native_mac_socket_semantics.py | tee reports/mac-socket-semantics.json
+      - name: Retain bounded socket measurement receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mac-socket-semantics-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            reports/mac-socket-semantics.json
+            reports/checked-out-commit.txt
+          if-no-files-found: warn
+          retention-days: 30
   test:
+    if: github.ref != 'refs/heads/feature/posix-native-diagnostics'
     strategy:
       fail-fast: false
       matrix:
@@ -139,6 +153,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
   library-import:
+    if: github.ref != 'refs/heads/feature/posix-native-diagnostics'
     name: Library import only (${{ matrix.os }})
     strategy:
       fail-fast: false
