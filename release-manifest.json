@@ -10,7 +10,7 @@
   ],
   "sha256": {
     ".gitattributes": "f6ce10966afc0559ec27c46df343309b56edb0dbdb86379609d3d5f3577ff0e6",
-    ".github/workflows/verify.yml": "aa9420c3982f84edea3981eca05d127100bfe5ae9583890bceacefde04e2fa0a",
+    ".github/workflows/verify.yml": "9502d49fea7c1dd7fc10a4288af02fc7418af4f20dd0515404066c8bdc4c33c9",
     ".gitignore": "a8310700b84bec5ae67c7e698127aa63f1b7bb6c6994e5fb940cd0f01c8b3f34",
     "README.md": "b7a3c21410eacdf43d3912658846c466e13221d02c2f7d6a8cf4757a833617ad",
     "SECURITY.md": "45dcf33ec690b429bfe2602238e76b850ed297e4bb6a0870830d1e447915baf8",
@@ -63,6 +63,7 @@
     "tests/native_contract_origin.json": "c67ab64b3835db4514dd0bd2b384372c91508b5ea1bd06c619cbef25f4296e58",
     "tests/native_linux_manager_contract.py": "1afcedee32ff427af7422815901f2e113fd8de22b3c4dcfd094d50a87fefc14b",
     "tests/native_mac_capabilities.py": "7c04ff8e0c80e789fd1f14550a118f8ca6c96b5052b82cbee305b62e3044d810",
+    "tests/native_mac_disabled_contract.py": "21caaec27acd6e6eff00ed03088ccd96082826da4cbec79faac42a6d8d3e9a28",
     "tests/native_mac_identity_inventory.py": "529f136fee4685e06c6c8e883c4cb8515768f84c676cda0ab04df2abfadd8c3d",
     "tests/native_mac_manager_contract.py": "ef79566ec6923b947c493ed5eff80e15f4ab6636ebf9fee7cb1e91c67e5e9075",
     "tests/native_mac_socket_semantics.py": "5eebda877e5413b77b2732be727ceb1c331483e37d01dde44a280e8ac5956d20",

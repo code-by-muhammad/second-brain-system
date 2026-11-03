@@ -10,7 +10,7 @@ on:
         description: Bounded diagnostic scope
         type: choice
         default: inventory
-        options: [inventory, contracts, linux-contract]
+        options: [inventory, contracts, linux-contract, focused-controls]
 concurrency:
   group: portable-brain-${{ github.ref }}
   cancel-in-progress: true
@@ -83,7 +83,7 @@ jobs:
           retention-days: 30
   mac-manager-contract:
     name: Mac manager contract and native focused controls (${{ matrix.os }})
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && inputs.scope == 'contracts'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && (inputs.scope == 'contracts' || inputs.scope == 'focused-controls')
     strategy:
       fail-fast: false
       matrix:
@@ -106,13 +106,18 @@ jobs:
           git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD > reports/checked-out-commit.txt
           shasum -a 256 app/brain_process.py app/brain_mac_inventory.py app/brain_index_bootstrap.py tests/test_mac_framework_identity.py tests/test_posix_index_group_cleanup.py tests/native_mac_manager_contract.py > reports/focused-source-sha256.txt
       - name: Observe one disposable UUID LaunchAgent contract
+        if: inputs.scope == 'contracts'
         shell: bash
         run: env -i PATH="$PATH" HOME="$HOME" GITHUB_ACTIONS=true ./.venv/bin/python -I -B tests/native_mac_manager_contract.py --receipt reports/mac-manager-contract.json
+      - name: Observe bounded disabled-state grammar without mutations
+        if: inputs.scope == 'focused-controls'
+        shell: bash
+        run: env -i PATH="$PATH" HOME="$HOME" GITHUB_ACTIONS=true ./.venv/bin/python -I -B tests/native_mac_disabled_contract.py --receipt reports/mac-disabled-contract.json
       - name: Native focused controls with synthetic state only
         if: always()
         shell: bash
         run: |
-          contract_sandbox="$RUNNER_TEMP/sb-native-controls-$(uuidgen | tr -d '-')"
+          contract_sandbox=$(mktemp -d /private/tmp/sb-native-controls.XXXXXXXX)
           env -i PATH="$PATH" HOME="$HOME" SB_TEST_SANDBOX="$contract_sandbox" PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 ./.venv/bin/python -B -m pytest -q -p no:cacheprovider -p pytest_asyncio.plugin tests/test_mac_framework_identity.py tests/test_posix_index_group_cleanup.py --basetemp "$contract_sandbox/tmp" --junitxml reports/native-focused-controls.xml
       - name: Retain bounded source and observation receipts
         if: always()
@@ -121,6 +126,7 @@ jobs:
           name: mac-manager-contract-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             reports/mac-manager-contract.json
+            reports/mac-disabled-contract.json
             reports/native-focused-controls.xml
             reports/checked-out-commit.txt
             reports/focused-source-sha256.txt
@@ -128,7 +134,7 @@ jobs:
           retention-days: 30
   linux-manager-contract:
     name: Linux manager contract in a fresh disposable ordinary account
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && (inputs.scope == 'contracts' || inputs.scope == 'linux-contract')
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && (inputs.scope == 'contracts' || inputs.scope == 'linux-contract' || inputs.scope == 'focused-controls')
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
@@ -136,6 +142,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Observe native user-manager contract
+        if: inputs.scope != 'focused-controls'
         shell: bash
         run: bash tests/prepare_linux_contract.sh
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
@@ -149,7 +156,9 @@ jobs:
         if: always() && inputs.scope != 'linux-contract'
         shell: bash
         run: |
-          contract_sandbox="$RUNNER_TEMP/sb-native-controls-$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
+          mkdir -p reports
+          git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD > reports/checked-out-commit.txt
+          contract_sandbox=$(mktemp -d /tmp/sb-native-controls.XXXXXXXX)
           env -i PATH="$PATH" HOME="$HOME" SB_TEST_SANDBOX="$contract_sandbox" PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 ./.venv/bin/python -B -m pytest -q -p no:cacheprovider -p pytest_asyncio.plugin tests/test_mac_framework_identity.py tests/test_posix_index_group_cleanup.py --basetemp "$contract_sandbox/tmp" --junitxml reports/native-focused-controls.xml
       - name: Retain bounded native contract receipt
         if: always()
@@ -159,6 +168,7 @@ jobs:
           path: |
             reports/linux-manager-contract.json
             reports/native-focused-controls.xml
+            reports/checked-out-commit.txt
           if-no-files-found: error
           retention-days: 30
   test:
