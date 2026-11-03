@@ -150,32 +150,43 @@ def main():
         if not bus_groups:
             raise RuntimeError('preexisting-bus-not-populated-no-connect')
         report['preexisting_bus_groups']=bus_groups
+        report['stage']='native-tool-proof'
         tool=protected('/usr/bin/busctl')
         raw_call=lambda dest,obj,interface,method,sig=None,*argv:bus(tool,runtime,dest,obj,interface,method,sig,*argv)
+        report['stage']='manager-unique-owner'
         peer=result(raw_call('org.freedesktop.DBus','/org/freedesktop/DBus',
                             'org.freedesktop.DBus','GetNameOwner','s',INTERFACE),'s')[0]
         if not re.fullmatch(r':[0-9]+\.[0-9]+',peer):raise RuntimeError('manager-unique-name-unavailable')
+        report['stage']='manager-peer-credentials'
         credentials=result(raw_call('org.freedesktop.DBus','/org/freedesktop/DBus',
             'org.freedesktop.DBus','GetConnectionCredentials','s',peer),'a{sv}')[0]
         manager_pid=credentials['ProcessID']['data']
         if credentials['UnixUserID']['data']!=uid:raise RuntimeError('manager-peer-wrong-uid')
+        report['stage']='manager-peer-cgroup'
         if (Path('/proc')/str(manager_pid)/'cgroup').read_text().splitlines()!=['0::'+prefix+'/init.scope']:
             raise RuntimeError('manager-peer-wrong-cgroup')
+        report['stage']='manager-peer-executable'
         executable=(Path('/proc')/str(manager_pid)/'exe').resolve(strict=True)
+        report['stage']='manager-executable-tool-proof'
         if executable!=Path(protected('/usr/lib/systemd/systemd')):raise RuntimeError('manager-peer-wrong-executable')
         call=lambda obj,interface,method,sig=None,*argv:raw_call(peer,obj,interface,method,sig,*argv)
+        report['stage']='manager-properties'
         manager=properties(call,MANAGER,INTERFACE+'.Manager')
+        report['stage']='source-provenance'
         report.update(uid=uid,os=platform.platform(),python=sys.version,manager_peer='consistent with unique bus owner',
             manager=selected(manager,('Version','ControlGroup','UnitPath','Environment','NJobs','SystemState')),
             renderer_sha256=hashlib.sha256(args.renderer_file.read_bytes()).hexdigest(),
             probe_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+        report['stage']='manager-controlgroup-unitpath'
         if value(manager,'ControlGroup')!=prefix:raise RuntimeError('manager-controlgroup-mismatch')
         directory=home/'.config/systemd/user'
         if str(directory) not in value(manager,'UnitPath'):raise RuntimeError('home-unit-directory-not-in-search-path')
+        report['stage']='manager-introspect'
         introspection=result(call(MANAGER,'org.freedesktop.DBus.Introspectable','Introspect'),'s')[0]
         methods=('LoadUnit','ListUnitFilesByPatterns','GetUnitFileLinks','EnableUnitFiles','DisableUnitFiles',
                  'StartUnit','StopUnit','Reload')
         report['manager_methods']={name:bool(re.search(r'<method\s+name="'+name+r'"',introspection)) for name in methods}
+        report['stage']='fixture-materialize'
         unit_name='second-brain-ci-'+uuid.uuid4().hex+'.service'
         root=home/('sb-contract-'+uuid.uuid4().hex)
         (root/'app').mkdir(parents=True,mode=0o700);(root/'state').mkdir(mode=0o700)
@@ -187,6 +198,7 @@ def main():
             'p=Path('+repr(str(root/'state/ready.json'))+')\n'
             't=p.with_suffix(".tmp");t.write_text(json.dumps({"pid":os.getpid(),"port":s.getsockname()[1]}));os.replace(t,p)\n'
             'time.sleep(45)\ns.close()\n',encoding='utf-8')
+        report['stage']='renderer-extract'
         source=args.renderer_file.read_text(encoding='utf-8')
         functions=[node for node in ast.parse(source).body if isinstance(node,ast.FunctionDef) and node.name=='definition']
         if len(functions)!=1:raise RuntimeError('renderer-definition-not-unique')
@@ -197,6 +209,7 @@ def main():
         definition=namespace['definition']('linux').encode()
         report['renderer_function_sha256']=hashlib.sha256(ast.get_source_segment(source,function).encode()).hexdigest()
         report['unit']=unit_name
+        report['stage']='uuid-preregistration-check'
         units=result(call(MANAGER,INTERFACE+'.Manager','ListUnits'),'a(ssssssouso)')[0]
         unit_files=call(MANAGER,INTERFACE+'.Manager','ListUnitFilesByPatterns','asas','0','1',unit_name)
         files=result(unit_files,'a(ss)')[0]
@@ -204,6 +217,7 @@ def main():
         report['before']={'loaded_matches':0,
             'unit_files':unit_files,
             'file_links':call(MANAGER,INTERFACE+'.Manager','GetUnitFileLinks','sb',unit_name,'false')}
+        report['stage']='create-owned-definition'
         directory.mkdir(parents=True,exist_ok=True)
         path=directory/unit_name
         with path.open('xb') as output:output.write(definition)
@@ -269,6 +283,7 @@ def main():
         report.update(status='observations completed; not product qualification',stage='finished')
     except Exception as error:
         report['error_type']=type(error).__name__
+        if isinstance(error,OSError):report['error_errno']=error.errno
         if type(error) is RuntimeError:report['fixed_error']=str(error)
     finally:
         if report['unit_created'] and call is not None and execution_validated:

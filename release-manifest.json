@@ -61,7 +61,7 @@
     "tests/isolation_guard.py": "413bfbfaf301d273bd8c6cd6c520c959254925c7db3d24a4329d84ee75263636",
     "tests/mac_inventory_candidate_origin.json": "f0c0c99bf133c8075d7a19b8837eab3d011ca1f470cfc56c74fcfa4e3f9fc64a",
     "tests/native_contract_origin.json": "c67ab64b3835db4514dd0bd2b384372c91508b5ea1bd06c619cbef25f4296e58",
-    "tests/native_linux_manager_contract.py": "38039004fa8a3b06397b06ad414304f2e5b00e265a317486f30e07d50481200c",
+    "tests/native_linux_manager_contract.py": "1afcedee32ff427af7422815901f2e113fd8de22b3c4dcfd094d50a87fefc14b",
     "tests/native_mac_capabilities.py": "7c04ff8e0c80e789fd1f14550a118f8ca6c96b5052b82cbee305b62e3044d810",
     "tests/native_mac_identity_inventory.py": "529f136fee4685e06c6c8e883c4cb8515768f84c676cda0ab04df2abfadd8c3d",
     "tests/native_mac_manager_contract.py": "ef79566ec6923b947c493ed5eff80e15f4ab6636ebf9fee7cb1e91c67e5e9075",
