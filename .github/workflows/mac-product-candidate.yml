@@ -1,0 +1,110 @@
+name: Isolated Mac product candidate qualification
+on:
+  workflow_call:
+    inputs:
+      candidate_tag:
+        description: Official nonapproved candidate tag
+        required: true
+        type: string
+      candidate_commit:
+        description: Independently reviewed full candidate commit
+        required: true
+        type: string
+      manifest_sha256:
+        description: Independently reviewed candidate manifest SHA256
+        required: true
+        type: string
+      harness_sha256:
+        description: Independently reviewed harness SHA256
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: mac-product-candidate-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  qualify:
+    name: Mac 017 external checkout to candidate (${{ matrix.os }}, ${{ matrix.mode }})
+    if: github.ref == 'refs/heads/feature/posix-native-diagnostics'
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        os: [macos-15, macos-15-intel]
+        mode: [forward, rollback, recovery]
+        include:
+          - os: macos-15
+            arch: arm64
+          - os: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+      CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+      CANDIDATE_MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
+      REVIEWED_HARNESS_SHA256: ${{ inputs.harness_sha256 }}
+    steps:
+      - name: Check out separately pinned qualification harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Check out official frozen candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.candidate_tag }}
+          path: software
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify independently supplied source and harness pins
+        shell: bash
+        run: |
+          [[ "$CANDIDATE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$CANDIDATE_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$CANDIDATE_MANIFEST_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$REVIEWED_HARNESS_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$(git -C software rev-parse HEAD)" == "$CANDIDATE_COMMIT" ]]
+          [[ "$(git -C software rev-parse "refs/tags/$CANDIDATE_TAG^{commit}")" == "$CANDIDATE_COMMIT" ]]
+          qualification_origin=$(git -C software config --get remote.origin.url)
+          case "$qualification_origin" in
+            https://github.com/code-by-muhammad/second-brain-system.git) ;;
+            https://github.com/code-by-muhammad/second-brain-system) git -C software remote set-url origin https://github.com/code-by-muhammad/second-brain-system.git ;;
+            *) exit 1 ;;
+          esac
+          [[ "$(shasum -a 256 software/release-manifest.json | awk '{print $1}')" == "$CANDIDATE_MANIFEST_SHA256" ]]
+          [[ "$(shasum -a 256 harness/tests/native_mac_upgrade.py | awk '{print $1}')" == "$REVIEWED_HARNESS_SHA256" ]]
+          mkdir reports
+          git -C harness rev-parse HEAD > reports/harness-commit.txt
+          git -C software rev-parse HEAD > reports/candidate-commit.txt
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.9.16'
+          enable-cache: false
+      - name: Provision exact candidate SDK for the qualification driver
+        shell: bash
+        run: uv sync --locked --no-dev --project software --python 3.12
+      - name: Exercise real product code on a fresh disposable Mac host
+        shell: bash
+        env:
+          QUALIFICATION_MODE: ${{ matrix.mode }}
+          QUALIFICATION_ARCH: ${{ matrix.arch }}
+          QUALIFICATION_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          umask 022
+          qualification_uv=$(software/.venv/bin/python -I -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$(command -v uv)")
+          qualification_uv_sha256=$(shasum -a 256 "$qualification_uv" | awk '{print $1}')
+          qualification_path="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+          env -i PATH="$qualification_path" HOME="$HOME" GITHUB_ACTIONS=true GITHUB_SHA="$GITHUB_SHA" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_WORKFLOW_SHA="$GITHUB_WORKFLOW_SHA" RUNNER_ENVIRONMENT="$QUALIFICATION_RUNNER_ENVIRONMENT" software/.venv/bin/python -I -B harness/tests/native_mac_upgrade.py --execute-reviewed-native --source-repository "$GITHUB_WORKSPACE/software" --candidate-tag "$CANDIDATE_TAG" --candidate-commit "$CANDIDATE_COMMIT" --candidate-manifest-sha256 "$CANDIDATE_MANIFEST_SHA256" --reviewed-harness-sha256 "$REVIEWED_HARNESS_SHA256" --workflow-sha "$GITHUB_WORKFLOW_SHA" --expected-arch "$QUALIFICATION_ARCH" --expected-macos-major 15 --mode "$QUALIFICATION_MODE" --uv "$qualification_uv" --uv-sha256 "$qualification_uv_sha256" --receipt "$GITHUB_WORKSPACE/reports/mac-product-qualification.json"
+      - name: Retain sanitized actual receipts only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mac-product-${{ matrix.os }}-${{ matrix.mode }}-${{ inputs.candidate_commit }}-${{ github.run_attempt }}
+          path: |
+            reports/mac-product-qualification.json
+            reports/harness-commit.txt
+            reports/candidate-commit.txt
+          if-no-files-found: error
+          retention-days: 30

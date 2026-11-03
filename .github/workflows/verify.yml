@@ -10,13 +10,33 @@ on:
         description: Bounded diagnostic scope
         type: choice
         default: inventory
-        options: [inventory, contracts, linux-contract, focused-controls]
+        options: [inventory, contracts, linux-contract, focused-controls, mac-product]
+      candidate_tag:
+        description: Official nonapproved candidate tag, mac-product only
+        type: string
+      candidate_commit:
+        description: Reviewed full candidate commit, mac-product only
+        type: string
+      manifest_sha256:
+        description: Reviewed candidate manifest SHA256, mac-product only
+        type: string
+      harness_sha256:
+        description: Reviewed native Mac harness SHA256, mac-product only
+        type: string
 concurrency:
-  group: portable-brain-${{ github.ref }}
-  cancel-in-progress: true
+  group: portable-brain-${{ github.ref }}-${{ inputs.scope || 'default' }}
+  cancel-in-progress: ${{ inputs.scope != 'mac-product' }}
 permissions:
   contents: read
 jobs:
+  mac-product:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && inputs.scope == 'mac-product'
+    uses: ./.github/workflows/mac-product-candidate.yml
+    with:
+      candidate_tag: ${{ inputs.candidate_tag }}
+      candidate_commit: ${{ inputs.candidate_commit }}
+      manifest_sha256: ${{ inputs.manifest_sha256 }}
+      harness_sha256: ${{ inputs.harness_sha256 }}
   mac-native-capability:
     name: Native macOS prerequisites and socket measurements (${{ matrix.os }})
     if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/feature/posix-') && inputs.scope == 'inventory'
