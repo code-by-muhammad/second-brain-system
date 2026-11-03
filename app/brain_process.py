@@ -5,6 +5,11 @@ import ctypes
 from ctypes import wintypes as wt
 import json
 import os
+import stat
+import socket
+import sys
+import time
+from types import SimpleNamespace
 from pathlib import Path
 import psutil
 import brain_settings as cfg
@@ -14,6 +19,9 @@ _JOB=None
 
 
 class OwnershipError(RuntimeError): pass
+
+
+class _MacInventoryChanged(OwnershipError): pass
 
 
 def _path(value): return os.path.normcase(str(Path(value).resolve()))
@@ -67,27 +75,102 @@ def validate_environment(*,entrypoint=False):
         raise OwnershipError('Supervisor source and runtime root disagree; no service work started.')
 
 
-def _launchers():
+def _framework_image(interpreter,home):
+    """Only the measured CPython framework layout, derived from a selected path."""
+    version=interpreter.parent.parent
+    if (interpreter.parent.name!='bin' or version.parent.name!='Versions'
+            or version.parent.parent.name!='Python.framework'):
+        return None
+    if home is not None:
+        try:matching=home.is_absolute() and home.resolve(strict=True)==version/'bin'
+        except OSError:matching=False
+        if not matching:raise OwnershipError('Python framework home disagrees with the selected interpreter.')
+    image=version/'Resources/Python.app/Contents/MacOS/Python'
+    try:
+        if not stat.S_ISREG(image.lstat().st_mode) or image.resolve(strict=True)!=image:
+            raise OwnershipError('Python framework image is missing or linked.')
+    except OSError:
+        raise OwnershipError('Python framework image is missing or linked.') from None
+    return image
+
+
+def _identity_metadata(path,limit):
+    """Read optional POSIX authority metadata without links/FIFOs or unbounded IO."""
+    import os as native_os
+    if native_os.name=='nt':
+        if not path.exists():return None
+        if path.stat().st_size>limit:raise OwnershipError('Interpreter metadata exceeds its bound.')
+        return path.read_text(encoding='utf-8')
+    flags=native_os.O_RDONLY|native_os.O_NOFOLLOW|native_os.O_NONBLOCK
+    try:descriptor=native_os.open(path,flags)
+    except FileNotFoundError:return None
+    except OSError:raise OwnershipError('Interpreter metadata cannot be safely opened.') from None
+    try:
+        info=native_os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=native_os.geteuid() or info.st_size>limit:
+            raise OwnershipError('Interpreter metadata ownership/type/size is invalid.')
+        payload=native_os.read(descriptor,limit+1)
+        after=native_os.fstat(descriptor)
+        if len(payload)!=info.st_size or len(payload)>limit or (info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns):
+            raise OwnershipError('Interpreter metadata changed or exceeds its bound.')
+        try:return payload.decode('utf-8')
+        except UnicodeError:raise OwnershipError('Interpreter metadata is not valid UTF-8.') from None
+    finally:native_os.close(descriptor)
+
+
+def _selected_python():
     selected={str(cfg.PYTHON)}
     previous=cfg.ROOT/'state/previous-release.json'
-    if previous.exists():
-        if previous.stat().st_size>65536:raise OwnershipError('Previous release metadata exceeds its bound.')
-        value=json.loads(previous.read_text(encoding='utf-8'))
+    previous_text=_identity_metadata(previous,65536)
+    if previous_text is not None:
+        try:value=json.loads(previous_text)
+        except ValueError:raise OwnershipError('Previous release metadata is invalid.') from None
         if isinstance(value,dict) and isinstance(value.get('python'),str):selected.add(value['python'])
         if isinstance(value,dict) and isinstance(value.get('controller_python'),str):selected.add(value['controller_python'])
+    if any(not Path(value).is_absolute() for value in selected):
+        raise OwnershipError('Selected Python interpreter must be absolute.')
+    return selected
+
+
+def _bm_paths():
+    if os.name=='nt':
+        return {_path(Path(value).parent/'bm.exe') for value in _launchers()}
+    result=set()
+    for value in _selected_python():
+        path=Path(value).parent/'bm'
+        try:info=path.lstat()
+        except FileNotFoundError:continue
+        except OSError:raise OwnershipError('Index executable metadata is unavailable.') from None
+        if not stat.S_ISREG(info.st_mode):
+            raise OwnershipError('Linked or nonregular index executable is refused.')
+        result.add(_path(path))
+    return result
+
+
+def _launchers():
     result={}
+    selected=_selected_python()
     for value in selected:
         path=Path(value)
         if path.name.lower() not in ('python.exe','pythonw.exe','python','python3'):continue
         config=path.parent.parent/'pyvenv.cfg'
         base=None
-        if config.exists():
-            with config.open('r',encoding='utf-8') as stream:text=stream.read(16385)
-            if len(text)>16384:raise OwnershipError('Python environment metadata exceeds its bound.')
+        text=_identity_metadata(config,16384)
+        if text is not None:
             homes=[line.split('=',1)[1].strip() for line in text.splitlines() if line.partition('=')[0].strip()=='home']
             if len(homes)!=1:raise OwnershipError('Python base interpreter cannot be verified.')
             base=Path(homes[0])
-        names=('python.exe','pythonw.exe') if os.name=='nt' else (path.name,)
+        if os.name!='nt':
+            # POSIX aliases/framework stubs replace the same process, unlike
+            # Windows launcher/base parent pairs.
+            try:interpreter=path.resolve(strict=True)
+            except OSError:raise OwnershipError('Selected Python interpreter is unavailable.') from None
+            result[_path(interpreter)]=_path(interpreter)
+            if sys.platform=='darwin':
+                image=_framework_image(interpreter,base)
+                if image is not None:result[_path(image)]=_path(image)
+            continue
+        names=('python.exe','pythonw.exe')
         for name in names:
             launcher=path.with_name(name)
             result[_path(launcher)]=_path(base/name) if base is not None else _path(launcher)
@@ -146,7 +229,9 @@ def inspect(pid,*,required=False):
                 expected=cfg.ROOT/'app'/filename
                 if expected.is_symlink() or expected.is_junction():raise OwnershipError('Linked runtime script cannot establish ownership.')
                 if _path(tokens[0])==_path(expected):role=name;script=_path(tokens[0]);break
-        bm_paths={_path(Path(value).parent/('bm.exe' if os.name=='nt' else 'bm')) for value in launchers}
+        # The index entry point is beside the selected venv alias, not the
+        # canonical base interpreter or its framework exec-replacement image.
+        bm_paths=_bm_paths()
         bm_arguments=(['reindex','-p','brain'],['reindex','-p','brain','--full'])
         bm=exe in bm_paths and args[1:] in bm_arguments
         child_bm=len(tokens) in (4,5) and _path(tokens[0]) in bm_paths and tokens[1:] in bm_arguments
@@ -241,8 +326,109 @@ def descendants(owned):
         raise
 
 
+def _mac_socket_snapshot():
+    """Inspect each owned process lifetime once, never signal.
+
+    psutil rows describe file descriptors; they are not proven distinct sockets.
+    Multiple descriptor rows remain a conservative refusal pending native proof.
+    """
+    owned = []
+    children = []
+    result = []
+    visited = {}
+    try:
+        owned = roots()
+        servers = [process for process in owned if process.role == 'server']
+        for process in owned:
+            if process.role != 'server':
+                continue
+            related = descendants([process])
+            children.extend(related)
+            for candidate in (process, *related):
+                # A server interpreter can be both an exact role root and a
+                # launcher's descendant. Inspect each lifetime once, preserving
+                # multiple sockets returned by that one process.
+                if candidate.pid in visited:
+                    if visited[candidate.pid] != candidate.birth:
+                        raise _MacInventoryChanged('Server identity changed between ownership paths.')
+                    continue
+                visited[candidate.pid] = candidate.birth
+                if not candidate.alive():
+                    raise _MacInventoryChanged('Server lifetime changed before socket inspection.')
+                rows = psutil.Process(candidate.pid).net_connections(kind='tcp')
+                if len(rows) > 65536:
+                    raise OwnershipError('Server socket inventory exceeds its bound.')
+                if not candidate.alive():
+                    raise _MacInventoryChanged('Server lifetime changed during socket inspection.')
+                for row in rows:
+                    if not row.laddr:
+                        continue
+                    if row.status == psutil.CONN_LISTEN and row.laddr.port == cfg.PORT:
+                        result.append(SimpleNamespace(pid=candidate.pid, birth=candidate.birth,
+                                                      laddr=row.laddr, status=row.status))
+        return result, bool(servers)
+    except psutil.NoSuchProcess:
+        failed = 'changed'
+    except (psutil.Error, OSError):
+        failed = 'unreadable'
+    finally:
+        for process in children + owned:
+            process.close()
+    if failed == 'changed':
+        raise _MacInventoryChanged('Server lifetime changed during socket inspection.') from None
+    raise OwnershipError('Socket inventory unreadable; listener absence is not established.') from None
+
+
+def _mac_listeners():
+    """Cross-check global presence with positive owned sockets, never connect.
+
+    This candidate still needs native product/lifecycle/identity qualification.
+    Global rows alone never identify an owner or authorize a signal.
+    """
+    import brain_mac_inventory as inventory
+    deadline = time.monotonic()+1.5
+    unverified = False
+    for attempt in range(3):
+        if attempt and time.monotonic() >= deadline:
+            break
+        changed = False
+        unreadable = False
+        unverified = False
+        try:
+            first = inventory.read(cfg.PORT, timeout=5)
+            result, _starting = _mac_socket_snapshot()
+            again = inventory.read(cfg.PORT, timeout=5)
+        except _MacInventoryChanged:
+            changed = True
+        except inventory.InventoryError:
+            unreadable = True
+        if unreadable:
+            raise OwnershipError('Socket inventory unreadable; listener absence is not established.') from None
+        if not changed:
+            if first == again:
+                if not first and not result:
+                    return []
+                if first and (len(first) != 1 or first[0] != ('tcp4', '127.0.0.1', cfg.PORT)):
+                    raise OwnershipError('Port has multiple, foreign or unverified listeners; no credentials sent.')
+                if (len(first) == 1 and len(result) == 1
+                        and result[0].laddr.ip == '127.0.0.1' and result[0].laddr.port == cfg.PORT):
+                    return result
+                if len(result) > 1:
+                    raise OwnershipError('Port has multiple, foreign or unverified listeners; no credentials sent.')
+                unverified = bool(first) and not result
+            # Includes G=1/S=0, G=0/S=1, and a changing global table.
+        if attempt == 2 or time.monotonic() >= deadline:
+            break
+        time.sleep(.02)
+    if unverified:
+        raise OwnershipError('Configured IPv4 destination has no verified socket owner; no credentials sent.')
+    raise OwnershipError('Socket inventory changed during inspection; no credentials sent.')
+
+
 def _listeners():
     try:
+        if sys.platform == 'darwin':
+            return _mac_listeners()
         return [row for row in psutil.net_connections(kind='tcp') if row.status==psutil.CONN_LISTEN and row.laddr.port==cfg.PORT]
     except (psutil.Error,OSError) as error:raise OwnershipError('Local listener ownership is unavailable.') from error
 
@@ -258,6 +444,8 @@ def listener_identity():
     supervisor=None
     try:
         if owned.role!='server':raise OwnershipError('Listener is not the runtime server.')
+        if getattr(rows[0],'birth',owned.birth)!=owned.birth:
+            raise OwnershipError('Listener lifetime changed during ownership inspection.')
         launcher=owned.parents[0] if owned.kind=='interpreter' else owned
         registry=cfg.ROOT/'state/service-pids.json'
         if not registry.exists() or registry.stat().st_size>65536:raise OwnershipError('Supervisor registry is absent or invalid.')
@@ -268,7 +456,11 @@ def listener_identity():
         if supervisor is None or supervisor.role!='supervisor' or supervisor.birth>=launcher.birth:
             raise OwnershipError('Live supervisor ownership could not be established.')
         again=_listeners()
-        if len(again)!=1 or again[0].pid!=owned.pid:raise OwnershipError('Listener changed during ownership verification.')
+        if (len(again)!=1 or again[0].pid!=owned.pid
+                or again[0].laddr.ip!=rows[0].laddr.ip
+                or again[0].laddr.port!=rows[0].laddr.port
+                or getattr(again[0],'birth',owned.birth)!=owned.birth):
+            raise OwnershipError('Listener changed during ownership verification.')
         return {**owned.record(),'supervisor_pid':supervisor.pid,'supervisor_birth':supervisor.birth}
     finally:
         owned.close()

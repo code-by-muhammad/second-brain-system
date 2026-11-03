@@ -1,0 +1,22 @@
+{
+  "scope": "Diagnostic source snapshots, not a release or full product qualification",
+  "diagnostic_parent": "3c252a90c2216a8f227ad34ec92856b20bce9750",
+  "candidate_parent": "ce2daf488a68f4ab50097ef51a831b769211bdee",
+  "candidate_origin": "Uncommitted WIP reviewed in local product worktree; diagnostic commit binds exact source below. Linux H3 integration is deliberately absent from this earlier brain_process snapshot.",
+  "source_sha256_lf": {
+    "app/brain_process.py": "c455a6ae0e3b13e23a6b12f5f9d40176e1f913f608ddc52f0f087b5b2a53e4ce",
+    "app/brain_mac_inventory.py": "e589dbdbbd2a168e4137643b6e2a8e9871eb6900f25909f811896369dcb353dc",
+    "app/brain_index_bootstrap.py": "a94c9c7d966154d7c5726e15da737b6f30db8c846c9cf890c2be07bccd4f8e16",
+    "tests/test_mac_framework_identity.py": "d76a7938cedd4128c120553bea2cb9a4c18411d54731479b1f91e73a25a973fb",
+    "tests/test_posix_index_group_cleanup.py": "27c4168c0386c3dc433eeddf7a03e01237c70bb0b4295d1e46067ca5df313eff",
+    "tests/native_mac_manager_contract.py": "ef79566ec6923b947c493ed5eff80e15f4ab6636ebf9fee7cb1e91c67e5e9075",
+    "tests/native_linux_manager_contract.py": "38039004fa8a3b06397b06ad414304f2e5b00e265a317486f30e07d50481200c",
+    "tests/prepare_linux_contract.sh": "5df73ba1d5ea4a85fcaa2a27e9e6bcdd0f94d949bb68e3adf6e611466507c9a5"
+  },
+  "guard_status": "POSIX installer/updater guards remain. Native controls cover only H6 and common index cleanup. Manager fixtures observe contracts, not product lifecycle.",
+  "reviews": [
+    "claude-mac-contract-code.json",
+    "claude-linux-contract-probe-r4.json",
+    "claude-posix-index-group-cleaning-closure.json"
+  ]
+}
