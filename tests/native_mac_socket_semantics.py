@@ -28,14 +28,22 @@ def native_listen_inventory(port):
         raise RuntimeError('Native inventory executable is not regular.')
     result = subprocess.run([str(tool), '-an', '-p', 'tcp'],
                             env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LC_ALL': 'C'},
-                            capture_output=True, timeout=5, check=False)
-    if result.returncode or len(result.stdout) > 2_000_000:
+                            stdin=subprocess.DEVNULL, capture_output=True, timeout=5, check=False)
+    if result.returncode or result.stderr or len(result.stdout) > 2_000_000:
         raise RuntimeError('Native inventory query failed or exceeded bound.')
+    expected_headers = [['Active', 'Internet', 'connections', '(including', 'servers)'],
+                        ['Proto', 'Recv-Q', 'Send-Q', 'Local', 'Address', 'Foreign', 'Address', '(state)']]
+    headers = []
     matches = []
     time_wait_rows = 0
     for line in result.stdout.decode('ascii', errors='strict').splitlines():
         fields = line.split()
-        if not fields or not fields[0].startswith('tcp'):
+        if not fields:
+            continue
+        if not fields[0].startswith('tcp'):
+            if fields not in expected_headers:
+                raise RuntimeError('Native inventory header is outside the diagnostic contract.')
+            headers.append(fields)
             continue
         if len(fields) != 6 or fields[0] not in ('tcp4', 'tcp6', 'tcp46'):
             raise RuntimeError('Native TCP inventory layout is outside this diagnostic contract.')
@@ -48,7 +56,9 @@ def native_listen_inventory(port):
                             'specific_loopback_v4': fields[3] == '127.0.0.1.'+str(port),
                             'specific_loopback_v6': fields[3] == '::1.'+str(port),
                             'wildcard': fields[3] in ('*.'+str(port), '::.'+str(port))})
-    return {'matching_listen_rows': len(matches), 'matching_time_wait_rows': time_wait_rows,
+    if headers != expected_headers:
+        raise RuntimeError('Native inventory header sequence is outside the diagnostic contract.')
+    return {'header_tokens': headers, 'matching_listen_rows': len(matches), 'matching_time_wait_rows': time_wait_rows,
             'classes': matches}
 
 
