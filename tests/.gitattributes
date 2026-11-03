@@ -1,0 +1,2 @@
+# Preserve the independently reviewed native probe bytes.
+native_nested_setup_cancel.py -text

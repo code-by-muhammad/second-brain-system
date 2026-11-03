@@ -1,0 +1,2 @@
+# Preserve the reviewed raw snapshot on native checkouts.
+setup_runtime.py -text
