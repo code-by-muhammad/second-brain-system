@@ -33,8 +33,10 @@ def test_public_update_preflight_and_owned_deploy_do_not_import_untracked_checko
     (home / '.claude.json').write_bytes(b'{"owner":"preserve"}\n')
     (home / '.claude/settings.json').write_bytes(b'{"hooks":{}}\n')
     (root / 'app/original.py').write_bytes(b'# previous synthetic runtime\n')
+    previous=root/'old-release';previous.mkdir()
+    (previous/'release-manifest.json').write_text(json.dumps({'version':'0.1.6','sha256':{'app/original.py':hashlib.sha256((root/'app/original.py').read_bytes()).hexdigest()}}),encoding='utf-8')
     (root / 'device.json').write_text(json.dumps({'vault': str(vault), 'role': 'capture',
-        'python': sys.executable, 'release_root': 'synthetic-previous-release', 'version': '0.1.6',
+        'python': sys.executable, 'release_root': str(previous), 'version': '0.1.6',
         'device_id':'synthetic-isolation','service_name':'SecondBrain-Test-'+uuid.uuid4().hex}), encoding='utf-8')
     release = root / 'releases/v0.1.7'
     release.mkdir(parents=True)
@@ -135,12 +137,13 @@ def test_public_update_preflight_and_owned_deploy_do_not_import_untracked_checko
             for folder in (home, appdata, root / 'app')))
 
     monkeypatch.setattr(support,'run',run)
-    monkeypatch.setattr(updater, 'snapshot', lambda *args,**kwargs: tmp_path / 'snapshot-not-created')
     monkeypatch.setattr(updater, 'restore', lambda *args: None)
+    registration={'kind':sys.platform,'definition_sha256':'a'*64,'enabled':True,'interpreter':sys.executable}
+    if sys.platform=='win32':registration.update(xml='<Task/>',owner_sid='S-1-5-21-101-102-103-1001')
     def controller(python,checkout,selected,command,action,*flags):
         assert selected==root and command=='service' and action in ('inspect','hold','stop','install','start','finish')
         effects.append('controller-intercepted-'+action)
-        if action=='inspect':return {'status':'inspected','task_present':True,'task_enabled':True,'simulated':True}
+        if action=='inspect':return {'status':'inspected','task_present':True,'task_enabled':True,'simulated':True,'registration':dict(registration)}
         return {'status':'stopped' if action=='stop' else action,'empty_at_filetime':123,'simulated':True}
     monkeypatch.setattr(updater,'controller',controller)
     monkeypatch.setattr(updater, 'wait_health', lambda python, root, version,**kwargs: {'status': 'running', 'version': version,'simulated':True})
@@ -151,6 +154,11 @@ def test_public_update_preflight_and_owned_deploy_do_not_import_untracked_checko
     except subprocess.CalledProcessError as error:
         failure = error
     after=preserved()
+    snapshots=list((root/'backups').glob('upgrade-*/snapshot.json'))
+    assert len(snapshots)==1
+    sealed=json.loads(snapshots[0].read_bytes())
+    assert sealed['format']==3 and sealed['registration']==registration
+    assert (root/'state/previous-release.json').read_bytes()==(snapshots[0].parent/'previous-binding.after').read_bytes()
     assert before[1:]==after[1:], 'The isolated preflight/deploy control must preserve owner clients/app.'
     assert not marker.exists(), 'The allowed untracked cached tomllib.py executed.'
     assert failure is None and len(children)==1

@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "reviewed_on": "2026-11-02",
+  "reviewed_on": "2026-11-04",
   "platform": "win32",
   "expected_audit_versions": {
     "agent-detector": "2.0.0",
@@ -169,26 +169,30 @@
     "app/brain_client.py": "dc890bdf9122992003a699a51be5fc3b32d98edd040b3a44f5aa358487a3119c",
     "app/brain_git.py": "e8381647e539054ac2925d3590e022cfbcc4a9df9ca4bca4f073790278c87f28",
     "app/brain_hooks.py": "e2d9a7b326698c6b900bdfba5df876addd9e3a9ef903b49e24e45e2c7f05774c",
-    "app/brain_index.py": "b35a3990a502ec4c593164559482e81dd651e0a316a3392b34c8dbdfc4d31168",
-    "app/brain_index_bootstrap.py": "d77a2cdbf0cc0b82cde57afa2dfcecdf53335dd17b60bb5015cce493ecda89b5",
+    "app/brain_index.py": "78fe1d8ac9869fa5a3f0e384871f49ce1e9e0aa20a6fbf69a86f8f0be6523eaf",
+    "app/brain_index_bootstrap.py": "a94c9c7d966154d7c5726e15da737b6f30db8c846c9cf890c2be07bccd4f8e16",
+    "app/brain_linux_identity.py": "9a1d506b72b18e7c6c918f799f20e758605884ff220b67280af6265b017e2437",
+    "app/brain_linux_registration.py": "3c6a06258c6db91abb2656d07483c51f8389ce73c19579e89ea6f8fe666e5d4a",
+    "app/brain_mac_inventory.py": "e589dbdbbd2a168e4137643b6e2a8e9871eb6900f25909f811896369dcb353dc",
+    "app/brain_mac_registration.py": "3c89fad8fc704afec983d94abbeafe2d8c1f3f98fe42cac7b321ab942068f03d",
     "app/brain_maintenance.py": "65b43c7d548f1073df05256b3c14d2bd1560af1f8325998ddfe99705a2e524d1",
     "app/brain_markdown.py": "3bc18c92524364acdce8bbf0abf00e69d7acf72d0d9cfbc809461424c3379892",
-    "app/brain_process.py": "e6f239f179571847ef06a6f681d15ddcb71edfa98fc629082f11a144a3a3924e",
+    "app/brain_process.py": "5e9fc0886e50303a0a6779c43c78d972239c1ddf65027ddde2abbcba07d58b49",
     "app/brain_server.py": "256979525793b388577c7a3a3c7dbf0b490666da76c69d5cf696068ee0793acd",
-    "app/brain_service.py": "6c24ce303b8e186ff18df279cbb89093b9048783c934b7129724df1e12835cfe",
-    "app/brain_settings.py": "267b4b27dd6bae32d5427078ab15d82093ea76f04d8af8316cdd29ce5d660a42",
-    "app/brain_store.py": "e08620b687a14fbdc2daa0ebaf46c566f49a5b2277508566d61a57810d806067",
-    "app/brain_supervisor.py": "abe2565f1802cad288ab2202bf4b91f02740d01e41476bad57508fc3989312f6",
+    "app/brain_service.py": "b773af734a8f42b118c934ac518487a31e3e524bb727d96ddb075a2d14a92ffd",
+    "app/brain_settings.py": "92b4b8034561c08d1c7f9abe83cb2e89e996fe1ac9c08e254f5b7f4ef6b512ee",
+    "app/brain_store.py": "f3025605f8c75fd6b34dc4d4250fdf96b70848ede1110eb7a9a6c76c89717539",
+    "app/brain_supervisor.py": "68d73fdf794a3fbbf455dc71a1baafe0a42561dbd7c5607ae4d875caa8e98179",
     "app/brain_walk.py": "92d7e35a59a052f1ae920b8249a929477e2c42aa5535a5f81004c09f8f7ad24a",
-    "app/brain_wiki.py": "c8cb1e9136da4f80c9b550beb18e3f349e74304739338b648a03a45a68855f9b",
+    "app/brain_wiki.py": "e3d3ef025772344b88c9fcb69b757eb57f8594bc9e8c80a81c9215b874cc263d",
     "app/brain_windows_process.py": "803eb93b9a23fc941f7eed4aa5e53512b91ae38f5694d11f75cf91de30a83758",
-    "check_dependency_audit.py": "65c02303e242c8f72b2b65c21942f4b584f250a97304b173f18decd049364a0a",
-    "install.py": "e759317bfe1fc05d01606b85dc61ecf4b69adf66aa3c4fc9c3a77fdaf892b20b",
-    "pyproject.toml": "439c7b5ae87e587ee1d368d2b016c1783b1dcca757ae77a8aca939246b377933",
-    "setup_runtime.py": "c0d9a9f76a940a75c0fc98eae2d4da1a1e61417cc0356ef74c3b38d2c6f2c3c1",
+    "check_dependency_audit.py": "413bdcdf23bcf8afcfe6d96e4ed13a7336898bf5ea2c448fc2ea08d0332dfd62",
+    "install.py": "c40c8c8705f7c6f244f6cfea2c1f405c00210a2898c5b30a97f333e00fc22c56",
+    "pyproject.toml": "d157043c8fc51a5c486e53c5af1791b4cca9d66c41a68f38d3218055a4e8a305",
+    "setup_runtime.py": "02b4ef3568d7cacaeb98cb6749290cb9992665b486970f37ed306847ff53d19c",
     "tests/test_security_profile.py": "f12a8faa872e75bc3522e2efd37db32102f5d91a355076718ef129a574a3c988",
-    "update.py": "cb42c91b7109a3b2fca90c139593f7a032aab02de064e06c15e9eb306a6461bc",
-    "uv.lock": "307e0625f1fe94865ca9d71393b80e850dcdb3ead314440b619bcfc6dd962178"
+    "update.py": "73743a7b4525d19718cf5f76a9dd90b842d962a870ada53edcbee03ad5f770d0",
+    "uv.lock": "835514aac17684e60594a9f381c280b0b69d5b40bf98fdfa595bacc025b540fa"
   },
   "exceptions": [
     {
@@ -207,5 +211,6 @@
       "disposition": "not_reachable_in_qualified_profile",
       "basis": "Static-token owned loopback transport only; OAuth auth objects rejected; no M2M OAuth credentials/providers."
     }
-  ]
+  ],
+  "machine": "AMD64"
 }

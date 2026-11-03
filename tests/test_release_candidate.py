@@ -2,9 +2,12 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
+import struct
 import subprocess
 import sys
+from types import SimpleNamespace
 import pytest
 
 SOURCE=Path(__file__).resolve().parents[1]
@@ -15,14 +18,16 @@ def module(name):
     value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 
 
-@pytest.mark.parametrize('platform',['darwin','linux'])
+@pytest.mark.parametrize('platform,machine',[('freebsd14','x86_64'),('darwin','arm64e'),('linux','aarch64')])
 @pytest.mark.parametrize('action',['update','recover','direct-perform','direct-recover'])
-def test_unqualified_update_refuses_before_helpers_state_or_recovery_reads(tmp_path,monkeypatch,platform,action):
+def test_unsupported_update_refuses_before_helpers_state_or_recovery_reads(tmp_path,monkeypatch,platform,machine,action):
     updater=module('update');root=tmp_path/'absent-runtime'
     monkeypatch.setattr(updater.sys,'platform',platform)
+    monkeypatch.setattr(struct,'calcsize',lambda code:8)
+    monkeypatch.setattr(os,'uname',lambda:SimpleNamespace(machine=machine),raising=False)
     monkeypatch.setattr(updater,'installer',lambda:pytest.fail('Platform refusal must precede helper loading.'))
     monkeypatch.setattr(updater,'_recovery_binding',lambda *args:pytest.fail('Platform refusal must precede recovery reads.'))
-    with pytest.raises(ValueError,match='qualified for Windows only'):
+    with pytest.raises(ValueError,match='Unsupported candidate'):
         if action=='direct-perform':updater.perform(root,'v0.1.8')
         elif action=='direct-recover':updater.recover(root,'a'*32)
         else:
@@ -31,15 +36,18 @@ def test_unqualified_update_refuses_before_helpers_state_or_recovery_reads(tmp_p
     assert not root.exists()
 
 
-@pytest.mark.parametrize('platform',['darwin','linux'])
-@pytest.mark.parametrize('plan',[False,True])
-def test_unqualified_setup_refuses_before_helpers_or_any_plan_write(tmp_path,monkeypatch,platform,plan):
+@pytest.mark.parametrize('platform,machine',[('freebsd14','x86_64'),('darwin','arm64e'),('linux','aarch64')])
+@pytest.mark.parametrize('action',['setup','plan','abandon'])
+def test_unsupported_setup_refuses_before_helpers_or_any_plan_write(tmp_path,monkeypatch,platform,machine,action):
     installer=module('install');root=tmp_path/'absent-runtime';vault=tmp_path/'vault';vault.mkdir()
     monkeypatch.setattr(installer.sys,'platform',platform)
+    monkeypatch.setattr(struct,'calcsize',lambda code:8)
+    monkeypatch.setattr(os,'uname',lambda:SimpleNamespace(machine=machine),raising=False)
     monkeypatch.setattr(installer,'setup_helpers',lambda:pytest.fail('Platform refusal must precede helper loading.'))
-    flags=['--configure-clients','--validate-only','--plan-out',str(tmp_path/'plan.json')] if plan else []
+    flags=(['--configure-clients','--validate-only','--plan-out',str(tmp_path/'plan.json')] if action=='plan'
+           else ['--abandon-install','a'*32] if action=='abandon' else [])
     monkeypatch.setattr(sys,'argv',['install.py','--root',str(root),'--vault',str(vault),*flags])
-    with pytest.raises(ValueError,match='qualified for Windows only'):installer.main()
+    with pytest.raises(ValueError,match='Unsupported candidate'):installer.main()
     assert not root.exists() and not (tmp_path/'plan.json').exists()
 
 
@@ -93,7 +101,7 @@ def staged(tmp_path,monkeypatch):
     payload={'install.py':b"VERSION='0.1.8'\n",'app/brain_settings.py':b"VERSION='0.1.8'\n",
              'pyproject.toml':b'[project]\nversion="0.1.8"\n',
              'uv.lock':b'[[package]]\nname="shared-second-brain"\nversion="0.1.8"\n'}
-    for name in ('update.py','setup_runtime.py','app/brain_service.py','app/brain_process.py','app/brain_windows_process.py','check_dependency_audit.py','security-exceptions.json','SECURITY.md'):payload[name]=b'# synthetic release builder contract\n'
+    for name in ('update.py','setup_runtime.py','app/brain_service.py','app/brain_process.py','app/brain_windows_process.py','check_dependency_audit.py','security-exceptions.json','security-exceptions-darwin-arm64.json','security-exceptions-darwin-x86_64.json','security-exceptions-linux-x86_64.json','SECURITY.md'):payload[name]=b'# synthetic release builder contract\n'
     for name,data in payload.items():
         target=repo/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(data)
     subprocess.run(['git','init',str(repo)],check=True,capture_output=True)
@@ -106,7 +114,8 @@ def test_manifest_capabilities_bind_all_required_staged_bytes(staged):
     # Unstaged changes cannot change the version/hash of the staged snapshot.
     (repo/'install.py').write_bytes(b"VERSION='9.9.9'\n")
     builder.main();value=json.loads((repo/'release-manifest.json').read_text())
-    assert value['version']=='0.1.8' and value['qualified_service_platforms']==['win32']
+    assert value['version']=='0.1.8' and value['qualified_service_platforms']==['win32','darwin','linux']
+    assert value['qualification_status']=='candidate_pending_external_receipts'
     assert set(value['capabilities'])=={'sealed-client-refresh-v1','owned-service-control-v1'}
     assert value['sha256']=={name:hashlib.sha256(data).hexdigest() for name,data in payload.items()}
 
@@ -119,7 +128,7 @@ def test_builder_refuses_mismatched_staged_versions(staged,name):
     assert not (repo/'release-manifest.json').exists()
 
 
-@pytest.mark.parametrize('name',['setup_runtime.py','check_dependency_audit.py','security-exceptions.json','SECURITY.md'])
+@pytest.mark.parametrize('name',['setup_runtime.py','check_dependency_audit.py','security-exceptions.json','security-exceptions-darwin-arm64.json','security-exceptions-darwin-x86_64.json','security-exceptions-linux-x86_64.json','SECURITY.md'])
 def test_builder_refuses_missing_staged_fixed_helper(staged,name):
     builder,repo,_,stage=staged
     (repo/name).unlink();stage()

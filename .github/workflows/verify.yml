@@ -11,6 +11,44 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  mac-native-capability:
+    name: Native macOS prerequisites only (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/feature/posix-')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+          - os: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.9.16'
+          enable-cache: false
+      - run: uv sync --locked --python 3.12
+      - name: Observe actual GUI domain and unprivileged listener primitives
+        shell: bash
+        run: |
+          mkdir reports
+          git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD > reports/checked-out-commit.txt
+          uv run --locked python -I -B tests/native_mac_capabilities.py --expected-arch '${{ matrix.arch }}' | tee reports/mac-capabilities.json
+      - name: Retain prerequisite receipt only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mac-prerequisites-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            reports/mac-capabilities.json
+            reports/checked-out-commit.txt
+          if-no-files-found: warn
+          retention-days: 30
   test:
     strategy:
       fail-fast: false
@@ -19,6 +57,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
+      AUDIT_MATRIX_OS: ${{ matrix.os }}
+      AUDIT_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      AUDIT_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
       UV_HTTP_TIMEOUT: '60'
       UV_CONCURRENT_DOWNLOADS: '3'
     steps:
@@ -41,7 +82,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path reports -Force -ErrorAction Stop | Out-Null
           $qualificationCommit = (git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $qualificationTree = (git --no-optional-locks -c core.fsmonitor=false rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           @{ commit = $env:QUAL_SHA; checked_out_commit = $qualificationCommit; checked_out_tree = $qualificationTree; pr_head = $env:QUAL_PR_HEAD; pr_base = $env:QUAL_PR_BASE; event = $env:QUAL_EVENT; ref = $env:QUAL_REF; run_id = $env:QUAL_RUN; manifest_sha256 = (Get-FileHash -LiteralPath release-manifest.json -Algorithm SHA256).Hash.ToLowerInvariant(); profile_sha256 = (Get-FileHash -LiteralPath security-exceptions.json -Algorithm SHA256).Hash.ToLowerInvariant() } | ConvertTo-Json | Set-Content -LiteralPath reports/source.json -Encoding utf8
       - run: uv sync --locked --python 3.12
       - name: Verify shipped payload manifest consistency
@@ -85,8 +128,18 @@ jobs:
           uvx --python 3.12 --from pip-audit==2.9.0 pip-audit --disable-pip --no-deps -r reports/audit-requirements.txt --format json --output $dependencyReport
           $dependencyAuditExit = $LASTEXITCODE
           if ($dependencyAuditExit -notin @(0,1)) { exit $dependencyAuditExit }
-          uv run --locked python -I -B check_dependency_audit.py $dependencyReport 2>&1 | Tee-Object -FilePath reports/dependency-profile.txt
+          git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD | Set-Content -LiteralPath reports/checked-out-commit.txt -Encoding utf8
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv --version | Set-Content -LiteralPath reports/uv-version.txt -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uvx --python 3.12 --from pip-audit==2.9.0 pip-audit --version | Set-Content -LiteralPath reports/pip-audit-version.txt -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv run --locked python -I -B check_dependency_audit.py $dependencyReport 2>&1 | Tee-Object -FilePath reports/dependency-profile.txt
+          $dependencyProfileExit = $LASTEXITCODE
+          $env:AUDIT_PROFILE_EXIT_CODE = [string]$dependencyProfileExit
+          uv run --locked python -I -B tests/record_dependency_audit.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($dependencyProfileExit -ne 0) { exit $dependencyProfileExit }
       - name: Retain bounded synthetic qualification reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -98,16 +151,26 @@ jobs:
             reports/audit-requirements.txt
             reports/dependency-audit.json
             reports/dependency-profile.txt
-          if-no-files-found: warn
+            reports/audit-provenance.json
+            reports/checked-out-commit.txt
+            reports/uv-version.txt
+            reports/pip-audit-version.txt
+          if-no-files-found: error
           retention-days: 30
   library-import:
-    name: Library import only (${{ matrix.os }})
+    name: Library and native dependency audit (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      AUDIT_MATRIX_OS: ${{ matrix.os }}
+      AUDIT_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      AUDIT_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      QUAL_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+      QUAL_PR_BASE: ${{ github.event.pull_request.base.sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -117,5 +180,47 @@ jobs:
           version: '0.9.16'
           enable-cache: false
       - run: uv sync --locked --python 3.12
+      - name: Record native qualification source identity
+        shell: bash
+        run: |
+          mkdir reports
+          git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD > reports/checked-out-commit.txt
+          uv --version > reports/uv-version.txt
+          uv run --locked python -I -B -c 'import hashlib,json,os,subprocess;from pathlib import Path;g=lambda arg:subprocess.check_output(["git","--no-optional-locks","-c","core.fsmonitor=false","rev-parse",arg],text=True).strip();v={"commit":os.environ["GITHUB_SHA"],"checked_out_commit":g("HEAD"),"checked_out_tree":g("HEAD^{tree}"),"pr_head":os.environ.get("QUAL_PR_HEAD",""),"pr_base":os.environ.get("QUAL_PR_BASE",""),"event":os.environ["GITHUB_EVENT_NAME"],"ref":os.environ["GITHUB_REF"],"run_id":os.environ["GITHUB_RUN_ID"],"manifest_sha256":hashlib.sha256(Path("release-manifest.json").read_bytes()).hexdigest()};Path("reports/source.json").open("x",encoding="utf-8").write(json.dumps(v,indent=2))'
+      - name: Verify shipped payload manifest consistency
+        run: uv run --locked python -I -B -c "import runpy; from pathlib import Path; runpy.run_path('update.py')['verify'](Path.cwd())"
       - run: uv run --locked python -m compileall -q app install.py update.py setup_runtime.py build_release.py
       - run: uv run --locked python tests/smoke_import.py
+      - name: Record native lock graph and raw dependency audit
+        shell: bash
+        run: |
+          uv export --locked --no-dev --no-hashes --output-file reports/audit-requirements.txt
+          set +e
+          uvx --python 3.12 --from pip-audit==2.9.0 pip-audit --disable-pip --no-deps -r reports/audit-requirements.txt --format json --output reports/dependency-audit.json
+          audit_exit=$?
+          set -e
+          if [[ "$audit_exit" != 0 && "$audit_exit" != 1 ]]; then exit "$audit_exit"; fi
+          uvx --python 3.12 --from pip-audit==2.9.0 pip-audit --version > reports/pip-audit-version.txt
+          set +e
+          uv run --locked python -I -B check_dependency_audit.py reports/dependency-audit.json 2>&1 | tee reports/dependency-profile.txt
+          profile_codes=("${PIPESTATUS[@]}")
+          set -e
+          if [[ "${profile_codes[1]}" != 0 ]]; then exit "${profile_codes[1]}"; fi
+          AUDIT_PROFILE_EXIT_CODE="${profile_codes[0]}" uv run --locked python -I -B tests/record_dependency_audit.py
+          exit "${profile_codes[0]}"
+      - name: Retain native dependency evidence; no service acceptance claim
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-dependencies-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            reports/source.json
+            reports/checked-out-commit.txt
+            reports/uv-version.txt
+            reports/pip-audit-version.txt
+            reports/audit-requirements.txt
+            reports/dependency-audit.json
+            reports/dependency-profile.txt
+            reports/audit-provenance.json
+          if-no-files-found: error
+          retention-days: 30

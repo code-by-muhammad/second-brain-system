@@ -1414,7 +1414,7 @@ class _EvidenceHistory:
     """
     def __init__(self):
         self.started=time.monotonic(); self.deadline=self.started+15; self.commands=0; self.bytes=0
-        self.logs={}; self.blobs={}; self.current={}; self.current_bytes=0; self.results={}; self.topic_origins={}; self.revision_origins={}
+        self.logs={}; self.log_truncations=set(); self.blobs={}; self.current={}; self.current_bytes=0; self.results={}; self.topic_origins={}; self.revision_origins={}
         self.log_failures={}; self.blob_failures={}; self.result_failures={}; self.legacy_proofs={}
         self.failure_serial=0; self.failure_reason=None; self.first_failure_reason=None
         self.failure_serial_by_reason={}
@@ -1460,12 +1460,14 @@ class _EvidenceHistory:
             self._incomplete(self.log_failures[relative]); return
         if relative not in self.logs:
             serial=self.failure_serial
-            raw=self._git('log','--max-count=64','--format=%H','HEAD','--',relative)
+            raw=self._git('log','--max-count=65','--format=%H','HEAD','--',relative)
             if raw is None:
                 reason=self.incomplete_since(serial)
                 if reason and not self._retryable_since(serial): self.log_failures[relative]=reason
                 return
-            self.logs[relative]=[line for line in (raw or b'').decode('ascii',errors='ignore').splitlines() if re.fullmatch('[a-f0-9]{40}|[a-f0-9]{64}',line)]
+            revisions=[line for line in (raw or b'').decode('ascii',errors='ignore').splitlines() if re.fullmatch('[a-f0-9]{40}|[a-f0-9]{64}',line)]
+            if len(revisions)>64:self.log_truncations.add(relative)
+            self.logs[relative]=revisions[:64]
         for commit in self.logs[relative]:
             if not self._active(): return
             key=(commit,relative)
@@ -1499,6 +1501,7 @@ class _EvidenceHistory:
                     if not self._retryable_since(serial): self.blob_failures[key]=reason
                 else: self.blobs[key]=info
             if self.blobs.get(key) is not None: yield self.blobs[key]
+        if relative in self.log_truncations:self._incomplete('commits')
 
     def _current(self,source):
         if source in self.current:
@@ -2396,7 +2399,7 @@ def _model_executable():
     return _native_model_identity(value['executable'])
 
 def _run_model(command,model_input,timeout,*,cwd,log,on_started,on_cleanup_wait):
-    if os.name!='nt':raise RuntimeError('The v0.1.9 compiler requires the qualified Windows maintainer.')
+    if os.name!='nt':raise RuntimeError('The v0.2.0 compiler requires the qualified Windows maintainer.')
     from brain_windows_process import run
     return run(command,input=model_input,text=True,encoding='utf-8',cwd=str(cwd),
                stdout=log,stderr=log,direct_output=True,timeout=timeout,max_output_bytes=5_000_000,

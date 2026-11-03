@@ -3,6 +3,7 @@ import argparse
 from datetime import date,datetime,timezone
 import hashlib
 import json
+import platform
 from pathlib import Path
 import re
 import sys
@@ -10,10 +11,10 @@ import sys
 ROOT=Path(__file__).resolve().parent
 
 
-def assess(report,policy,root=ROOT,*,today=None):
+def assess(report,policy,root=ROOT,*,today=None,expected_platform='win32',expected_machine='AMD64'):
     if not isinstance(report,dict) or not isinstance(report.get('dependencies'),list):
         raise ValueError('Dependency audit did not return a complete dependency list.')
-    if not isinstance(policy,dict) or policy.get('format')!=1 or policy.get('platform')!='win32' or not isinstance(policy.get('exceptions'),list):
+    if not isinstance(policy,dict) or policy.get('format')!=1 or policy.get('platform')!=expected_platform or policy.get('machine')!=expected_machine or not isinstance(policy.get('exceptions'),list):
         raise ValueError('Unsupported audit exception policy.')
     for item in policy['exceptions']:
         if (not isinstance(item,dict) or not all(isinstance(item.get(key),str) and item[key] for key in ('package','version','id','review_by'))
@@ -65,13 +66,24 @@ def assess(report,policy,root=ROOT,*,today=None):
             'audit_claim':'raw audit findings and exceptions remain separate; no blanket clean-audit claim'}
 
 
+def profile_path(system,machine):
+    # Native-only selection. No user-selected profile can bypass the host graph.
+    profiles={('win32','amd64'):('security-exceptions.json','AMD64'),
+              ('darwin','arm64'):('security-exceptions-darwin-arm64.json','arm64'),
+              ('darwin','x86_64'):('security-exceptions-darwin-x86_64.json','x86_64'),
+              ('linux','x86_64'):('security-exceptions-linux-x86_64.json','x86_64')}
+    choice=profiles.get((system,machine.lower()))
+    if choice is None:raise ValueError('No reviewed audit profile for this platform and architecture.')
+    return ROOT/choice[0],choice[1]
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('report',type=Path);args=parser.parse_args()
     try:
-        if sys.platform!='win32':raise ValueError('This audit profile is qualified for Windows only.')
+        selected,machine=profile_path(sys.platform,platform.machine())
         if args.report.stat().st_size>16_000_000:raise ValueError('Audit report exceeds its bound.')
-        report=json.loads(args.report.read_bytes());policy=json.loads((ROOT/'security-exceptions.json').read_bytes())
-        result=assess(report,policy)
+        report=json.loads(args.report.read_bytes());policy=json.loads(selected.read_bytes())
+        result=assess(report,policy,expected_platform=sys.platform,expected_machine=machine)
     except (OSError,ValueError,KeyError,TypeError):
         parser.exit(2,'Dependency audit/profile validation failed; retain the raw report for review.\n')
     print(json.dumps(result,indent=2))

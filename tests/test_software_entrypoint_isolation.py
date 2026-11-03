@@ -90,18 +90,22 @@ def documented_prefix(route, release, python):
     for name in ('README.md', 'docs/DEVICE-SETUP.md'):
         choices = []
         for line in (SOURCE / name).read_text(encoding='utf-8').splitlines():
-            if route == 'updater-help' and '/update.py --root ' in line:
-                prefix = line.split(' --root ', 1)[0]
-                prefix = prefix.replace('<retained v0.1.7 Python>', shlex.quote(python.as_posix()))
-                prefix = prefix.replace('<verified v0.1.9 checkout>', shlex.quote(release.as_posix()))
-                choices.append(shlex.split(prefix))
+            if line.startswith('"<retained v0.1.7 Python>" '):
+                prefix=line.split(' --root ',1)[0]
+                arguments=shlex.split(prefix)
+                assert arguments==['<retained v0.1.7 Python>','-I','-B','<verified v0.2.0 checkout>/update.py'], 'Unexpected updater entrypoint or flags.'
+                if route=='updater-help':choices.append([str(python),'-I','-B',str(release/'update.py')])
+            elif line.startswith(('& $retainedPython ','& $recoveryPython ')):
+                variable,checkout=('$retainedPython','$brainRelease') if line.startswith('& $retainedPython ') else ('$recoveryPython','$originalCheckout')
+                assert line.startswith("& "+variable+" -I -B (Join-Path "+checkout+" 'update.py') --root "), 'Unsafe or unclassified concrete updater command.'
             elif line.startswith('& $BrainBasePython '):
                 tail = line.removeprefix('& $BrainBasePython ')
                 assert shlex.split(tail)[:2] == ['-I','-B'], 'Every documented host command needs exact isolated/no-bytecode flags.'
                 verifier = ' -c ' in tail and "['verify']" in tail
                 preflight = tail.startswith('-I -B -c "import sys; assert sys.version_info')
                 relative_install = tail.startswith('-I -B install.py --')
-                absolute_install = tail.startswith("-I -B (Join-Path $brainRelease 'install.py') --")
+                absolute_install = (tail.startswith("-I -B (Join-Path $brainRelease 'install.py') --")
+                                    or tail.startswith('-I -B "$brainRelease/install.py" --'))
                 assert verifier or preflight or relative_install or absolute_install, 'Unclassified documented Python command: '+line
                 if route == 'manifest-verifier' and verifier:
                     arguments = shlex.split(tail)
@@ -112,6 +116,8 @@ def documented_prefix(route, release, python):
                     choices.append([str(python), *arguments[:-1], str(release / 'install.py')])
                 elif route == 'installer-help' and absolute_install:
                     choices.append([str(python),'-I','-B',str(release/'install.py')])
+            elif line.startswith('& ') and 'update.py' in line:
+                raise AssertionError('Unclassified updater command: '+line)
         assert choices, 'Missing actual supported entrypoint in ' + name
         assert all(choice == choices[0] for choice in choices), 'Platform examples disagree in ' + name
         groups.append(choices[0])
@@ -132,6 +138,22 @@ def test_documented_python_commands_fail_closed_on_unsafe_or_unclassified_forms(
         (fixture/relative).write_text(text,encoding='utf-8')
     monkeypatch.setattr(sys.modules[__name__],'SOURCE',fixture)
     with pytest.raises(AssertionError):documented_prefix('manifest-verifier',tmp_path/'release',Path(sys.executable))
+
+
+@pytest.mark.parametrize('prefix',[
+    '"<retained v0.1.7 Python>" ', '& $retainedPython ', '& $recoveryPython ',
+])
+@pytest.mark.parametrize('flag',['-I','-B'])
+def test_actual_updater_commands_refuse_missing_flags(tmp_path,monkeypatch,prefix,flag):
+    original=SOURCE;fixture=tmp_path/'documented updater commands';(fixture/'docs').mkdir(parents=True)
+    for name in ('README.md','docs/DEVICE-SETUP.md'):
+        text=(original/name).read_text(encoding='utf-8')
+        if name=='docs/DEVICE-SETUP.md':
+            assert prefix+'-I -B ' in text
+            text=text.replace(prefix+'-I -B ',prefix+('-B ' if flag=='-I' else '-I '),1)
+        (fixture/name).write_text(text,encoding='utf-8')
+    monkeypatch.setattr(sys.modules[__name__],'SOURCE',fixture)
+    with pytest.raises(AssertionError):documented_prefix('updater-help',tmp_path/'release',Path(sys.executable))
 
 
 @pytest.mark.parametrize('route,shadow', [

@@ -346,9 +346,24 @@ def status(*,deadline=None):
                 stale=sum(indexed[key]!=notes[key]['sha256'] for key in notes.keys()&indexed.keys()),
                 duplicates=duplicates,content_type_mismatches=mismatches,non_markdown_entities=nonmd,
                 excluded_derived_history_entities=excluded_history,**scope_counts)
-            vectors=_vectors(conn,project,entities,notes,_model(config),check) if config.get('semantic_search_enabled',True) is True else {'status':'disabled; not verified'}
+            check()
+            coverage['orphan_search_rows']=conn.execute(
+                'SELECT count(*) FROM search_index AS child WHERE child.project_id=? AND ('
+                'NOT EXISTS (SELECT 1 FROM entity AS parent WHERE parent.project_id=child.project_id AND parent.id=child.entity_id) '
+                "OR (child.type='observation' AND NOT EXISTS (SELECT 1 FROM observation AS parent WHERE parent.project_id=child.project_id AND parent.id=child.id)) "
+                "OR (child.type='relation' AND NOT EXISTS (SELECT 1 FROM relation AS parent WHERE parent.project_id=child.project_id AND parent.id=child.id)))",
+                (project,)).fetchone()[0]
+            coverage['orphan_vector_chunks']=None
+            if config.get('semantic_search_enabled',True) is True:
+                check()
+                coverage['orphan_vector_chunks']=conn.execute(
+                    'SELECT count(*) FROM search_vector_chunks AS child WHERE child.project_id=? '
+                    'AND NOT EXISTS (SELECT 1 FROM entity AS parent WHERE parent.project_id=child.project_id AND parent.id=child.entity_id)',
+                    (project,)).fetchone()[0]
+                vectors=_vectors(conn,project,entities,notes,_model(config),check)
+            else:vectors={'status':'disabled; not verified'}
         _,after=inventory(check)
-        complete=not any(coverage[key] for key in ('missing','extra','stale','duplicates','content_type_mismatches'))
+        complete=not any(coverage.get(key) for key in ('missing','extra','stale','duplicates','content_type_mismatches','orphan_search_rows','orphan_vector_chunks'))
         stable=manifest==after
         verified=bool(notes) and complete and stable and vectors.get('invalid')==0
         return {**base,'status':'verified' if verified else 'needs review','coverage':coverage,'vectors':vectors,

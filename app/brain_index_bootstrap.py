@@ -51,38 +51,77 @@ def _run_reindex(command,log,overall,on_tick,on_cleanup_wait):
         from brain_windows_process import run
         return run(command,env=cfg.environment(),stdout=log,stderr=log,timeout=overall,
                    on_tick=on_tick,on_cleanup_wait=on_cleanup_wait,direct_output=True)
-    def interrupted(signum,frame): raise InterruptedError('Local index operation interrupted.')
-    handlers={}
-    for signum in (signal.SIGTERM,signal.SIGHUP):
-        handlers[signum]=signal.signal(signum,interrupted)
+    # This local Popen has one waiter. Ignored/custom SIGCHLD reaping would
+    # invalidate the unreaped-child PID reservation used during cancellation.
+    if signal.getsignal(signal.SIGCHLD) is not signal.SIG_DFL:
+        raise index.IndexAttention('child_reaping_disposition_refused')
+    stopped=False
+    cleaning=False
+    def check_interrupt():
+        if stopped:raise InterruptedError('Local index operation interrupted.')
+    def interrupted(signum,frame):
+        nonlocal stopped
+        stopped=True
+        # Popen must finish handing back ownership before cancellation raises.
+        if process is not None and not cleaning:check_interrupt()
+    handlers={signal.SIGINT:signal.getsignal(signal.SIGINT)}
     process=None
     deadline=time.monotonic()+overall
     try:
+        for signum in (signal.SIGTERM,signal.SIGHUP):
+            handlers[signum]=signal.signal(signum,interrupted)
+        check_interrupt()
         process=subprocess.Popen(command,env=cfg.environment(),stdin=subprocess.DEVNULL,stdout=log,stderr=log,start_new_session=True)
-        while process.poll() is None:
+        while True:
+            check_interrupt()
+            if process.poll() is not None:break
             if time.monotonic()>=deadline: raise subprocess.TimeoutExpired(command,overall)
             try:on_tick()
             except Exception:
+                check_interrupt()
                 if process.poll() is None:raise
+            check_interrupt()
             time.sleep(1)
+        check_interrupt()
         return subprocess.CompletedProcess(command,process.returncode)
     finally:
+        cleaning=True
         try:
             if process is not None:
-                for signum in handlers:signal.signal(signum,signal.SIG_IGN)
-                try:os.killpg(process.pid,signal.SIGTERM)
-                except ProcessLookupError:pass
-                try:process.wait(timeout=2)
-                except subprocess.TimeoutExpired:pass
-                try:os.killpg(process.pid,signal.SIGKILL)
-                except ProcessLookupError:pass
+                while True:
+                    try:
+                        for signum in handlers:signal.signal(signum,signal.SIG_IGN)
+                        break
+                    except (InterruptedError,KeyboardInterrupt):pass
+                try:process.poll()
+                except OSError:pass
+                if process.returncode is None:
+                    # Do not poll/wait during grace: even an exited, unreaped
+                    # leader reserves this PID/PGID through the final signal.
+                    for signum in (signal.SIGTERM,signal.SIGKILL):
+                        try:os.killpg(process.pid,signum)
+                        except OSError:pass
+                        if signum==signal.SIGTERM:time.sleep(2)
                 try:process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    on_cleanup_wait()
-                    # Keep admission while the direct owned process is uncertain.
-                    while process.poll() is None:time.sleep(.1)
+                except (subprocess.TimeoutExpired,OSError):pass
+                notified=False
+                while True:
+                    # A reaped leader no longer grants group signal authority.
+                    # Existence/permission errors can only retain admission.
+                    try:reaped=process.poll() is not None
+                    except OSError:reaped=False
+                    if reaped:
+                        try:os.killpg(process.pid,0)
+                        except ProcessLookupError:break
+                        except OSError:pass
+                    if not notified:
+                        notified=True
+                        try:on_cleanup_wait()
+                        except Exception:pass
+                    time.sleep(.1)
         finally:
-            for signum,handler in handlers.items():signal.signal(signum,handler)
+            for signum in (signal.SIGTERM,signal.SIGHUP,signal.SIGINT):
+                if signum in handlers:signal.signal(signum,handlers[signum])
 
 
 def _archive_previous():

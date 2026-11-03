@@ -1,5 +1,6 @@
 """Final independent-review regressions; no external sockets or owner state."""
 import asyncio,json,os,socket,stat
+import struct
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
@@ -142,11 +143,13 @@ def test_udp_routes_refuse_before_touching_a_native_socket():
         with pytest.raises(AssertionError,match='non-loopback'):
             IocpProactor.sendto(object(),object(),b'synthetic',addr=('192.0.2.1',9))
 
-def test_nonwindows_abandon_is_refused_before_any_recovery_write(initial,monkeypatch):
+def test_unsupported_platform_abandon_is_refused_before_any_recovery_write(initial,monkeypatch):
     module,root,_,run=initial;(root/'state').mkdir(parents=True);journal=root/'state/install-transaction.json';journal.write_bytes(b'Preserve incomplete private recovery evidence')
-    monkeypatch.setattr(module.sys,'platform','linux')
-    monkeypatch.setattr(module,'atomic',lambda *a,**k:pytest.fail('No mutation on unqualified platform'))
-    with pytest.raises(ValueError,match='Windows only'):run('--abandon-install','a'*32)
+    monkeypatch.setattr(module.sys,'platform','freebsd14')
+    monkeypatch.setattr(struct,'calcsize',lambda _:8)
+    monkeypatch.setattr(module,'setup_helpers',lambda:pytest.fail('Unsupported platform must refuse before recovery helpers'))
+    monkeypatch.setattr(module,'atomic',lambda *a,**k:pytest.fail('No mutation on unsupported platform'))
+    with pytest.raises(ValueError,match='Unsupported candidate operating system'):run('--abandon-install','a'*32)
     assert journal.read_bytes()==b'Preserve incomplete private recovery evidence'
 
 @pytest.mark.parametrize('diverged',[False,True])

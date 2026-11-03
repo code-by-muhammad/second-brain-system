@@ -105,7 +105,7 @@ def test_corrupt_backup_refuses_before_note_replace(brain,kind):
     assert path.read_bytes()==b'original'
 
 def test_device_restore_cas_failure_precedes_app_swap(installation,monkeypatch):
-    h=installation;saved=updater.snapshot(h.root,sys.executable,h.plan)
+    h=installation;saved=updater.snapshot(h.root,sys.executable,h.plan,registration=h.registration)
     (h.root/'device.json').write_bytes((json.dumps(h.planned_device,indent=2)+'\n').encode())
     (h.root/'app/old.py').unlink();(h.root/'app/new.py').write_bytes(b'# candidate')
     def conflict(*args,**kwargs):raise h.support.ConcurrentWriteError('Injected staging conflict')

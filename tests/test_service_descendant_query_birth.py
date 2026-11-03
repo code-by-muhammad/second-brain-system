@@ -147,7 +147,7 @@ def test_metadata_failure_closes_handles(scan,error):
 
 
 def test_constructor_failure_closes_handles(scan,monkeypatch):
-    def fail(*_):raise RuntimeError('constructor failure')
+    def fail(*_,**__):raise RuntimeError('constructor failure')
     monkeypatch.setattr(processes,'Process',fail)
     with pytest.raises(RuntimeError,match='constructor failure'):
         processes.descendants([scan.parent])
@@ -218,9 +218,15 @@ def test_stop_protects_unrelated_process_and_restores_task_on_uncertainty(brain,
     monkeypatch.setattr(processes,'roots',lambda:[scan.parent] if scan.parent.alive() else [])
     monkeypatch.setattr(processes,'_listeners',lambda:[])
     monkeypatch.setattr(processes,'filetime_now',lambda:400)
-    monkeypatch.setattr(service,'_windows_task',lambda:{'enabled':True})
+    task={'enabled':True,'definition_sha256':'b'*64,'state':'Ready'}
+    monkeypatch.setattr(service,'_windows_task',lambda:dict(task))
     monkeypatch.setattr(service,'_tool',lambda _:str(cfg.ROOT/'synthetic-schtasks.exe'))
-    monkeypatch.setattr(service.subprocess,'run',lambda command,**_:(commands.append(command) or SimpleNamespace(returncode=0)))
+    def native(command,**kwargs):
+        commands.append(command)
+        if '/Disable' in command:task.update(enabled=False,state='Disabled')
+        elif '/Enable' in command:task.update(enabled=True,state='Ready')
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(service.subprocess,'run',native)
     if query_denied:
         with pytest.raises(processes.OwnershipError,match='process identity'):
             service.stop(wait_seconds=1)

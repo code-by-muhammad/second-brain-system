@@ -94,8 +94,13 @@ def test_uncertain_registration_requires_positive_native_inspection(initial,monk
         if calls==['install']:raise OSError('Synthetic registration response lost')
         if action=='inspect':
             if outcome=='foreign':raise ValueError('Task belongs to another runtime; preserve it')
-            return SimpleNamespace(stdout=json.dumps({'status':'unavailable' if outcome=='unknown' else 'inspected',
-                'task_present':outcome!='absent','task_enabled':outcome!='disabled'}))
+            record={'status':'unavailable' if outcome=='unknown' else 'inspected',
+                'task_present':outcome!='absent','task_enabled':outcome!='disabled'}
+            if sys.platform in ('darwin','linux'):
+                record.update(native={'file_present':outcome!='absent',
+                    'definition_sha256':'a'*64 if outcome!='absent' else None},
+                    expected_native_definition_sha256='a'*64)
+            return SimpleNamespace(stdout=json.dumps(record))
         assert action=='install' and outcome=='absent'
         return SimpleNamespace(stdout='{"status":"installed"}')
     monkeypatch.setattr(support,'run',control)

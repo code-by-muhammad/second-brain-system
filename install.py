@@ -6,10 +6,60 @@ import argparse, hashlib, json, os, re, secrets, shutil, stat, subprocess, tempf
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
-VERSION='0.1.9'
+VERSION='0.2.0'
 INDEX_IGNORE_TEXT='.git/\n.obsidian/\n.trash/\n'+'/02-Areas/AI-Memory/Wiki/Log-Archives/'+'[0-9a-f]'*64+'.md\n'
 _SETUP_CACHE=None
 _SETUP_SHA256=None
+
+def _candidate_platform():
+    """Admit the declared native candidate matrix; this is not release approval."""
+    import errno
+    import struct
+    if struct.calcsize('P')!=8:
+        raise ValueError('This candidate requires a native 64-bit supported interpreter; no changes made.')
+    if sys.platform=='win32':
+        # Query the kernel, not WMI/environment-derived architecture strings.
+        try:import ctypes
+        except ImportError:raise ValueError('Native Windows architecture support is unavailable; no changes made.') from None
+        try:
+            kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+            kernel.GetCurrentProcess.argtypes=[];kernel.GetCurrentProcess.restype=ctypes.c_void_p
+            query=kernel.IsWow64Process2
+            query.argtypes=[ctypes.c_void_p,ctypes.POINTER(ctypes.c_ushort),ctypes.POINTER(ctypes.c_ushort)]
+            query.restype=ctypes.c_int
+            process_machine,native_machine=ctypes.c_ushort(),ctypes.c_ushort()
+            if not query(kernel.GetCurrentProcess(),ctypes.byref(process_machine),ctypes.byref(native_machine)):
+                raise OSError('Architecture query failed.')
+        except (AttributeError,OSError,ctypes.ArgumentError):
+            raise ValueError('Native Windows architecture is unavailable; no changes made.') from None
+        if process_machine.value!=0 or native_machine.value!=0x8664:
+            raise ValueError('This candidate supports native Windows x64 only; no changes made.')
+        return
+    if sys.platform not in ('darwin','linux'):
+        raise ValueError('Unsupported candidate operating system; no changes made.')
+    try:machine=os.uname().machine
+    except (AttributeError,OSError):raise ValueError('Native architecture is unavailable; no changes made.') from None
+    if machine not in (('arm64','x86_64') if sys.platform=='darwin' else ('x86_64',)):
+        raise ValueError('Unsupported candidate architecture; no changes made.')
+    if sys.platform=='darwin':
+        try:import ctypes
+        except ImportError:raise ValueError('Native Mac architecture support is unavailable; no changes made.') from None
+        try:
+            query=ctypes.CDLL('/usr/lib/libSystem.B.dylib',use_errno=True).sysctlbyname
+            query.argtypes=[ctypes.c_char_p,ctypes.c_void_p,ctypes.POINTER(ctypes.c_size_t),ctypes.c_void_p,ctypes.c_size_t]
+            query.restype=ctypes.c_int
+            translated=ctypes.c_int();size=ctypes.c_size_t(ctypes.sizeof(translated))
+            result=query(b'sysctl.proc_translated',ctypes.byref(translated),ctypes.byref(size),None,0)
+            if result==-1 and ctypes.get_errno()==errno.ENOENT:return
+            if result!=0 or size.value!=ctypes.sizeof(translated) or translated.value!=0:
+                raise OSError('Translated or uncertain process architecture.')
+        except (AttributeError,OSError,ctypes.ArgumentError):
+            raise ValueError('Use a native Mac interpreter; Rosetta or uncertain translation is refused before changes.') from None
+
+
+def _qualified_platform():
+    _candidate_platform()
+
 
 def _system_tool(name):
     import ctypes
@@ -302,6 +352,24 @@ def _fresh_identity(root,vault,python,args):
             'skip_desktop_refresh':args.skip_desktop_refresh,'source_sha256':_fresh_source()}
 
 
+def _initial_registration_present(inspected,*,platform=None):
+    """Installation owns the current definition; startup proves loaded/running."""
+    if (not isinstance(inspected,dict) or inspected.get('status')!='inspected'
+            or type(inspected.get('task_present')) is not bool):
+        raise ValueError('Initial service registration cannot be verified; journal preserved.')
+    if (sys.platform if platform is None else platform) in ('darwin','linux'):
+        native=inspected.get('native')
+        if not isinstance(native,dict) or type(native.get('file_present')) is not bool:
+            raise ValueError('Initial native service definition cannot be verified; journal preserved.')
+        if native['file_present']:
+            expected=inspected.get('expected_native_definition_sha256')
+            if (not isinstance(expected,str) or not re.fullmatch('[a-f0-9]{64}',expected)
+                    or native.get('definition_sha256')!=expected):
+                raise ValueError('Initial native service definition changed; journal preserved.')
+        return native['file_present']
+    return inspected['task_present']
+
+
 def _load_fresh(root,vault,python,args):
     value=setup_helpers().json_object(setup_helpers().read(root/'state/install-transaction.json'))
     if (not isinstance(value,dict) or value.get('format')!=1 or not re.fullmatch('[a-f0-9]{32}',value.get('install_id','')) or value.get('install_id')!=args.resume_install
@@ -420,8 +488,7 @@ def main():
     args=parser.parse_args(); root=Path(args.root).expanduser().resolve(); vault=Path(args.vault).expanduser().resolve()
     if sum(bool(value) for value in (args.resume_install,args.inspect_install,args.abandon_install))>1:
         parser.error('Choose one initial-install recovery action.')
-    if args.abandon_install and sys.platform!='win32':
-        raise ValueError('v0.1.9 mutating recovery is qualified for Windows only; no setup changes made.')
+    if args.abandon_install:_qualified_platform()
     if args.inspect_install or args.abandon_install:
         helpers=setup_helpers();helpers.host_context();helpers.runtime_paths(root)
         path=root/'state/install-transaction.json';record=helpers.json_object(helpers.read(path))
@@ -450,8 +517,7 @@ def main():
     if args.plan_out and (not args.validate_only or not client_mode):parser.error('--plan-out requires --validate-only and a client mode.')
     if args.client_plan and (not client_mode or not args.plan_sha256):parser.error('--client-plan requires a client mode and its --plan-sha256.')
     if args.refresh_only and (not args.refresh_clients or args.install_service or args.download_model):parser.error('--refresh-only requires --refresh-clients and cannot deploy models/services.')
-    if sys.platform!='win32' and (not args.validate_only or args.plan_out):
-        raise ValueError('v0.1.9 runtime/service setup is qualified for Windows only. Keep the accepted v0.1.7 on macOS/Linux until native qualification; no setup changes made.')
+    if not args.validate_only or args.plan_out:_qualified_platform()
     helpers=setup_helpers()
     if not args.validate_only or client_mode or args.install_service:helpers.host_context()
     if not vault.is_dir(): parser.error('Clone/open the existing vault first; --vault must exist.')
@@ -460,7 +526,7 @@ def main():
     resumed=_load_fresh(root,vault,Path(os.path.abspath(os.path.expanduser(args.reuse_python))),args) if args.resume_install else None
     if resumed is not None:_fresh_check(root,resumed)
     if existing and args.configure_clients and resumed is None:
-        raise ValueError('Existing runtimes require the verified forward update.py flow on Windows; macOS/Linux must keep accepted v0.1.7. The legacy configure-client preflight is refused before service stop.')
+        raise ValueError('Existing runtimes require the verified forward update.py flow. The legacy configure-client preflight is refused before service stop.')
     if existing and args.refresh_clients and not existing.get('device_id'):raise ValueError('Existing runtime has no device identity; review it before an upgrade.')
     if args.refresh_only:
         if not existing or existing.get('version')!=VERSION:
@@ -473,6 +539,9 @@ def main():
     if args.reuse_python: python=Path(os.path.abspath(os.path.expanduser(args.reuse_python)))
     else:
         if args.validate_only: parser.error('--validate-only requires --reuse-python.')
+        initial_journal=root/'state/install-transaction.json'
+        if initial_journal.exists() or initial_journal.is_symlink() or initial_journal.is_junction():
+            raise ValueError('Initial setup has a recorded journal; inspect or resume its UUID before provisioning.')
         python=helpers.provision(REPO,root,args.uv)
     if not python.is_file(): parser.error('The selected Python executable does not exist.')
     if args.install_service:helpers.service_python(python)
@@ -537,9 +606,7 @@ def main():
                 # inspect positively validates the native Task's action,
                 # interpreter, working directory and principal via _windows_task.
                 inspected=control('inspect')
-                if inspected.get('status')!='inspected' or type(inspected.get('task_present')) is not bool:
-                    raise ValueError('Initial service registration cannot be verified; journal preserved.')
-                if inspected['task_present']:
+                if _initial_registration_present(inspected):
                     if inspected.get('task_enabled') is not True:
                         raise ValueError('The owned initial Task was disabled; preserve that explicit owner action.')
                     result['service']={'status':'recovered owned registration'}

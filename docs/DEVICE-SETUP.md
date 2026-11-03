@@ -1,19 +1,19 @@
 # Set up or update a Second Brain device
 
-Workflow revision: **3 November 2026**. Windows v0.1.9 is a hardening candidate, not automatic deployment approval. Use the trusted handover's exact commit, manifest SHA256 and qualification report. Mac/Linux stay on accepted v0.1.7; do not clone or provision v0.1.9 on an owner device. Current dated deployment decisions take precedence over historical preparation notes.
+Workflow revision: **4 November 2026**. v0.2.0 is a portable hardening candidate, not automatic deployment approval. Use the trusted handover's exact commit, manifest SHA256 and qualification report. Keep owner devices on their accepted installation until the exact candidate and platform have qualification receipts. Declared candidate hosts are Windows x64, Mac ARM64/Intel and Linux x64; physical-device installation and reboot remain separate acceptance checks. Current dated deployment decisions take precedence over historical preparation notes.
 
-The [v0.1.9 corrective notes](RELEASE-v0.1.9.md) describe the process-identity refusal found during v0.1.8 acceptance. Do not newly deploy v0.1.8. On a pre-End stop refusal, preserve the runtime and queue; do not kill cached PIDs, clear transactions, or repeat a completed recovery UUID. A candidate version and a green historical test are not current qualification.
+The [v0.2.0 candidate notes](RELEASE-v0.2.0.md) describe the current Windows/POSIX changes. The [v0.1.9 notes](RELEASE-v0.1.9.md) retain the earlier Windows process-identity incident. Do not newly deploy v0.1.8 or v0.1.9. No owner v0.1.9 starting installation is accepted by this guide; a controlled one needs its own separately recorded upgrade qualification. On a pre-End stop refusal, preserve the runtime and queue; do not kill cached PIDs, clear transactions, or repeat a completed recovery UUID. A candidate version and a green historical test are not current qualification.
 
-Read the [November review follow-through](REVIEW-FOLLOWUP-20261102.md) with this guide. Before compiling on v0.1.9, the designated maintainer must explicitly select a native `codex.exe`; the previous `.cmd` discovery has no fallback. Capture-only devices skip that compiler selection. The follow-through also explains generated index-history scope, byte capacity, guarded writes, update admission and retained evidence. It does not authorize deployment or change the existing v0.1.7 installation/schedule.
+Read the [November review follow-through](REVIEW-FOLLOWUP-20261102.md) with this guide. Before compiling on v0.2.0, the designated maintainer must explicitly select a native `codex.exe`; the previous `.cmd` discovery has no fallback. Capture-only devices skip that compiler selection. The follow-through also explains generated index-history scope, byte capacity, guarded writes, update admission and retained evidence. It does not authorize deployment or change the existing v0.1.7 installation/schedule.
 
 ## Recover an interrupted initial Windows setup
 
 Initial setup and upgrading an installed runtime are separate operations. A sealed client-settings plan cannot authorize replacing a running installation. Use the approved forward updater for existing devices.
 
-If initial setup fails, preserve its runtime and retained Python. Inspect only the non-secret recovery receipt; do not print/share `state/install-transaction.json`, which can contain a planned credential and selected client configuration:
+If initial setup fails, preserve its runtime and retained Python. Set `$brainRoot`, `$brainVault` and `$brainRelease` to the inspected absolute original paths used during setup (the fresh-runtime section below explains these variables). Use the verified host `$BrainBasePython` for the standard-library inspection below. Then read `options.python` from the non-secret inspection receipt and verify that exact interpreter before setting `$brainPython` for resume; do not guess a base/target Python. Inspect only the non-secret recovery receipt; do not print/share `state/install-transaction.json`, which can contain a planned credential and selected client configuration:
 
 ```powershell
-& $brainPython -I "$brainRelease/install.py" --root $brainRoot --vault $brainVault --inspect-install
+& $BrainBasePython -I -B "$brainRelease/install.py" --root $brainRoot --vault $brainVault --inspect-install
 if ($LASTEXITCODE -ne 0) { throw 'Initial setup inspection failed; preserve state for review.' }
 ```
 
@@ -30,7 +30,7 @@ These recovery commands do not establish named-client search, remote publication
 | No existing brain | Create a blank starter and the person's own private notes repo. |
 | Adding the same owner's device | Reuse that owner's notes history; create a new capture-only runtime. |
 | Importing an existing vault/library | Inventory and back up outside the destination; approve the mapping before copying. |
-| Runtime already installed | Inspect it; use the forward updater. Client-only refresh applies to v0.1.8/v0.1.9 using the installed version's own checkout. |
+| Runtime already installed | Inspect it; use the forward updater. Client-only refresh applies to v0.1.8/v0.2.0 using the installed version's own checkout. |
 
 Resolve account, actual vault/runtime/checkout paths, Git identity, timezone and selected clients in one short intake. A new independent first maintainer needs an explicit ownership choice; another device of an existing shared brain is capture-only. No automatic wiki model schedule or new paid provider is enabled by this guide.
 
@@ -60,7 +60,7 @@ GitHub authentication is attended: the user runs `gh auth login --web`, complete
 
 ## Verify the software before execution
 
-Clone the exact approved tag into a NEW plain checkout, with LF Git bytes. For an upgrade the location must be `<runtime>/releases/v0.1.9`. Reuse an existing cache only after verification; never reset/delete it to conceal a failure. The handover's trusted helper checks expected HTTPS origin, tag/HEAD commit, manifest SHA256, staged/tracked file set, payload bytes and unexpected files before any downloaded Python runs. The document/helper itself must come from a trusted handover.
+Clone the exact approved tag into a NEW plain checkout, with LF Git bytes. For an upgrade the location must be `<runtime>/releases/v0.2.0`. Reuse an existing cache only after verification; never reset/delete it to conceal a failure. The handover's trusted helper checks expected HTTPS origin, tag/HEAD commit, manifest SHA256, staged/tracked file set, payload bytes and unexpected files before any downloaded Python runs. The document/helper itself must come from a trusted handover.
 
 The following standalone consistency check is useful AFTER that independent pin check. It cannot authenticate itself:
 
@@ -89,7 +89,7 @@ Use the verified locked profile: FastEmbed only, with reranking disabled. LiteLL
 The same isolated entrypoint, using the already recorded absolute host executables:
 
 ```powershell
-& $BrainBasePython -I -B install.py --root <new runtime> --vault <existing vault> --role capture --uv $BrainUv --download-model
+& $BrainBasePython -I -B install.py --root "<new runtime>" --vault "<existing vault>" --role capture --uv $BrainUv --download-model
 ```
 
 These commands create the runtime without registering a service. Before any registration or startup, use the trusted team kit's sealed `prepare_device.py` plan/apply workflow to select the actual IANA timezone and bootstrap Control only for an explicitly new independent maintainer. Asia/Karachi is a compatibility default, not a detected timezone. The helper validates and preserves the complete private install journal, then applies the chosen timezone before the first service/capture. Do not hand-edit device.json, a journal or plan hashes; without a matching qualified kit, leave first-start acceptance pending.
@@ -104,7 +104,7 @@ Back up host-visible settings and preserve unrelated entries, environment values
 
 If an existing `second-brain` entry points at a different or unknown runtime, preserve the refusal. Back up that exact host-visible settings file, inspect its command/args and the previous target, and establish whether it is still used. With the client closed or through its supported settings UI, the owner may remove or rename only a confirmed obsolete entry, then re-plan the selected integration. If its ownership or purpose remains uncertain, leave it intact and omit that client until resolved. Do not remove the whole config, alter unrelated entries, guess a new path, or repeatedly reinstall over it. A scalar/malformed managed entry also needs this attended inspection.
 
-For an existing **v0.1.8 or v0.1.9** runtime, use the installed version's own verified checkout for `install.py --reuse-python <recorded Python> --refresh-clients --refresh-only --client <chosen client> --root <root> --vault <vault>`. The checkout version must match `device.json`; this refreshes owned entries without deploying software or creating missing integrations. Inspect a read-only `--validate-only` plan first. The v0.1.7 installer does not support these refresh flags: existing entries refresh during the first forward upgrade. To add a missing integration, use that client's supported MCP settings with backup/merge and a real invocation; do not rerun fresh configuration over an installed runtime.
+For an existing **v0.1.8 or v0.2.0** runtime, use the installed version's own verified checkout for this schematic argument list (not a shell command): `install.py --reuse-python <recorded Python> --refresh-clients --refresh-only --client <chosen client> --root <root> --vault <vault>`. The checkout version must match `device.json`; this refreshes owned entries without deploying software or creating missing integrations. Inspect a read-only `--validate-only` plan first. The v0.1.7 installer does not support these refresh flags: existing entries refresh during the first forward upgrade. To add a missing integration, use that client's supported MCP settings with backup/merge and a real invocation; do not rerun fresh configuration over an installed runtime.
 
 ```json
 {"mcpServers":{"second-brain":{"command":"<recorded absolute venv Python>","args":["<runtime>/app/brain_client.py"]}}}
@@ -126,23 +126,32 @@ The defaults allow eight hours overall with a 30-minute no-observable-row-count-
 
 Verify a late-imported known source in the indexed arm of search and through an exact read. Fresh-file fallback/read alone is not index or semantic coverage. Record model, counts and hashes without copying note bodies into a team report.
 
-## Forward Windows update: v0.1.7 or controlled v0.1.8 to v0.1.9
+## Forward Windows update: v0.1.7 or controlled v0.1.8 to v0.2.0
 
 Keep the existing service healthy during preflight. Read `device.json` and require the retained Python to match the recorded installed source version's `.venv/Scripts/python.exe`: accepted v0.1.7, or the independently verified controlled-acceptance v0.1.8 installation. Check its host-visible absolute non-Store base and Python 3.12, plus `import filelock, psutil` in isolated mode. If this cannot be established, preserve the installation and obtain a reviewed recovery path; do not substitute a bare host Python, a new unpinned environment or the target venv.
 
-Require no active `state/service-transaction.json` before qualifying either forward path. A v0.1.8 transaction is bound to the original v0.1.8 controller and cannot be adopted by v0.1.9. Preserve any such hold, snapshot and original checkout for a separately reviewed recovery path; do not clear it or edit its controller binding to enable the upgrade.
+Require no active `state/service-transaction.json` before qualifying either forward path. A v0.1.8 transaction is bound to the original v0.1.8 controller and cannot be adopted by v0.2.0. Preserve any such hold, snapshot and original checkout for a separately reviewed recovery path; do not clear it or edit its controller binding to enable the upgrade.
 
 The updater inspects task ownership before creating a hold. A missing or explicitly disabled task is refused; it does not silently override an owner's stop. Inspect and deliberately restore/start the intended existing service before requesting the forward update. A foreign or unreadable transaction remains preserved for inspection, with no guessed recovery UUID.
 
-Place the independently verified new source at EXACTLY `<runtime>/releases/v0.1.9`. Change into it and run its NEW updater with the RETAINED installed Python:
+The following `text` block is a schematic argument template, not a paste-ready command. Place the independently verified new source at EXACTLY `<runtime>/releases/v0.2.0`. Change into it and run its NEW updater with the RETAINED installed Python:
 
 ```text
-<retained v0.1.7 Python> -I <verified v0.1.9 checkout>/update.py --root <runtime root> --version v0.1.9
+"<retained v0.1.7 Python>" -I -B "<verified v0.2.0 checkout>/update.py" --root "<runtime root>" --version v0.2.0
 ```
 
-For a controlled-acceptance v0.1.8 installation, substitute its recorded retained Python for the v0.1.7 placeholder. The new verified v0.1.9 updater and target checkout stay the same. Verify both source-version paths and their rollback/recovery controller selection before promotion; the old controller must not handle the switch.
+In ordinary PowerShell, set `$retainedPython` to the inspected `device.json` Python, `$brainRoot` to the inspected runtime and `$brainRelease` to its independently verified new checkout. Execute:
 
-Do not manually run `uv sync` first. The updater rebuilds the target `.venv` itself, preserving a cached one by quarantine. Running the updater from that same target Python is refused before stopping. Running a different checkout's updater is also refused before state/provisioning. Do not use the old v0.1.7 updater; its legacy configure-client preflight is intentionally refused before service stop. Mac/Linux must not attempt this upgrade, including its old clone/sync path.
+```powershell
+if ([IO.Path]::GetFullPath($brainRelease) -ne [IO.Path]::GetFullPath((Join-Path $brainRoot 'releases/v0.2.0'))) { throw 'New checkout is not the exact runtime release path.' }
+Set-Location -LiteralPath $brainRelease
+& $retainedPython -I -B (Join-Path $brainRelease 'update.py') --root $brainRoot --version v0.2.0
+if ($LASTEXITCODE -ne 0) { throw 'Update did not complete; preserve its transaction and inspect recovery.' }
+```
+
+For a controlled-acceptance v0.1.8 installation, substitute its recorded retained Python for the v0.1.7 placeholder. The new verified v0.2.0 updater and target checkout stay the same. Verify both source-version paths and their rollback/recovery controller selection before promotion; the old controller must not handle the switch.
+
+Do not manually run `uv sync` first. The updater rebuilds the target `.venv` itself, preserving a cached one by quarantine. Running the updater from that same target Python is refused before stopping. Running a different checkout's updater is also refused before state/provisioning. Do not use the old v0.1.7 updater; its legacy configure-client preflight is intentionally refused before service stop. The Windows commands above do not establish POSIX acceptance. On Mac/Linux, use the verified retained `.venv/bin/python`, place the new checkout in exactly `<runtime>/releases/v0.2.0`, and run its new updater with that retained Python only after the platform-specific matrix passes. The existing accepted Mac checkout may be outside the runtime; preserve it and its Python. This document does not yet qualify fresh Mac/Linux onboarding; use the matched team kit only after its own POSIX preparation/service steps have receipts. The updater path here concerns an existing independently verified installation. Do not use the old updater or manually pre-provision the target environment.
 
 The new flow seals client/device hashes and a verified prior-app snapshot before stop, uses the verified new controller for both forward and rollback actions, releases parent writer locks before any stop, and requires a fresh birth/heartbeat plus authenticated expected-version health before releasing the exact hold. It preserves notes, local index, credentials, identity, role and accepted source policy. Client edits/reopened Desktop are preserved and reported as deferred. Configuration checks do not prove every GUI client has reconnected.
 
@@ -150,11 +159,18 @@ The new flow seals client/device hashes and a verified prior-app snapshot before
 
 Read private `state/upgrade-status.json` and `service recover` first. Keep the original verified new checkout, snapshot, UUID and retained/new environments. Do not clear a transaction file, delete a cache, reuse a completed UUID or kill whichever PID owns a port. An unverified partial stop leaves the hold for diagnosis. A positively refused pre-End stop may be cancelled only after unchanged-state proof; it is not a successful shutdown.
 
-Use the EXACT original new checkout's `update.py --root <root> --recover --hold-id <recorded UUID>`. A verified retained Python or the recorded new controller Python can launch recovery; the actual children use the recorded new environment, which must still be intact. Recovery acquires the update lock, checks snapshot/source identity, stops safely before restoring exact app/device bytes, preserves concurrent client edits, reinstalls the task and verifies old-version health. Legacy heartbeat availability is reported honestly; a restored old listener is not new-release acceptance.
+Use the EXACT original new checkout with its verified recorded Python in isolated mode. In PowerShell, set `$recoveryPython`, `$originalCheckout`, `$brainRoot` and `$holdId` from the preserved verified receipt, then execute:
 
-A hold created by v0.1.8 still requires its original v0.1.8 checkout; the v0.1.9 updater cannot take it over. If that controller cannot complete a verified stop, preserve the hold and seek a separately reviewed incident recovery path. Do not copy the corrected module into the old checkout or change its sealed identity.
+```powershell
+& $recoveryPython -I -B (Join-Path $originalCheckout 'update.py') --root $brainRoot --recover --hold-id $holdId
+if ($LASTEXITCODE -ne 0) { throw 'Recovery failed; preserve its receipt and hold' }
+```
 
-After automatic rollback or verified recovery, the installed app and its routine service controller are the old version again. Use the verified new v0.1.9 updater for a later upgrade attempt; an unfinished recovery still uses its original recorded checkout and UUID. Inspect receipts before retrying, and do not loop upgrades to hide an unchanged failure. Share only concise event/count/hash receipts; private snapshots, sealed plans, credentials, raw logs and note bodies stay local.
+ This is the original transaction/controller identity, never a guessed new UUID. A verified retained Python or the recorded new controller Python can launch recovery; the actual children use the recorded new environment, which must still be intact. Recovery acquires the update lock, checks snapshot/source identity, stops safely before restoring exact app/device bytes, preserves concurrent client edits, restores and verifies the sealed original native registration and previous-release binding before starting and checking old-version health. Legacy heartbeat availability is reported honestly; a restored old listener is not new-release acceptance.
+
+A hold created by v0.1.8 still requires its original v0.1.8 checkout; the v0.2.0 updater cannot take it over. If that controller cannot complete a verified stop, preserve the hold and seek a separately reviewed incident recovery path. Do not copy the corrected module into the old checkout or change its sealed identity.
+
+After automatic rollback or verified recovery, the installed app and its routine service controller are the old version again. Use the verified new v0.2.0 updater for a later upgrade attempt; an unfinished recovery still uses its original recorded checkout and UUID. Inspect receipts before retrying, and do not loop upgrades to hide an unchanged failure. Share only concise event/count/hash receipts; private snapshots, sealed plans, credentials, raw logs and note bodies stay local.
 
 ## Acceptance before sharing with the team
 

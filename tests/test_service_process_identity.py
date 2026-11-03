@@ -65,6 +65,8 @@ def test_foreign_and_multiple_listeners_refused_without_process_adoption(brain,m
 
 @pytest.mark.parametrize('orphan,changed',[(False,False),(True,False),(False,True)])
 def test_listener_requires_live_recorded_supervisor_and_same_socket(brain,monkeypatch,orphan,changed):
+    # This fake models Windows' separate launcher/base-interpreter processes.
+    monkeypatch.setattr(processes.sys,'platform','win32')
     registry=cfg.ROOT/'state/service-pids.json';registry.write_text(json.dumps({'supervisor':70}))
     closed=[]
     launcher=SimpleNamespace(parent_pid=69 if orphan else 70,birth=200)

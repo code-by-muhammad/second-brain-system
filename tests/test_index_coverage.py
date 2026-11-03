@@ -25,6 +25,8 @@ def database():
     connection.executescript('''
       CREATE TABLE project(id INTEGER, name TEXT, path TEXT, is_active INTEGER);
       CREATE TABLE entity(id INTEGER, project_id INTEGER, file_path TEXT, checksum TEXT, content_type TEXT,title TEXT,permalink TEXT);
+      CREATE TABLE observation(id INTEGER PRIMARY KEY,project_id INTEGER);
+      CREATE TABLE relation(id INTEGER PRIMARY KEY,project_id INTEGER);
       CREATE TABLE search_index(entity_id INTEGER,id INTEGER,type TEXT,title TEXT,permalink TEXT,content_snippet TEXT,category TEXT,relation_type TEXT,project_id INTEGER);
       CREATE TABLE search_vector_chunks(id INTEGER,entity_id INTEGER,project_id INTEGER,chunk_key TEXT,chunk_text TEXT,source_hash TEXT,entity_fingerprint TEXT,embedding_model TEXT,vector_index TEXT,embedding_status TEXT);
       CREATE TABLE search_vector_embeddings_rowids(rowid INTEGER PRIMARY KEY,id,chunk_id INTEGER,chunk_offset INTEGER);

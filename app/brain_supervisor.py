@@ -79,6 +79,9 @@ def main(owned=None):
             time.sleep(20)
 
 if __name__=='__main__':
+    if __import__('sys').platform=='darwin':
+        from brain_mac_registration import entry_environment
+        entry_environment(__import__('os').environ.keys())
     processes.validate_environment(entrypoint=True)
     processes.enter_supervisor_job()
     owned={}

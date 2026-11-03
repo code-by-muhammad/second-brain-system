@@ -9,9 +9,54 @@ REMOTE='https://github.com/code-by-muhammad/second-brain-system.git'
 _INSTALLER_CACHE=None
 _VERIFIED_HASHES={}
 
+def _candidate_platform():
+    """Admit the declared native candidate matrix; this is not release approval."""
+    import errno
+    import struct
+    if struct.calcsize('P')!=8:
+        raise ValueError('This candidate requires a native 64-bit supported interpreter; no changes made.')
+    if sys.platform=='win32':
+        # Query the kernel, not WMI/environment-derived architecture strings.
+        try:import ctypes
+        except ImportError:raise ValueError('Native Windows architecture support is unavailable; no changes made.') from None
+        try:
+            kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+            kernel.GetCurrentProcess.argtypes=[];kernel.GetCurrentProcess.restype=ctypes.c_void_p
+            query=kernel.IsWow64Process2
+            query.argtypes=[ctypes.c_void_p,ctypes.POINTER(ctypes.c_ushort),ctypes.POINTER(ctypes.c_ushort)]
+            query.restype=ctypes.c_int
+            process_machine,native_machine=ctypes.c_ushort(),ctypes.c_ushort()
+            if not query(kernel.GetCurrentProcess(),ctypes.byref(process_machine),ctypes.byref(native_machine)):
+                raise OSError('Architecture query failed.')
+        except (AttributeError,OSError,ctypes.ArgumentError):
+            raise ValueError('Native Windows architecture is unavailable; no changes made.') from None
+        if process_machine.value!=0 or native_machine.value!=0x8664:
+            raise ValueError('This candidate supports native Windows x64 only; no changes made.')
+        return
+    if sys.platform not in ('darwin','linux'):
+        raise ValueError('Unsupported candidate operating system; no changes made.')
+    try:machine=os.uname().machine
+    except (AttributeError,OSError):raise ValueError('Native architecture is unavailable; no changes made.') from None
+    if machine not in (('arm64','x86_64') if sys.platform=='darwin' else ('x86_64',)):
+        raise ValueError('Unsupported candidate architecture; no changes made.')
+    if sys.platform=='darwin':
+        try:import ctypes
+        except ImportError:raise ValueError('Native Mac architecture support is unavailable; no changes made.') from None
+        try:
+            query=ctypes.CDLL('/usr/lib/libSystem.B.dylib',use_errno=True).sysctlbyname
+            query.argtypes=[ctypes.c_char_p,ctypes.c_void_p,ctypes.POINTER(ctypes.c_size_t),ctypes.c_void_p,ctypes.c_size_t]
+            query.restype=ctypes.c_int
+            translated=ctypes.c_int();size=ctypes.c_size_t(ctypes.sizeof(translated))
+            result=query(b'sysctl.proc_translated',ctypes.byref(translated),ctypes.byref(size),None,0)
+            if result==-1 and ctypes.get_errno()==errno.ENOENT:return
+            if result!=0 or size.value!=ctypes.sizeof(translated) or translated.value!=0:
+                raise OSError('Translated or uncertain process architecture.')
+        except (AttributeError,OSError,ctypes.ArgumentError):
+            raise ValueError('Use a native Mac interpreter; Rosetta or uncertain translation is refused before changes.') from None
+
+
 def _qualified_platform():
-    if sys.platform!='win32':
-        raise ValueError('v0.1.9 update/recovery is qualified for Windows only. Keep the accepted v0.1.7 on macOS/Linux; no update changes made.')
+    _candidate_platform()
 
 def _forward_binding(root,version):
     if not re.fullmatch(r'v\d+\.\d+\.\d+',version or ''):raise ValueError('Select an explicit approved release tag.')
@@ -68,11 +113,51 @@ def _read(path):return installer().setup_helpers().read(Path(path))
 def _digest(data):return None if data is None else hashlib.sha256(data).hexdigest()
 
 
-def snapshot(root,python,plan=None,*,controller_checkout=None,controller_identity=None):
+def _registration_record(record,previous):
+    """The native controller supplies authority; seal its exact bounded record."""
+    common={'kind','definition_sha256','enabled','interpreter'}
+    if (not isinstance(record,dict) or record.get('kind')!=sys.platform
+        or set(record)!=(common|({'xml','owner_sid'} if sys.platform=='win32' else set()))
+        or record.get('enabled') is not True
+        or not isinstance(record.get('definition_sha256'),str)
+        or not re.fullmatch('[a-f0-9]{64}',record['definition_sha256'])
+        or not isinstance(record.get('interpreter'),str) or not Path(record['interpreter']).is_absolute()
+        or record['interpreter']!=previous['python']):
+        raise ValueError('Native registration is not the enabled recorded device interpreter; no hold created.')
+    if sys.platform=='win32':
+        if (not isinstance(record['xml'],str) or not 0<len(record['xml'].encode('utf-8'))<=65536
+            or not isinstance(record['owner_sid'],str) or not re.fullmatch(r'S-1-[0-9]+(?:-[0-9]+)+',record['owner_sid'])):
+            raise ValueError('Native task snapshot is malformed or exceeds its bound.')
+    return dict(record)
+
+
+def _binding_payload(previous,python,target):
+    selected={key:previous[key] for key in ('release_root','python','version')}
+    return (json.dumps({**selected,'controller_python':str(python),'snapshot':str(target)},indent=2)+'\n').encode('utf-8')
+
+
+def _binding_images(target,value):
+    record=value.get('previous_binding')
+    if (not isinstance(record,dict) or set(record)!={'before_sha256','after_sha256'}
+        or record['before_sha256'] is not None and not re.fullmatch('[a-f0-9]{64}',str(record['before_sha256']))
+        or not re.fullmatch('[a-f0-9]{64}',str(record['after_sha256']))):
+        raise ValueError('Snapshot previous-binding identity is incomplete.')
+    before=_read(Path(target)/'previous-binding.before');after=_read(Path(target)/'previous-binding.after')
+    if (before is not None and len(before)>65536 or after is None or len(after)>65536
+        or _digest(before)!=record['before_sha256'] or _digest(after)!=record['after_sha256']
+        or after!=_binding_payload(value['previous'],value['controller_python'],target)):
+        raise ValueError('Snapshot previous-binding bytes changed; no restore performed.')
+    return before,after
+
+
+def snapshot(root,python,plan=None,*,controller_checkout=None,controller_identity=None,registration=None):
     """Save exactly the sealed paths before stop, never live index/auth/note state."""
     helpers=installer();support=helpers.setup_helpers()
     plan=plan or {'format':1,'root':str(root),'python':str(python),'files':[]}
     support.validate_plan(plan,root,python);support.current(plan)
+    registration=_registration_record(registration,json.loads(_read(root/'device.json')))
+    binding_before=_read(root/'state/previous-release.json')
+    if binding_before is not None and len(binding_before)>65536:raise ValueError('Previous-release metadata exceeds its bound.')
     helpers.private_dir(root/'backups')
     target=Path(tempfile.mkdtemp(prefix='upgrade-',dir=root/'backups'));helpers.private_dir(target)
     installed=root/'app'
@@ -99,11 +184,16 @@ def snapshot(root,python,plan=None,*,controller_checkout=None,controller_identit
         if _digest(data)!=row['before_sha256']:raise ValueError('Client changed before stop; old service is still healthy.')
         if data is not None:helpers.atomic(target/str(index),data)
         records.append({key:row.get(key) for key in ('path','client','before_sha256','after_sha256')})
-    value={'format':2,'root':str(root),'controller_python':str(python),'controller_checkout':str(controller_checkout) if controller_checkout else None,
+    binding_after=_binding_payload(json.loads(device),python,target)
+    if binding_before is not None:helpers.atomic(target/'previous-binding.before',binding_before)
+    helpers.atomic(target/'previous-binding.after',binding_after)
+    value={'format':3,'root':str(root),'controller_python':str(python),'controller_checkout':str(controller_checkout) if controller_checkout else None,
            'controller_identity':controller_identity,'previous':json.loads(device),
-           'files':records,'app_sha256':app_hashes}
+           'files':records,'app_sha256':app_hashes,'registration':registration,
+           'previous_binding':{'before_sha256':_digest(binding_before),'after_sha256':_digest(binding_after)}}
     helpers.atomic(target/'snapshot.json',json.dumps(value,indent=2)+'\n')
     support.current(plan)
+    if _read(root/'state/previous-release.json')!=binding_before:raise ValueError('Previous-release metadata changed before stop; old service is still healthy.')
     return target
 
 
@@ -111,7 +201,7 @@ def _snapshot(root,target):
     target=Path(target)
     if target.is_symlink() or os.path.isjunction(target) or not target.resolve().is_relative_to(root/'backups'):raise ValueError('Unsafe upgrade snapshot path.')
     value=json.loads(_read(target/'snapshot.json'))
-    if not isinstance(value,dict) or value.get('format')!=2 or value.get('root')!=str(root):raise ValueError('Unsupported snapshot identity; preserve it for review.')
+    if not isinstance(value,dict) or value.get('format')!=3 or value.get('root')!=str(root):raise ValueError('Unsupported snapshot identity; preserve it for review.')
     for index,row in enumerate(value['files']):
         if row['before_sha256'] is not None and _digest(_read(target/str(index)))!=row['before_sha256']:raise ValueError('Upgrade snapshot bytes changed; no restore performed.')
     for name,expected in value['app_sha256'].items():
@@ -119,6 +209,8 @@ def _snapshot(root,target):
         if not path.resolve().is_relative_to(target/'app') or _digest(_read(path))!=expected:raise ValueError('Upgrade code snapshot changed; no restore performed.')
     actual={path.relative_to(target/'app').as_posix() for path in (target/'app').rglob('*') if path.is_file()}
     if actual!=set(value['app_sha256']):raise ValueError('Upgrade snapshot contains extra code; no restore performed.')
+    _registration_record(value.get('registration'),value['previous'])
+    _binding_images(target,value)
     return value
 
 
@@ -325,22 +417,37 @@ def _receipt(root,value):
 
 
 def _restart_previous(root,saved,python,checkout,hold,*,restore_bytes=True):
-    previous=_snapshot(root,saved)['previous']
-    # No parent work locks may be held during a controller stop.
+    sealed=_snapshot(root,saved);previous=sealed['previous']
+    before,after=_binding_images(saved,sealed)
+    if _read(root/'state/previous-release.json') not in (before,after):
+        raise ValueError('Previous-release metadata changed; recovery refused before stopping.')
+    # Keep the forward interpreter selected until original native restoration.
     if restore_bytes:controller(python,checkout,root,'service','stop','--hold-id',hold,'--wait-seconds','300')
     with _work_locks(root,timeout=300) if restore_bytes else contextlib.nullcontext():
         recovery=restore(root,saved) if restore_bytes else {'status':'runtime not switched; original bytes retained','deferred_clients':[]}
-        controller(python,checkout,root,'service','install')
+        if restore_bytes:
+            registration=controller(python,checkout,root,'service','install')
+            if (registration.get('restored') not in ('sealed-retained','sealed-restored')
+                or registration.get('definition_sha256')!=sealed['registration']['definition_sha256']):
+                raise ValueError('Original native registration restoration was not verified; hold preserved.')
+            recovery['registration']=registration
+    binding=_restore_previous_binding(root,saved)
     started=controller(python,checkout,root,'service','start','--hold-id',hold,'--allow-legacy')
     health=wait_health(python,root,previous['version'],checkout=checkout)
     finished=controller(python,checkout,root,'service','finish','--hold-id',hold,'--expected-version',previous['version'],'--allow-legacy')
-    return {'status':'previous runtime restored','version':previous['version'],'health':health,'start':started,'finish':finished,**recovery}
+    return {'status':'previous runtime restored','version':previous['version'],'health':health,'start':started,'finish':finished,'previous_binding':binding,**recovery}
 
-def _restore_previous_binding(root,before,after):
-    path=root/'state/previous-release.json'
-    if _read(path)!=after:raise ValueError('Previous-release metadata changed; preserve it for review.')
-    if before is None:path.unlink()
+def _restore_previous_binding(root,saved):
+    value=_snapshot(root,saved);before,after=_binding_images(saved,value)
+    path=root/'state/previous-release.json';current=_read(path)
+    if current==before:return {'status':'original binding retained','sha256':_digest(before)}
+    if current!=after:raise ValueError('Previous-release metadata changed; preserve the active hold for review.')
+    if before is None:
+        if _read(path)!=after:raise ValueError('Previous-release metadata changed before removal; hold preserved.')
+        path.unlink()
     else:installer().atomic(path,before,expected_sha256=_digest(after))
+    if _read(path)!=before:raise ValueError('Previous-release restoration was not verified; hold preserved.')
+    return {'status':'original binding restored','sha256':_digest(before)}
 
 
 def _recovery_binding(root,hold):
@@ -375,13 +482,13 @@ def recover(root,hold,checkout=None):
     if checkout is not None and Path(checkout).resolve()!=selected.resolve():raise ValueError('Recovery controller checkout mismatch.')
     value=_snapshot(root,saved);python=Path(value['controller_python']);checkout=selected
     installer().setup_helpers().service_python(python)
-    _receipt(root,{'status':'recovery in progress','hold_id':hold,'snapshot':str(saved),'observed_version':json.loads(_read(root/'device.json')).get('version')})
+    _receipt(root,{'status':'recovery in progress','hold_id':hold,'snapshot':str(saved) if saved is not None else None,'observed_version':json.loads(_read(root/'device.json')).get('version')})
     try:
         result=_restart_previous(root,saved,python,checkout,hold)
     except BaseException as error:
-        _receipt(root,{'status':'recovery required','hold_id':hold,'snapshot':str(saved),'error_type':type(error).__name__,'pending_work':'preserved'})
+        _receipt(root,{'status':'recovery required','hold_id':hold,'snapshot':str(saved) if saved is not None else None,'error_type':type(error).__name__,'pending_work':'preserved'})
         raise
-    return _receipt(root,{'status':'recovered','hold_id':hold,'snapshot':str(saved),'recovery':result})
+    return _receipt(root,{'status':'recovered','hold_id':hold,'snapshot':str(saved) if saved is not None else None,'recovery':result})
 
 
 def main():
@@ -435,22 +542,21 @@ def perform(root,version,migrate_wiki=False,requeue_unverified=False,*,uv=None,d
     summary.update(kind='non-executable client-plan summary',plan_sha256=_digest(plan_bytes),
                    files=[{key:row.get(key) for key in ('path','client','before_sha256','after_sha256')} for row in plan['files']])
     installer().atomic(plan_path,json.dumps(summary,indent=2)+'\n',expected_sha256=_digest(plan_bytes))
-    saved=snapshot(root,python,plan,controller_checkout=release,controller_identity=info.get('git_identity'))
     previous={key:device[key] for key in ('release_root','python','version')}
-    previous_before=_read(root/'state/previous-release.json')
-    previous_after=(json.dumps({**previous,'controller_python':str(python),'snapshot':str(saved)},indent=2)+'\n').encode('utf-8')
-    support.current(plan)
-    if _digest(_read(root/'device.json'))!=plan.get('device_before_sha256'):raise ValueError('Device changed before stop; re-plan.')
-    stopped=False;switched=False;migration=None;binding_written=False
-    _receipt(root,{'status':'in progress','hold_id':hold,'snapshot':str(saved),'target':info['version']})
+    saved=None;stopped=False;switched=False;migration=None
     try:
         inspected=controller(python,release,root,'service','inspect')
-        if inspected.get('status')!='inspected':raise ValueError('Task ownership preflight did not complete; no hold created.')
+        if inspected.get('status')!='inspected':raise ValueError('Native ownership preflight did not complete; no hold created.')
         if inspected.get('task_present') is not True or inspected.get('task_enabled') is not True:
             raise ValueError('The owned task is absent or explicitly stopped; inspect it and explicitly start it before requesting this update.')
+        registration=_registration_record(inspected.get('registration'),device)
+        saved=snapshot(root,python,plan,controller_checkout=release,controller_identity=info.get('git_identity'),registration=registration)
+        sealed=_snapshot(root,saved);_,previous_after=_binding_images(saved,sealed)
+        support.current(plan)
+        if _digest(_read(root/'device.json'))!=plan.get('device_before_sha256'):raise ValueError('Device changed before stop; re-plan.')
+        _receipt(root,{'status':'in progress','hold_id':hold,'snapshot':str(saved) if saved is not None else None,'target':info['version']})
         controller(python,release,root,'service','hold','--hold-id',hold,'--snapshot',str(saved))
-        installer().atomic(root/'state/previous-release.json',previous_after,expected_sha256=_digest(previous_before))
-        binding_written=True
+        installer().atomic(root/'state/previous-release.json',previous_after,expected_sha256=sealed['previous_binding']['before_sha256'])
         stop=controller(python,release,root,'service','stop','--hold-id',hold,'--wait-seconds','300')
         if stop.get('status')!='stopped' or not stop.get('empty_at_filetime'):raise ValueError('Controller supplied no verified quiescence.')
         stopped=True
@@ -478,36 +584,35 @@ def perform(root,version,migrate_wiki=False,requeue_unverified=False,*,uv=None,d
     except BaseException as error:
         if not stopped:
             if not (root/'state/service-transaction.json').exists():
-                _receipt(root,{'status':'update deferred; no hold created','hold_id':hold,'snapshot':str(saved),
+                _receipt(root,{'status':'update deferred; no hold created','hold_id':hold,'snapshot':str(saved) if saved is not None else None,
                                'error_type':type(error).__name__,'pending_work':'preserved'})
                 raise RuntimeError('Update deferred before a hold was created; original runtime retained. Inspect upgrade-status.json.') from error
             try:observed=json.loads(_read(root/'state/service-transaction.json'))
             except (OSError,ValueError,TypeError):observed=None
             if (not isinstance(observed,dict) or observed.get('hold_id')!=hold
                     or observed.get('root')!=str(root) or observed.get('snapshot')!=str(saved)):
-                _receipt(root,{'status':'transaction inspection required','attempt_hold_id':hold,'snapshot':str(saved),
+                _receipt(root,{'status':'transaction inspection required','attempt_hold_id':hold,'snapshot':str(saved) if saved is not None else None,
                                'phase':'pre-stop hold ownership','error_type':type(error).__name__,'pending_work':'preserved'})
                 raise RuntimeError('A different or unreadable transaction was observed; preserve it and inspect service recover before any further action.') from error
             try:
+                _restore_previous_binding(root,saved)
                 cancellation=controller(python,release,root,'service','cancel','--hold-id',hold)
-                if binding_written:_restore_previous_binding(root,previous_before,previous_after)
-            except Exception:
-                _receipt(root,{'status':'recovery required','hold_id':hold,'snapshot':str(saved),'phase':'stop refused; no runtime switch','error_type':type(error).__name__,'pending_work':'preserved'})
+            except Exception as recovery_error:
+                _receipt(root,{'status':'recovery required','hold_id':hold,'snapshot':str(saved) if saved is not None else None,'phase':'stop refused; no runtime switch','error_type':type(error).__name__,'recovery_error_type':type(recovery_error).__name__,'pending_work':'preserved'})
                 raise error
-            _receipt(root,{'status':'update deferred; runtime not switched','hold_id':hold,'snapshot':str(saved),'cancellation':cancellation,'error_type':type(error).__name__,'pending_work':'preserved'})
+            _receipt(root,{'status':'update deferred; runtime not switched','hold_id':hold,'snapshot':str(saved) if saved is not None else None,'cancellation':cancellation,'error_type':type(error).__name__,'pending_work':'preserved'})
             raise RuntimeError('Update deferred before runtime switch. The exact pre-End refusal was verified; no recovery hold remains.') from error
         try:
             recovery=_restart_previous(root,saved,python,release,hold,restore_bytes=switched)
-            if binding_written:_restore_previous_binding(root,previous_before,previous_after)
-            _receipt(root,{'status':'update failed; previous runtime verified','hold_id':hold,'snapshot':str(saved),'recovery':recovery,'error_type':type(error).__name__})
+            _receipt(root,{'status':'update failed; previous runtime verified','hold_id':hold,'snapshot':str(saved) if saved is not None else None,'recovery':recovery,'error_type':type(error).__name__})
         except Exception as recovery_error:
-            _receipt(root,{'status':'recovery required','hold_id':hold,'snapshot':str(saved),'error_type':type(error).__name__,'recovery_error_type':type(recovery_error).__name__,'pending_work':'preserved'})
+            _receipt(root,{'status':'recovery required','hold_id':hold,'snapshot':str(saved) if saved is not None else None,'error_type':type(error).__name__,'recovery_error_type':type(recovery_error).__name__,'pending_work':'preserved'})
             raise RuntimeError('Upgrade recovery is incomplete; preserve pending work and use the recorded exact recovery UUID.') from recovery_error
         raise RuntimeError('Upgrade failed; previous runtime health verified. Inspect upgrade-status.json for preserved client edits.') from error
     clients=installed.get('client_result',{})
     deferred=clients.get('deferred',[])
     return _receipt(root,{'status':'updated','version':info['version'],'release_identity':info.get('git_identity'),'hold_id':hold,
-        'snapshot':str(saved),'previous':previous,'health':health,'start':started,'finish':finished,'wiki_migration':migration,
+        'snapshot':str(saved) if saved is not None else None,'previous':previous,'health':health,'start':started,'finish':finished,'wiki_migration':migration,
         'clients':clients,'client_overwrites_after_health':overwritten,
         'client_acceptance':'pending refresh/named-client verification' if deferred or overwritten else 'configuration checked; named-client verification pending'})
 

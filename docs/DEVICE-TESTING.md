@@ -1,10 +1,10 @@
 # Verification and device acceptance
 
-Revision: 3 November 2026. The v0.1.9 candidate's native qualification is Windows only. Accepted v0.1.7 remains the Mac/Linux onboarding baseline. Never turn a library import, configuration entry or historical test into a new physical-device claim.
+Revision: 4 November 2026. v0.2.0 is a candidate for Windows x64, Mac ARM64/Intel and Linux x64; every real platform lifecycle receipt is required before promotion. The accepted Windows/Apple Silicon Mac installation remains v0.1.7. No owner Linux device acceptance is inferred. Never turn a library import, configuration entry or historical test into a new physical-device claim.
 
-The v0.1.9 corrective candidate still needs exact-source full qualification. The v0.1.8 explicit-recovery restoration succeeded, but its final stop failed before End; the original failed receipt remains preserved. Require mask-aware stale-parent regression controls and native checks of the fixed controller, then independently qualify both v0.1.7→v0.1.9 and controlled v0.1.8→v0.1.9 forward, automatic rollback and explicit recovery paths. Confirm the new fixed controller handles every stop. See [corrective release scope](RELEASE-v0.1.9.md).
+The v0.2.0 corrective candidate still needs exact-source full qualification. The v0.1.8 explicit-recovery restoration succeeded, but its final stop failed before End; the original failed receipt remains preserved. Require mask-aware stale-parent regression controls and native checks of the fixed controller, then independently qualify both v0.1.7→v0.2.0 and controlled v0.1.8→v0.2.0 forward, automatic rollback and explicit recovery paths. Confirm the new fixed controller handles every stop inside the forward, rollback and recovery transaction; routine commands after rollback use the restored old controller. See [corrective release scope](RELEASE-v0.2.0.md).
 
-Both forward paths require no active service transaction. A v0.1.8 hold cannot be migrated to v0.1.9: recovery is bound to its original checkout, and a failed old-controller stop needs a separately reviewed recovery path. Preserve the hold; do not change snapshot identity to make a test pass. After rollback, routine service commands use the restored old controller; a later upgrade attempt must use the verified new updater.
+Both forward paths require no active service transaction. A v0.1.8 hold cannot be migrated to v0.2.0: recovery is bound to its original checkout, and a failed old-controller stop needs a separately reviewed recovery path. Preserve the hold; do not change snapshot identity to make a test pass. After rollback, routine service commands use the restored old controller; a later upgrade attempt must use the verified new updater.
 
 ## Automated regression boundary
 
@@ -12,7 +12,7 @@ Windows lifetime controls test trusted-birth/foreign-PID refusal, distinct gone-
 
 The default pytest suite uses disposable synthetic roots outside the checkout and real HOME, an explicit `SB_TEST_SANDBOX` plus child `--basetemp`, private client/config/temp paths, local-only Git fixtures, offline model flags and a process guard. The guard always refuses Scheduler/launchd/systemd mutations, uv provisioning, production identities/paths and service-capable inline/module routes. There is no `--run-native` escape.
 
-Windows CI supplies an allowlisted process environment before pytest, keeps real HOME only until conftest establishes private fixture HOME, disables plugin autoload and explicitly loads `pytest_asyncio.plugin`. Checkout credentials are not persisted. CI invokes the full regression with JUnit; compile/import checks follow. The pinned dependency audit runs in the Windows job. Ubuntu/macOS jobs compile/import libraries only; they do not install or accept the v0.1.9 service. A hosted run is a pass only after it actually completes; billing/unavailable runners remain unverified.
+Windows CI supplies an allowlisted process environment before pytest, keeps real HOME only until conftest establishes private fixture HOME, disables plugin autoload and explicitly loads `pytest_asyncio.plugin`. Checkout credentials are not persisted. CI invokes the full regression with JUnit; compile/import checks follow. The pinned dependency audit runs in the Windows job. Require Ubuntu/macOS library jobs to compile/import and retain native dependency audits; those jobs do not install or accept the service. Require separate disposable native product jobs to exercise the real candidate upgrade, rollback and recovery; their existence or scheduling is not a passing result. Inspect their actual completion and limitations separately. A hosted run is a pass only after it actually completes; billing/unavailable runners remain unverified.
 
 Inspect failures, exact source hashes, skips and async results. No raw environment/credentials, private notes or installed SQLite should enter the test fixtures or shared report. A test guard is a tripwire, not an OS security sandbox.
 
@@ -20,7 +20,7 @@ CI uploads only its source identity, synthetic JUnit, exported runtime requireme
 
 Local fixtures scrub ambient proxy/certificate/auth overrides before imports and use private model/config homes. Python subprocess and asyncio routes refuse external inference and shell wrappers except an exact sandbox junction fixture; the wiki model boundary is refused unless explicitly mocked. Python socket connections/DNS are limited to loopback, and known real-owner credential/config paths are refused in child arguments/environment. This is not an OS network or filesystem sandbox: native extensions/children require their own isolation controls. Actual synthetic MCP/proxy controls disable environment and registry proxy routing. The synthetic Windows MCP server uses a private Job and verified cleanup; this transport test and mocked listener controls do not establish production native service ownership. POSIX two-peer rename cases remain skipped on Windows and are a retained qualification gap.
 
-The audit gate reconciles all 160 packages in the qualified Windows runtime graph. It retains raw findings and separately applies only the exact, source-bound and time-limited FastMCP OAuth exception in [the security profile](../SECURITY.md). Missing/unscanned packages, other advisories, protected source changes and expiry fail the gate. LiteLLM exclusion, provider/reranker refusal, static-token routing, native lock contention and the patched embedding/model behavior need their own tests; package resolution is insufficient.
+The audit gate reconciles the exact locked runtime graph for the selected host. It retains raw findings and separately applies only the exact, source-bound and time-limited FastMCP OAuth exception in [the security profile](../SECURITY.md). Missing/unscanned packages, other advisories, protected source changes and expiry fail the gate. LiteLLM exclusion, provider/reranker refusal, static-token routing, native lock contention and the patched embedding/model behavior need their own tests; package resolution is insufficient.
 
 ## Native Windows fixture proof
 
@@ -36,9 +36,9 @@ Use only synthetic notes and a copied local model cache. Keep original model byt
 
 Counts alone cannot establish all-file coverage. File fallback/read alone cannot establish indexed retrieval. Unsupported metadata remains reviewable rather than silently normalized or discarded.
 
-## Mac/Linux follow-up before a future native release
+## v0.2.0 Mac/Linux qualification requirements
 
-Keep accepted v0.1.7 on owner devices. A future reviewed harness must use exact owned process identities, real launchd GUI/session or systemd user-bus evidence and safe retained cleanup. On Mac, prove bootout absence and re-bootstrap/start in the intended user's GUI domain on each architecture claimed. On Linux, prove the actual escaped ExecStart, daemon-reload/enable/start/stop with an existing user bus; a required CI bus missing is a failure, not a skipped pass. Do not mutate an owner's session or use cached PID plus command-line substring matching to manufacture acceptance.
+Keep accepted v0.1.7 on owner devices. The independently reviewed native harness must use exact owned process identities, real launchd GUI/session or systemd user-bus evidence and safe retained cleanup. On Mac, prove bootout absence and re-bootstrap/start in the intended user's GUI domain on each architecture claimed. On Linux, prove the actual escaped ExecStart, daemon-reload/enable/start/stop with an existing user bus; a required CI bus missing is a failure, not a skipped pass. Do not mutate an owner's session or use cached PID plus command-line substring matching to manufacture acceptance.
 
 ## Target device remains a separate gate
 

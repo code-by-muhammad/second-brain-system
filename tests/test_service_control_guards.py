@@ -12,6 +12,9 @@ import brain_cli as cli
 
 @pytest.fixture
 def device(brain,monkeypatch):
+    # These controls simulate native Windows task boundaries. The separate
+    # candidate-platform suite exercises real admission with syscall fakes.
+    monkeypatch.setattr(service,'_candidate_platform',lambda:None)
     monkeypatch.setattr(cfg,'DEVICE',dict(vault=str(cfg.VAULT),python=str(cfg.PYTHON),port=cfg.PORT,version=cfg.VERSION,device_id='fixture'))
     for name,value in [('BRAIN_SYSTEM_ROOT',cfg.ROOT),('BRAIN_STATE',cfg.STATE),('BRAIN_VAULT',cfg.VAULT),('BRAIN_PORT',cfg.PORT)]:
         monkeypatch.setenv(name,str(value))
@@ -106,9 +109,15 @@ def test_stop_waits_retained_exit_then_retries_unverified_rescan(device,monkeypa
 def test_disable_then_busy_writer_restores_enabled_state_and_failure_receipt(device,monkeypatch):
     from filelock import Timeout
     monkeypatch.setattr(service.sys,'platform','win32')
-    monkeypatch.setattr(service,'_windows_task',lambda:{'enabled':True})
+    task={'enabled':True,'definition_sha256':'b'*64}
+    monkeypatch.setattr(service,'_windows_task',lambda **kwargs:dict(task))
     calls=[]
-    monkeypatch.setattr(service.subprocess,'run',lambda command,**kwargs:(calls.append(command) or SimpleNamespace(returncode=0)))
+    def run(command,**kwargs):
+        calls.append(command)
+        if '/Disable' in command:task['enabled']=False
+        if '/Enable' in command:task['enabled']=True
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(service.subprocess,'run',run)
     class Lock:
         def __init__(self,path,**kwargs):self.path=path
         def acquire(self):pass
@@ -196,7 +205,7 @@ def test_readiness_retries_transient_registry_reads_but_not_foreign_identity(dev
 
 
 def test_task_inspection_refusal_creates_no_transaction(device,monkeypatch):
-    def foreign():raise processes.OwnershipError('task belongs to another root')
+    def foreign(**kwargs):raise processes.OwnershipError('task belongs to another root')
     monkeypatch.setattr(service,'_windows_task',foreign)
     with pytest.raises(processes.OwnershipError,match='another root'):service.inspect()
     assert not (cfg.STATE/'service-transaction.json').exists()
@@ -218,16 +227,18 @@ def test_readiness_failure_records_failed_stage_and_blocks_spawns(device,monkeyp
 
 
 def test_pre_end_refusal_cancels_only_unchanged_transaction(device,monkeypatch):
-    import hashlib
-    hold='d'*32;saved=cfg.ROOT/'backups/fixture';saved.mkdir(parents=True)
-    (cfg.ROOT/'device.json').write_bytes(b'{"fixture":true}')
-    (cfg.ROOT/'app').mkdir()
-    snapshot={'files':[{'before_sha256':hashlib.sha256(b'{"fixture":true}').hexdigest()}],'app_sha256':{}}
-    raw=json.dumps(snapshot).encode();(saved/'snapshot.json').write_bytes(raw)
-    (cfg.STATE/'service-transaction.json').write_text(json.dumps({'hold_id':hold,'root':str(cfg.ROOT),'stage':'prepared','snapshot':str(saved),'snapshot_sha256':hashlib.sha256(raw).hexdigest()}))
-    status={'status':'stop failed','hold_id':hold,'end_attempted':False,'prior_task_enabled':True}
+    from service_format3_fixture import seed_hold
+    monkeypatch.setattr(service,'sys',SimpleNamespace(platform='win32'))
+    monkeypatch.setattr(processes,'_launchers',lambda:{processes._path(cfg.PYTHON.with_name('pythonw.exe')):None})
+    task=service._windows_definition({'xml':service.definition('win32'),'owner_sid':'S-1-5-21-123','current_sid':'S-1-5-21-123'})
+    hold='d'*32
+    seed_hold(service,cfg,{'kind':'win32','enabled':True,'definition_sha256':task['definition_sha256'],
+        'interpreter':task['interpreter'],'xml':task['xml'],'owner_sid':task['owner_sid']},hold=hold,stop_entered=True)
+    status={'status':'stop failed','root':str(cfg.ROOT),'task_address':service._task_address(),
+            'hold_id':hold,'end_attempted':False,'activation_disable_attempted':True,
+            'prior_task_present':True,'prior_task_enabled':True,'prior_task_definition_sha256':task['definition_sha256']}
     (cfg.STATE/'service-control-status.json').write_text(json.dumps(status))
-    monkeypatch.setattr(service,'_windows_task',lambda:{'enabled':True})
+    monkeypatch.setattr(service,'_windows_task',lambda **kwargs:dict(task))
     result=service.cancel_transaction(hold)
     assert result['status']=='cancelled; runtime not switched'
     assert not (cfg.STATE/'service-transaction.json').exists()

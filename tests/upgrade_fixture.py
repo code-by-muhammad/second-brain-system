@@ -14,6 +14,13 @@ from filelock import FileLock,Timeout
 import pytest
 
 
+def native_registration(device):
+    """Explicit fake registry record; not a native ownership/serializer proof."""
+    value={'kind':sys.platform,'definition_sha256':'a'*64,'enabled':True,'interpreter':device['python']}
+    if sys.platform=='win32':value.update(xml='<Task/>',owner_sid='S-1-5-21-101-102-103-1001')
+    return value
+
+
 def prepare(portable,monkeypatch,*,previous_version='0.1.0',target_version='0.1.6'):
     install,updater,root,vault,home=portable
     source=install.REPO
@@ -30,6 +37,7 @@ def prepare(portable,monkeypatch,*,previous_version='0.1.0',target_version='0.1.
     support=install.setup_helpers()
     h=SimpleNamespace(install=install,updater=updater,root=root,vault=vault,home=home,release=release,device=device,
                       events=[],health=[],running=True,partial_stop=False,last_end=False,on_wiki=None,fail_health=False)
+    h.registration=native_registration(device)
     monkeypatch.setattr(install,'private',lambda *args:None)
     monkeypatch.setattr(support,'host_context',lambda:None)
     monkeypatch.setattr(support,'service_python',lambda value:None)
@@ -82,12 +90,13 @@ def prepare(portable,monkeypatch,*,previous_version='0.1.0',target_version='0.1.
         if command=='health':return {'status':'running','version':json.loads((root/'device.json').read_text())['version']}
         assert command=='service'
         path=root/'state/service-transaction.json'
-        if action=='inspect':return {'status':'inspected','task_present':True,'task_enabled':True,'simulated':True}
+        if action=='inspect':return {'status':'inspected','task_present':True,'task_enabled':True,'simulated':True,'registration':dict(h.registration)}
         if action=='hold':
             saved=Path(flag(flags,'--snapshot'))
             install.atomic(path,json.dumps({'hold_id':flag(flags,'--hold-id'),'root':str(root),'snapshot':str(saved),
-                'snapshot_sha256':hashlib.sha256((saved/'snapshot.json').read_bytes()).hexdigest(),'stage':'prepared'}))
+                'snapshot_sha256':hashlib.sha256((saved/'snapshot.json').read_bytes()).hexdigest(),'stage':'prepared','stop_entered':False}))
         elif action=='stop':
+            install.atomic(path,json.dumps({**transaction(),'stop_entered':True}))
             h.last_end=False
             if h.partial_stop:
                 h.partial_stop=False;h.last_end=True;h.running=False
@@ -104,11 +113,9 @@ def prepare(portable,monkeypatch,*,previous_version='0.1.0',target_version='0.1.
             if h.last_end:raise RuntimeError('unverified End cannot be cancelled')
             path.unlink();return {'status':'cancelled; runtime not switched','simulated':True}
         elif action=='install':
-            if getattr(h,'expect_unlocked_registration',False):
+            with pytest.raises(Timeout):
                 with FileLock(str(root/'state/writer.lock'),timeout=0):pass
-            else:
-              with pytest.raises(Timeout):
-                with FileLock(str(root/'state/writer.lock'),timeout=0):pass
+            return {'status':'installed','simulated':True,'restored':'sealed-restored','definition_sha256':h.registration['definition_sha256']}
         elif action=='start':
             h.running=True;install.atomic(path,json.dumps({**transaction(),'stage':'started'}))
             return {'status':'started','simulated':True}

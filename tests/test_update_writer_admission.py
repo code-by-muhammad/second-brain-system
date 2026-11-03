@@ -20,7 +20,7 @@ def test_after_lock_writer_gate_and_exact_migration_exception(brain,stage):
 
 def test_post_stop_lock_refusal_restarts_unchanged_runtime_without_second_work_lock(portable,monkeypatch):
     from upgrade_fixture import prepare
-    h=prepare(portable,monkeypatch);h.expect_unlocked_registration=True;calls=[]
+    h=prepare(portable,monkeypatch);calls=[]
     def busy(*args,**kwargs):
         calls.append(kwargs.get('timeout'))
         raise TimeoutError('Synthetic legacy writer entered after stop')
@@ -30,3 +30,4 @@ def test_post_stop_lock_refusal_restarts_unchanged_runtime_without_second_work_l
     assert calls==[300] and h.running and (h.root/'device.json').read_bytes()==before
     assert not (h.root/'state/service-transaction.json').exists()
     assert not (h.root/'state/previous-release.json').exists()
+    assert [e['action'] for e in h.events if e['kind']=='controller']==['inspect','hold','stop','start','finish']
