@@ -1,6 +1,6 @@
 [project]
 name = "shared-second-brain"
-version = "0.1.8"
+version = "0.1.9"
 description = "Portable local Obsidian MCP and evidence-linked wiki maintenance"
 requires-python = ">=3.12,<3.13"
 dependencies = ["basic-memory==0.23.2", "fastmcp==4.0.0b1", "fastmcp-slim==4.0.0b1", "wrapt==2.4.0", "tzdata>=2025.2", "filelock==4.2.4", "PyYAML==6.0.3", "jsonschema==4.26.0", "tomlkit==0.15.1", "psutil==7.2.2", "certifi==2026.10.23", "fastembed==0.9.1", "pillow==13.0.0"]

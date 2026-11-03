@@ -93,7 +93,7 @@ def documented_prefix(route, release, python):
             if route == 'updater-help' and '/update.py --root ' in line:
                 prefix = line.split(' --root ', 1)[0]
                 prefix = prefix.replace('<retained v0.1.7 Python>', shlex.quote(python.as_posix()))
-                prefix = prefix.replace('<verified v0.1.8 checkout>', shlex.quote(release.as_posix()))
+                prefix = prefix.replace('<verified v0.1.9 checkout>', shlex.quote(release.as_posix()))
                 choices.append(shlex.split(prefix))
             elif line.startswith('& $BrainBasePython '):
                 tail = line.removeprefix('& $BrainBasePython ')

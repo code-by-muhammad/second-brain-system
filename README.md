@@ -2,11 +2,11 @@
 
 A local authenticated MCP service for an Obsidian Markdown vault, current-file search, milestone capture and evidence-linked derived pages. Each computer keeps its own Python, credentials, SQLite index and model cache. One designated maintainer compiles the shared wiki. The existing maintenance service serializes Git synchronization and daily linking.
 
-## Release scope — 2 November 2026
+## Release scope — 3 November 2026
 
-**v0.1.8 is the Windows hardening candidate.** Use only a trusted handover that supplies its approved commit, manifest SHA256 and qualification report. A branch name or this document is not deployment acceptance. The previously accepted Windows and Apple Silicon Mac deployment is v0.1.7. Mac/Linux must stay on that accepted tag until their new lifecycle is qualified; v0.1.8 refuses mutating setup/update/recovery there. Library imports on another OS do not establish native service acceptance.
+**v0.1.9 is the corrective Windows candidate; full qualification is pending.** Use only a trusted handover that supplies its approved commit, manifest SHA256 and qualification report. A branch name or this document is not deployment acceptance. The previously accepted Windows and Apple Silicon Mac deployment is v0.1.7. Mac/Linux must stay on that accepted tag until their new lifecycle is qualified; v0.1.9 refuses mutating setup/update/recovery there. Library imports on another OS do not establish native service acceptance.
 
-Read [device setup](docs/DEVICE-SETUP.md), [verification boundaries](docs/DEVICE-TESTING.md) and [v0.1.8 changes](docs/RELEASE-v0.1.8.md). Historical preparation text remains in the [accepted v0.1.7 source](https://github.com/code-by-muhammad/second-brain-system/tree/0c29118bb9170048b5e2b534f96a9d13468b17fa); its old release holds are historical, not current instructions.
+Read [device setup](docs/DEVICE-SETUP.md), [verification boundaries](docs/DEVICE-TESTING.md) and [v0.1.9 changes](docs/RELEASE-v0.1.9.md). Historical preparation text remains in the [accepted v0.1.7 source](https://github.com/code-by-muhammad/second-brain-system/tree/0c29118bb9170048b5e2b534f96a9d13468b17fa); its old release holds are historical, not current instructions.
 
 The qualified [security profile](SECURITY.md) uses FastEmbed with reranking disabled and deliberately excludes LiteLLM. uv 0.9.16+ is required. The raw dependency audit retains one time-limited FastMCP OAuth exception, bound to the exact static-token transport and source hashes; it is not a clean-audit claim.
 
@@ -39,15 +39,17 @@ The first command checks internal manifest consistency only. It does not indepen
 
 This creates the runtime only. Before registering or starting a service, use the trusted team kit's sealed `prepare_device.py` plan/apply workflow to select the actual IANA timezone and, for a new independent maintainer, create the explicit Control bootstrap. The compatibility default is Asia/Karachi; it is not inferred from the computer. Preserve the complete install journal and never hand-edit device/journal hashes to bypass preparation. Without a matching qualified kit, first-start acceptance stays pending.
 
-Fresh setup leaves client files alone unless selected. Add `--configure-clients --client claude-code --client codex` to the SAME initial command only for the clients chosen by the owner. Desktop is separately selected; close it or explicitly skip its refresh. Hooks require `--include-hooks`. Preserve unrelated settings and verify a real tool call in each named fresh client. See the device guide for existing v0.1.8 client refresh and manual addition of a new client; v0.1.7 entries refresh during the forward upgrade.
+Fresh setup leaves client files alone unless selected. Add `--configure-clients --client claude-code --client codex` to the SAME initial command only for the clients chosen by the owner. Desktop is separately selected; close it or explicitly skip its refresh. Hooks require `--include-hooks`. Preserve unrelated settings and verify a real tool call in each named fresh client. Client-only refresh uses the installed version's own verified checkout; see the device guide. v0.1.7 entries refresh during the forward upgrade.
 
 ## Updates use new code and retained Python
 
-For the qualified v0.1.7 to v0.1.8 Windows path, read and verify the retained interpreter in `device.json`. Download the approved new checkout into exactly `<runtime>/releases/v0.1.8`, independently verify it, and change into that folder. Do not manually run `uv sync` there first. Do not run the old updater or launch the new updater from the target venv it must rebuild.
+For the v0.1.7 or controlled-acceptance v0.1.8 to v0.1.9 Windows candidate path, read and verify the retained interpreter in `device.json`. Download the approved new checkout into exactly `<runtime>/releases/v0.1.9`, independently verify it, and change into that folder. Do not manually run `uv sync` there first. Do not run the old updater or launch the new updater from the target venv it must rebuild.
 
 ```text
-<retained v0.1.7 Python> -I <verified v0.1.8 checkout>/update.py --root <runtime root> --version v0.1.8
+<retained v0.1.7 Python> -I <verified v0.1.9 checkout>/update.py --root <runtime root> --version v0.1.9
 ```
+
+For a controlled-acceptance v0.1.8 installation, substitute its recorded retained Python for the v0.1.7 placeholder. Require no active `state/service-transaction.json` before either upgrade path. A hold created by v0.1.8 is bound to its original controller and cannot be recovered or migrated by v0.1.9; preserve it for a separately reviewed recovery path.
 
 The new updater provisions a fresh locked target environment, seals owned-client plans and snapshots before stopping, verifies an empty runtime, starts a fresh owned listener, checks authenticated versioned health and archives the exact transaction. Partial-stop uncertainty keeps a recovery hold. Recovery must use the original verified new checkout and exact recorded UUID; see [the recovery procedure](docs/DEVICE-SETUP.md#recovery).
 

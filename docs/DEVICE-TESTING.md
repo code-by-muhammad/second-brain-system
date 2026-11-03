@@ -1,6 +1,10 @@
 # Verification and device acceptance
 
-Revision: 2 November 2026. The v0.1.8 candidate's native qualification is Windows only. Accepted v0.1.7 remains the Mac/Linux onboarding baseline. Never turn a library import, configuration entry or historical test into a new physical-device claim.
+Revision: 3 November 2026. The v0.1.9 candidate's native qualification is Windows only. Accepted v0.1.7 remains the Mac/Linux onboarding baseline. Never turn a library import, configuration entry or historical test into a new physical-device claim.
+
+The v0.1.9 corrective candidate still needs exact-source full qualification. The v0.1.8 explicit-recovery restoration succeeded, but its final stop failed before End; the original failed receipt remains preserved. Require mask-aware stale-parent regression controls and native checks of the fixed controller, then independently qualify both v0.1.7→v0.1.9 and controlled v0.1.8→v0.1.9 forward, automatic rollback and explicit recovery paths. Confirm the new fixed controller handles every stop. See [corrective release scope](RELEASE-v0.1.9.md).
+
+Both forward paths require no active service transaction. A v0.1.8 hold cannot be migrated to v0.1.9: recovery is bound to its original checkout, and a failed old-controller stop needs a separately reviewed recovery path. Preserve the hold; do not change snapshot identity to make a test pass. After rollback, routine service commands use the restored old controller; a later upgrade attempt must use the verified new updater.
 
 ## Automated regression boundary
 
@@ -8,7 +12,7 @@ Windows lifetime controls test trusted-birth/foreign-PID refusal, distinct gone-
 
 The default pytest suite uses disposable synthetic roots outside the checkout and real HOME, an explicit `SB_TEST_SANDBOX` plus child `--basetemp`, private client/config/temp paths, local-only Git fixtures, offline model flags and a process guard. The guard always refuses Scheduler/launchd/systemd mutations, uv provisioning, production identities/paths and service-capable inline/module routes. There is no `--run-native` escape.
 
-Windows CI supplies an allowlisted process environment before pytest, keeps real HOME only until conftest establishes private fixture HOME, disables plugin autoload and explicitly loads `pytest_asyncio.plugin`. Checkout credentials are not persisted. CI invokes the full regression with JUnit; compile/import checks follow. The pinned dependency audit runs in the Windows job. Ubuntu/macOS jobs compile/import libraries only; they do not install or accept the v0.1.8 service. A hosted run is a pass only after it actually completes; billing/unavailable runners remain unverified.
+Windows CI supplies an allowlisted process environment before pytest, keeps real HOME only until conftest establishes private fixture HOME, disables plugin autoload and explicitly loads `pytest_asyncio.plugin`. Checkout credentials are not persisted. CI invokes the full regression with JUnit; compile/import checks follow. The pinned dependency audit runs in the Windows job. Ubuntu/macOS jobs compile/import libraries only; they do not install or accept the v0.1.9 service. A hosted run is a pass only after it actually completes; billing/unavailable runners remain unverified.
 
 Inspect failures, exact source hashes, skips and async results. No raw environment/credentials, private notes or installed SQLite should enter the test fixtures or shared report. A test guard is a tripwire, not an OS security sandbox.
 

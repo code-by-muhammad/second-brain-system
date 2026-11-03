@@ -211,15 +211,28 @@ def descendants(owned):
                 if row.pid in selected or row.info.get('ppid') not in selected:continue
                 parent=selected[row.info['ppid']]
                 if not parent.alive():continue
-                api=_api() if os.name=='nt' else None;handle=None
+                api=_api() if os.name=='nt' else None;handle=None;query=None
                 try:
                     if api is not None:
+                        # A stale PPID can point at a reused owned PID. Query
+                        # birth with least privilege before requesting authority
+                        # to terminate a genuinely possible descendant.
+                        query=api.OpenProcess(0x1000,False,row.pid)
+                        if not query:
+                            if ctypes.get_last_error()==87:continue
+                            raise OwnershipError('A possible descendant birth cannot be inspected; no stop receipt issued.')
+                        queried_birth=_birth(api,query)
+                        if queried_birth<parent.birth:continue
+                        # Keep the query handle open through the second open:
+                        # it pins this process object against PID reuse.
                         handle=api.OpenProcess(0x00101001,False,row.pid)
                         if not handle:
-                            if ctypes.get_last_error()==87:continue
                             raise OwnershipError('An owned descendant cannot be inspected; no stop receipt issued.')
-                        if api.WaitForSingleObject(handle,0)==0:continue
+                        exit_state=api.WaitForSingleObject(handle,0)
+                        if exit_state==0:continue
+                        if exit_state!=258:raise OwnershipError('Descendant exit state is unavailable.')
                         birth=_birth(api,handle)
+                        if birth!=queried_birth:raise OwnershipError('Descendant identity changed during stop inspection.')
                     current=psutil.Process(row.pid)
                     if api is None:birth=int(current.create_time()*10_000_000)+116444736000000000
                     # A stale PPID may name a reused PID. A child older than its
@@ -234,6 +247,7 @@ def descendants(owned):
                 except psutil.Error as error:raise OwnershipError('Descendant metadata could not be verified.') from error
                 finally:
                     if handle is not None:api.CloseHandle(handle)
+                    if query is not None:api.CloseHandle(query)
             if not added:return result
         raise OwnershipError('Process ancestry exceeds its safety bound.')
     except BaseException:

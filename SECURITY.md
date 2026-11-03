@@ -23,3 +23,9 @@ Basic Memory 0.24.1 was considered during this review. It changes database migra
 ## Evidence and limits
 
 Package advisories are not proof of exploitation, and passing tests are not proof of absence of every defect. Keep raw audit output and private runtime diagnostics separate from shared notes. Verify the frozen release, current file/body/vector coverage, native lifecycle/upgrade/recovery, each named client and actual device/reboot receipts at their stated scopes. The Windows candidate does not establish a new macOS/Linux service acceptance.
+
+## Corrective candidate qualification
+
+The v0.1.9 Windows candidate changes descendant inspection to read process birth with query-only access before requesting a termination-capable retained handle. Unreadable possible descendants still refuse; no PID-only kill or broader process authority is introduced. Its complete release qualification is pending. The existing exception deadline and dependency graph above are unchanged; rebind and independently review the exact source profile and re-run the raw audit before release. Keeping accepted v0.1.7 running is not acceptance of its legacy controller for upgrade/recovery.
+
+Recovery remains sealed to the transaction's original controller checkout; v0.1.9 cannot adopt an outstanding v0.1.8 hold. Parent attribution and exited-parent behavior are unchanged, including the legacy v0.1.7 orphan-containment limit. Elevated or protected possible descendants still cause a refusal when their identity or termination-capable handle cannot be verified. See the [corrective qualification boundaries](docs/RELEASE-v0.1.9.md#qualification-boundaries).

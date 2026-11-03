@@ -11,7 +11,7 @@ _VERIFIED_HASHES={}
 
 def _qualified_platform():
     if sys.platform!='win32':
-        raise ValueError('v0.1.8 update/recovery is qualified for Windows only. Keep the accepted v0.1.7 on macOS/Linux; no update changes made.')
+        raise ValueError('v0.1.9 update/recovery is qualified for Windows only. Keep the accepted v0.1.7 on macOS/Linux; no update changes made.')
 
 def _forward_binding(root,version):
     if not re.fullmatch(r'v\d+\.\d+\.\d+',version or ''):raise ValueError('Select an explicit approved release tag.')

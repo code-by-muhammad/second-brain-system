@@ -2118,7 +2118,7 @@ wheels = [
 
 [[package]]
 name = "shared-second-brain"
-version = "0.1.8"
+version = "0.1.9"
 source = { virtual = "." }
 dependencies = [
     { name = "basic-memory" },

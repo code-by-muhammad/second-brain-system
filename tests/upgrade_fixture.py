@@ -14,16 +14,16 @@ from filelock import FileLock,Timeout
 import pytest
 
 
-def prepare(portable,monkeypatch):
+def prepare(portable,monkeypatch,*,previous_version='0.1.0',target_version='0.1.6'):
     install,updater,root,vault,home=portable
     source=install.REPO
     install.deploy(root,Path(sys.executable),vault)
     old=root/'old-release';old.mkdir()
     payload={'app/'+path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in (root/'app').glob('*.py')}
-    (old/'release-manifest.json').write_text(json.dumps({'version':'0.1.0','sha256':payload}))
-    device=json.loads((root/'device.json').read_text());device.update(version='0.1.0',release_root=str(old))
+    (old/'release-manifest.json').write_text(json.dumps({'version':previous_version,'sha256':payload}))
+    device=json.loads((root/'device.json').read_text());device.update(version=previous_version,release_root=str(old))
     install.atomic(root/'device.json',json.dumps(device)+'\n')
-    release=root/'releases/v0.1.6';(release/'docs').mkdir(parents=True);(release/'app').mkdir()
+    release=root/('releases/v'+target_version);(release/'docs').mkdir(parents=True);(release/'app').mkdir()
     monkeypatch.setattr(updater,'__file__',str(release/'update.py'))
     (release/'docs/AI-PROTOCOL.md').write_bytes((source/'docs/AI-PROTOCOL.md').read_bytes())
     (release/'app/brain_cli.py').write_bytes(b'# synthetic new application, never executed\n')
@@ -39,10 +39,10 @@ def prepare(portable,monkeypatch):
     def provision(*args):
         h.events.append({'kind':'provision'});return Path(sys.executable)
     monkeypatch.setattr(support,'provision',provision)
-    monkeypatch.setattr(updater,'verify',lambda *args,**kwargs:{'version':'0.1.6',
+    monkeypatch.setattr(updater,'verify',lambda *args,**kwargs:{'version':target_version,
         'capabilities':['sealed-client-refresh-v1','owned-service-control-v1'],
         'sha256':{'app/brain_cli.py':hashlib.sha256((release/'app/brain_cli.py').read_bytes()).hexdigest()},
-        'git_identity':{'tag':'v0.1.6','commit':'synthetic-not-provenance'}})
+        'git_identity':{'tag':'v'+target_version,'commit':'synthetic-not-provenance'}})
 
     def run(arguments,**options):
         if str(release/'install.py') in arguments:
@@ -51,7 +51,7 @@ def prepare(portable,monkeypatch):
             assert '--refresh-clients' in arguments and '--configure-clients' not in arguments
             assert options['env']['BRAIN_SYSTEM_ROOT']==str(root) and options['env']['BRAIN_VAULT']==str(vault)
             previous=sys.argv;output=io.StringIO()
-            install.REPO=release;install.VERSION='0.1.6'
+            install.REPO=release;install.VERSION=target_version
             try:
                 sys.argv=['install.py',*arguments[position+1:]]
                 with redirect_stdout(output):install.main()
@@ -74,7 +74,8 @@ def prepare(portable,monkeypatch):
         return json.loads(path.read_text()) if path.exists() else {}
     def controller(python,checkout,selected,command,action=None,*flags):
         assert Path(checkout) in (release,root) and selected==root
-        h.events.append({'kind':'controller','command':command,'action':action,'checkout':str(checkout)})
+        h.events.append({'kind':'controller','command':command,'action':action,'checkout':str(checkout),
+                         'python':str(python),'flags':list(flags)})
         if command=='wiki':
             if h.on_wiki is None:pytest.fail('No migration/model work authorized by this fixture case.')
             return h.on_wiki(action,flags)
@@ -83,7 +84,9 @@ def prepare(portable,monkeypatch):
         path=root/'state/service-transaction.json'
         if action=='inspect':return {'status':'inspected','task_present':True,'task_enabled':True,'simulated':True}
         if action=='hold':
-            install.atomic(path,json.dumps({'hold_id':flag(flags,'--hold-id'),'root':str(root),'snapshot':flag(flags,'--snapshot'),'stage':'prepared'}))
+            saved=Path(flag(flags,'--snapshot'))
+            install.atomic(path,json.dumps({'hold_id':flag(flags,'--hold-id'),'root':str(root),'snapshot':str(saved),
+                'snapshot_sha256':hashlib.sha256((saved/'snapshot.json').read_bytes()).hexdigest(),'stage':'prepared'}))
         elif action=='stop':
             h.last_end=False
             if h.partial_stop:
@@ -116,7 +119,7 @@ def prepare(portable,monkeypatch):
     def wait(python,selected,version,**options):
         assert selected==root and h.running
         h.health.append(version)
-        if version=='0.1.6' and h.fail_health:raise RuntimeError('new readiness failed')
+        if version==target_version and h.fail_health:raise RuntimeError('new readiness failed')
         return {'status':'running','version':version,'simulated':True}
     monkeypatch.setattr(updater,'wait_health',wait)
     return h

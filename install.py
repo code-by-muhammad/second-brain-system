@@ -6,7 +6,7 @@ import argparse, hashlib, json, os, re, secrets, shutil, stat, subprocess, tempf
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
-VERSION='0.1.8'
+VERSION='0.1.9'
 INDEX_IGNORE_TEXT='.git/\n.obsidian/\n.trash/\n'+'/02-Areas/AI-Memory/Wiki/Log-Archives/'+'[0-9a-f]'*64+'.md\n'
 _SETUP_CACHE=None
 _SETUP_SHA256=None
@@ -421,7 +421,7 @@ def main():
     if sum(bool(value) for value in (args.resume_install,args.inspect_install,args.abandon_install))>1:
         parser.error('Choose one initial-install recovery action.')
     if args.abandon_install and sys.platform!='win32':
-        raise ValueError('v0.1.8 mutating recovery is qualified for Windows only; no setup changes made.')
+        raise ValueError('v0.1.9 mutating recovery is qualified for Windows only; no setup changes made.')
     if args.inspect_install or args.abandon_install:
         helpers=setup_helpers();helpers.host_context();helpers.runtime_paths(root)
         path=root/'state/install-transaction.json';record=helpers.json_object(helpers.read(path))
@@ -451,7 +451,7 @@ def main():
     if args.client_plan and (not client_mode or not args.plan_sha256):parser.error('--client-plan requires a client mode and its --plan-sha256.')
     if args.refresh_only and (not args.refresh_clients or args.install_service or args.download_model):parser.error('--refresh-only requires --refresh-clients and cannot deploy models/services.')
     if sys.platform!='win32' and (not args.validate_only or args.plan_out):
-        raise ValueError('v0.1.8 runtime/service setup is qualified for Windows only. Keep the accepted v0.1.7 on macOS/Linux until native qualification; no setup changes made.')
+        raise ValueError('v0.1.9 runtime/service setup is qualified for Windows only. Keep the accepted v0.1.7 on macOS/Linux until native qualification; no setup changes made.')
     helpers=setup_helpers()
     if not args.validate_only or client_mode or args.install_service:helpers.host_context()
     if not vault.is_dir(): parser.error('Clone/open the existing vault first; --vault must exist.')
