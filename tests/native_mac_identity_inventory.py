@@ -35,7 +35,7 @@ if mode=='listener':
     listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen(1)
 value={'pid':os.getpid(),'uid':os.getuid(),'ppid':os.getppid(),
     'executable':sys.executable,'prefix':sys.prefix,'base_prefix':sys.base_prefix,
-    'base_executable':getattr(sys,'_base_executable',None),'orig_argv':sys.orig_argv,
+    'base_executable':getattr(sys,'_base_executable',None),'orig_argv':getattr(sys,'orig_argv',sys.argv),
     'framework':sysconfig.get_config_var('PYTHONFRAMEWORK'),
     'isolated':sys.flags.isolated,'no_site':sys.flags.no_site}
 if listener:value['port']=listener.getsockname()[1]
@@ -60,6 +60,20 @@ def protected(path):
         if reason:raise ProbeFailure('unprotected-native-tool',component=str(part),reason=reason)
     if not path.is_file():raise RuntimeError('Missing native tool')
     return str(path)
+
+
+def canonical_tool(path):
+    """Resolve an OS launcher alias, then execute only its protected target."""
+    path=Path(path)
+    if not path.is_absolute():raise RuntimeError('Relative native tool refused')
+    for part in path.parents:
+        info=part.lstat()
+        reason=('link' if stat.S_ISLNK(info.st_mode) else
+                'owner' if info.st_uid!=0 else 'writable-mode' if info.st_mode&0o022 else None)
+        if reason:raise ProbeFailure('unprotected-launcher-parent',component=str(part),reason=reason)
+    if path.lstat().st_uid!=0:
+        raise ProbeFailure('unprotected-launcher-alias',component=str(path),reason='owner')
+    return protected(path.resolve(strict=True))
 
 
 def command(argv,*,environment=None,**kwargs):
@@ -234,20 +248,29 @@ def foreign_cases(module,bucket):
     cases=bucket.setdefault('cases',[])
     sudo=protected('/usr/bin/sudo')
     clt=Path('/Library/Developer/CommandLineTools/usr/bin/python3')
-    if clt.is_file():launcher=protected(clt)
+    if clt.is_file():launcher=canonical_tool(clt)
     else:
         resolved=command([protected('/usr/bin/xcrun'),'-f','python3'],
             environment={**MINIMAL,'DEVELOPER_DIR':'/Library/Developer/CommandLineTools'}).stdout.decode().strip()
-        launcher=protected(resolved)
-    resolved=command([launcher,'-I','-S','-B','-c','import sys; print(sys.executable)']).stdout.decode().strip()
-    interpreter=protected(resolved)
-    bucket.update(auxiliary_launcher=launcher,resolved_auxiliary_interpreter=interpreter,
+        launcher=canonical_tool(resolved)
+    preflight=witness([launcher,'-I','-S','-B','-c',CHILD,'identity'],MINIMAL,
+                      'auxiliary-interpreter-preflight',lambda *_:None)
+    bucket['auxiliary_preflight']=preflight
+    image=preflight.get('observed',{}).get('exe',{})
+    if not preflight.get('observation_valid') or image.get('status')!='observed':
+        raise ProbeFailure('auxiliary-native-image-unverified')
+    interpreter=protected(image['value'])
+    bucket.update(auxiliary_launcher=launcher,logical_auxiliary_launcher=str(clt),resolved_auxiliary_interpreter=interpreter,
         sudo_version_line=command([sudo,'-V']).stdout.decode(errors='replace').splitlines()[0],
         sudo_use_pty='not established; child alarm is independent of EOF/pty relay')
     for account in ('nobody','root'):
         argv=[sudo,'-n','-u',account,'--',interpreter,'-I','-S','-B','-c',CHILD,'listener']
         def observe(record,process):
-            record['witness_executable_protected']=protected(record['child']['executable'])==interpreter
+            observed=record['observed']['exe']
+            record['witness_executable_observed']=observed.get('status')=='observed'
+            if observed.get('status')!='observed' or protected(observed['value'])!=interpreter:
+                raise ProbeFailure('foreign-native-image-unverified')
+            record['witness_executable_protected']=True
             record['global_inventory']=inventory_observation(module,record['child']['port'])
             try:
                 rows=process.net_connections(kind='tcp')
