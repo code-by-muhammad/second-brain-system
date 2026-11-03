@@ -197,7 +197,7 @@ def main():
         'Uv retains product cache/download policy; no private-cache or no-download claim.',
         'Recovery has no harness kill timeout; bounded product controls and the disposable CI job wall limit apply.',
         'Definition deletion assumes this reviewed single-actor disposable job, not hostile same-UID concurrency or atomic compare-and-unlink.',
-        'Exact restoration covers app/device/selected client bytes; native rollback installs the owned isolated017 definition.',
+        'Restoration checks app/device/selected-client bytes, the original absent previous binding and original native file SHA/enablement on this fixture.',
         'Preabsence covers this GUI domain, real user plist and label override only, not other domains/system plists/BTM metadata.',
         'A per-label disabled override/OS background-task metadata may remain on this disposable host.']}
     created=False;success=False;updater=None;old_payload=None;new_payload=None
@@ -293,6 +293,10 @@ print(json.dumps(v))
         first=observe('first actual legacy product prefix/argv')
         if not first['running'] or not first['listener']:raise RuntimeError('Actual legacy product identity is unavailable.')
         state['baseline_health_version']=baseline['version']
+        original_native_sha=first.get('definition_sha256')
+        if not isinstance(original_native_sha,str) or not re.fullmatch('[a-f0-9]{64}',original_native_sha):
+            raise RuntimeError('Original native definition hash is unavailable.')
+        state['original_native_definition_sha256']=original_native_sha
         env['HOME']=str(fake_home);os.environ.clear();os.environ.update(env)
         (fake_home/'.codex').mkdir();(fake_home/'.claude').mkdir()
         claude=fake_home/'.claude.json';codex=fake_home/'.codex/config.toml'
@@ -400,21 +404,33 @@ print(json.dumps(v))
                     raise RuntimeError('Actual wrong-UUID no-write refusal differs.')
                 exact=command([new_python,'-I','-B',target/'update.py','--root',root,'--recover','--hold-id',hold],updater.cli_environment(root),cwd=target,timeout=None)
                 if exact.returncode or obj(root/'state/upgrade-status.json')['status']!='recovered':raise RuntimeError('Actual exact-UUID recovery did not verify.')
-                if read(root/'state/previous-release.json')!=forward_binding:raise RuntimeError('Explicit recovery changed its retained forward binding.')
+                if (root/'state/previous-release.json').exists():raise RuntimeError('Explicit recovery did not restore the original absent previous binding.')
                 state['explicit_recovery']={'wrong_uuid_exit':wrong_result.returncode,'exact_uuid_exit':exact.returncode,
                     'wrong_uuid_no_write_projection_sha256':digest(json.dumps(before,sort_keys=True).encode()),
                     'wrong_uuid_projection':'Selected state/control files, app, clients, history, sealed snapshot files, lock/cache presence and native definition/loaded/enabled/PID only; excludes volatile logs/heartbeats.',
-                    'inner_service_argv_instrumented':False,'forward_controller_binding_retained':True}
+                    'inner_service_argv_instrumented':False,'original_previous_binding_restored':True,
+                    'original_previous_binding_absent':True,'interrupted_forward_binding_sha256':digest(forward_binding)}
             if read(root/'device.json')!=original_device or app_bytes(root/'app')!=original_app or any(read(p)!=v for p,v in original_clients.items()):
                 raise RuntimeError('Exact baseline app/device/selected-client restoration differs.')
-            if args.mode=='rollback' and (root/'state/previous-release.json').exists():raise RuntimeError('Original absent previous metadata was not restored.')
+            if (root/'state/previous-release.json').exists():raise RuntimeError('Original absent previous metadata was not restored.')
             recovered_status=obj(root/'state/upgrade-status.json')['recovery']
             if recovered_status['start']['heartbeat_verified'] is not False or recovered_status['finish']['status']!='transaction released':
                 raise RuntimeError('Legacy heartbeat/transaction completion scope differs.')
         if (root/'state/service-transaction.json').exists():raise RuntimeError('A live transaction remains; preserve it.')
         state['stage']='final actual MCP health/read and preservation'
         wanted=args.candidate_tag.removeprefix('v') if args.mode=='forward' else '0.1.7'
-        final_health=updater.wait_health(new_python,root,wanted,checkout=target);observe('final actual product prefix/argv')
+        final_health=updater.wait_health(new_python,root,wanted,checkout=target);final_native=observe('final actual product prefix/argv')
+        expected_python=new_python if args.mode=='forward' else old_python
+        if not final_native.get('arguments') or final_native['arguments'][0]!=str(expected_python):
+            raise RuntimeError('Final native manager interpreter differs from the selected release.')
+        if args.mode!='forward':
+            if final_native['enabled']!=first['enabled'] or final_native['loaded']!=first['loaded']:
+                raise RuntimeError('Rollback/recovery native enablement differs from the original registration.')
+            if final_native['definition_sha256']!=original_native_sha:
+                raise RuntimeError('Rollback/recovery native definition differs from the sealed original registration.')
+            state['original_native_definition_restored']=True
+            state['original_native_enablement_restored']=True
+            state['original_previous_binding_restored']=True
         observed_read=updater.controller(new_python,target,root,'read','01-Projects/Source.md')
         marker=note_before.decode().splitlines()[1]
         if digest(note_before)!=digest(read(note)) or marker not in json.dumps(observed_read,ensure_ascii=False):raise RuntimeError('Original note/MCP read did not verify.')
