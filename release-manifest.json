@@ -58,7 +58,7 @@
     "tests/conftest.py": "94c76e9c4793e4f145323fe0c21e4f24f1ac852b35a2f4f9b65415762126892e",
     "tests/isolation_guard.py": "413bfbfaf301d273bd8c6cd6c520c959254925c7db3d24a4329d84ee75263636",
     "tests/native_mac_capabilities.py": "7c04ff8e0c80e789fd1f14550a118f8ca6c96b5052b82cbee305b62e3044d810",
-    "tests/native_mac_socket_semantics.py": "0b740a408e25f2a5c8545e5953ed6786d80f8caa7683fb13a0c27ebc9fa25b2f",
+    "tests/native_mac_socket_semantics.py": "22c865e4f1e717dc812a7f3823aa6a67a3415f6ba267b5bcde93632e9b9783af",
     "tests/smoke_import.py": "d8a50c4ca9bb7bd04fbdabe8789752b4a77a1da7373f0d34a2f2c72608a6316c",
     "tests/supervisor_fixture.py": "c1baf22f2e9c12020edb08a4ff34a3c7741534b174c26a7782f86ce273eede01",
     "tests/test_bootstrap_paths.py": "009096d3216d889131c1fb0748bf84d724382ea7e79fb8f0906dc8cccb526505",
