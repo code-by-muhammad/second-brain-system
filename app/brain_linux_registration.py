@@ -58,7 +58,7 @@ def _variant(properties: dict, name: str, signature: str):
 
 
 def loaded_contract(unit: str, path: Path, argv: tuple[str, ...], prefix: str,
-                    unit_properties: dict, service_properties: dict, *, allow_reload=False,prove_main=True) -> dict:
+                    unit_properties: dict, service_properties: dict, *, trusted_home: Path, allow_reload=False,prove_main=True) -> dict:
     """Validate a candidate systemd-255 GetAll snapshot; no I/O or authority.
 
     This pure contract is exercised by fault controls before it may be used by
@@ -66,6 +66,7 @@ def loaded_contract(unit: str, path: Path, argv: tuple[str, ...], prefix: str,
     """
     if (not isinstance(unit, str) or not re.fullmatch(r'second-brain(?:-(?:test|ci)-[a-f0-9]{32})?\.service', unit)
             or not isinstance(path, Path) or not path.is_absolute()
+            or not isinstance(trusted_home, Path) or not trusted_home.is_absolute()
             or not isinstance(argv, tuple) or len(argv) != 2
             or any(not isinstance(arg, str) or not arg or not Path(arg).is_absolute() for arg in argv)
             or not isinstance(prefix, str) or not re.fullmatch(r'/user\.slice/user-[0-9]+\.slice/user@[0-9]+\.service', prefix)):
@@ -125,7 +126,9 @@ def loaded_contract(unit: str, path: Path, argv: tuple[str, ...], prefix: str,
                             ('PassEnvironment', 'as'), ('UnsetEnvironment', 'as'), ('ExecSearchPath', 'as')):
         if _variant(s, name, signature) != []:
             raise RegistrationError('Loaded service has an unexpected environment override.')
-    for name in ('WorkingDirectory', 'RootDirectory', 'RootImage', 'User', 'Group', 'PAMName'):
+    if _variant(s, 'WorkingDirectory', 's') != '!'+str(trusted_home):
+        raise RegistrationError('Loaded service working directory differs from the trusted user home.')
+    for name in ('RootDirectory', 'RootImage', 'User', 'Group', 'PAMName'):
         if _variant(s, name, 's') != '':
             raise RegistrationError('Loaded service has an unexpected execution context.')
     execute = _variant(s, 'ExecStart', 'a(sasbttttuii)')
@@ -513,7 +516,7 @@ class LinuxRegistration:
                      and isinstance(execute[0],list) and execute[0][:3]==[known[0],list(known),False]]
             if len(choices)!=1:raise RegistrationError('Dirty loaded command is not an exact retained definition.')
             argv=choices[0]
-        value=loaded_contract(self.unit,self.path,argv,self.prefix,u,s,allow_reload=True,prove_main=prove_main)
+        value=loaded_contract(self.unit,self.path,argv,self.prefix,u,s,trusted_home=self.home,allow_reload=True,prove_main=prove_main)
         value['object_path']=obj;value['arguments']=list(argv)
         if prove_main and value['main_pid']:
             import brain_process as processes

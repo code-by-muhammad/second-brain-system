@@ -237,7 +237,7 @@ def test_result_requires_declared_reply_arity():
 def loaded_helper(*,active=False,dirty=False):
     unit,_,_=helper();unit.unit=UNIT;unit.path=PATH;unit.prefix=PREFIX;unit.home=Path.cwd()
     unit.known={b'old':ARGV,b'new':(str(Path.cwd()/'fixture/new-python'),ARGV[1])}
-    u,s=known();u['NeedDaemonReload']['data']=dirty
+    u,s=known(trusted_home=unit.home);u['NeedDaemonReload']['data']=dirty
     if not active:
         u['ActiveState']['data']='inactive';u['SubState']['data']='dead'
         s['MainPID']['data']=0;s['ControlGroup']['data']=''
@@ -303,3 +303,18 @@ def test_install_failure_before_write_restores_prior_activation():
     with pytest.raises(native.RegistrationError,match='CAS') as caught:unit.install(b'current',enabled=True)
     assert state['enabled'] is True and caught.value.prior_native['enabled'] is True
     assert [name for name,args in calls]==['DisableUnitFiles','Reload','EnableUnitFiles','Reload']
+
+
+def test_loaded_state_passes_its_trusted_home_not_process_cwd(monkeypatch):
+    unit,u,s=loaded_helper()
+    unit.home=Path.cwd()/'distinct-trusted-home'
+    assert unit.home!=Path.cwd()
+    s['WorkingDirectory']['data']='!'+str(unit.home)
+    original=native.loaded_contract;seen=[]
+    def capture(*args,**kwargs):
+        seen.append(kwargs['trusted_home'])
+        return original(*args,**kwargs)
+    monkeypatch.setattr(native,'loaded_contract',capture)
+    value=unit._loaded_state('/org/freedesktop/systemd1/unit/known',b'old')
+    assert len(seen)==1 and seen[0] is unit.home
+    assert value['loaded'] is True and value['running'] is False

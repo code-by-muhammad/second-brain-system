@@ -31,7 +31,7 @@ def stateful(monkeypatch,**changes):
     unit._read_unit=lambda:(state['payload'],(1,state['inode'],len(state['payload']),1)) if state['payload'] is not None else None
     def getall(peer,obj,interface):
         assert obj==OBJECT
-        u,s=known();argv=unit.known[state['loaded_payload']]
+        u,s=known(trusted_home=unit.home);argv=unit.known[state['loaded_payload']]
         u['UnitFileState']['data']='enabled' if state['loaded_enabled'] else 'disabled'
         u['NeedDaemonReload']['data']=state['dirty']
         u['ActiveState']['data']='active' if state['running'] else 'inactive'

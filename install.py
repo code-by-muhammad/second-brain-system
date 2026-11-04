@@ -6,7 +6,7 @@ import argparse, hashlib, json, os, re, secrets, shutil, stat, subprocess, tempf
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
-VERSION='0.2.1'
+VERSION='0.2.2'
 INDEX_IGNORE_TEXT='.git/\n.obsidian/\n.trash/\n'+'/02-Areas/AI-Memory/Wiki/Log-Archives/'+'[0-9a-f]'*64+'.md\n'
 _SETUP_CACHE=None
 _SETUP_SHA256=None
