@@ -1,8 +1,8 @@
-"""One actual017 Linux migration on a fresh disposable Ubuntu24/systemd255 VM.
+"""Read-only native unit preabsence diagnostic on one fresh Ubuntu24 VM.
 
-External qualification fixture, not product payload. Each mode uses a fresh
-ordinary account and VM. Actual product guards must admit the official pinned
-candidate; none are substituted. No PID signals or old uncertain fixtures.
+Prepare the reviewed isolated SDK/account and synthetic017 deployment files,
+then observe native unit preabsence once. No product unit installation,
+update, rollback or recovery is executed or qualified.
 """
 from __future__ import annotations
 
@@ -137,6 +137,21 @@ def interpreter_identity(python,env):
 class SyntheticAcceptanceRejection(RuntimeError):pass
 class SyntheticAutomaticStopRejection(RuntimeError):pass
 class PreexistingNativeRegistration(RuntimeError):pass
+class DiagnosticPreabsenceComplete(Exception):pass
+
+
+def frame_only(stderr):
+    for line in stderr.splitlines():
+        if len(line)>8192:continue
+        try:value=json.loads(line)
+        except (ValueError,TypeError):continue
+        if not isinstance(value,dict) or set(value)!={"native_inspection_frames"}:continue
+        frames=value["native_inspection_frames"]
+        if not isinstance(frames,list) or not 1<=len(frames)<=32:continue
+        if all(isinstance(row,dict) and set(row)=={"filename","function","line"}
+               and all(isinstance(row[k],str) and re.fullmatch(r"[A-Za-z0-9_.<> -]{1,80}",row[k]) for k in ("filename","function"))
+               and type(row["line"]) is int and 1<=row["line"]<=10_000_000 for row in frames):return frames
+    return []
 
 
 def main():
@@ -159,7 +174,7 @@ def main():
     if receipt.exists():raise RuntimeError('Preserve the first receipt; never overwrite or silently retry.')
     previous_umask=os.umask(0o022)
     if previous_umask!=0o022:raise RuntimeError('The reviewed wrapper must pin umask022 before execution.')
-    if (not args.execute_reviewed_native or sys.platform!='linux' or os.geteuid()==0
+    if (args.mode!='forward' or not args.execute_reviewed_native or sys.platform!='linux' or os.geteuid()==0
         or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted'
         or not sys.flags.isolated or not sys.dont_write_bytecode
         or sys.flags.optimize or sys.version_info[:2]!=(3,12)):
@@ -198,28 +213,23 @@ def main():
     temporary=boundary/'tmp';temporary.mkdir();fake_home=boundary/'client-home';fake_home.mkdir()
     env=environment(home,temporary,Path(sys._base_executable))
     env['PATH']=str(tool.parent)+':'+env['PATH']
-    state={'status':'in progress','mode':args.mode,'unit':UNIT,'scope':'One disposable Ubuntu24/systemd255/x86_64 ordinary-account017 migration; no production/device/GUI/index/reboot acceptance.',
+    state={'status':'in progress','mode':args.mode,'unit':UNIT,'scope':'Diagnostic first native preabsence only; fresh account/manager and synthetic runtime files prepared, no product unit install/update/lifecycle acceptance.',
         'harness_sha256':args.reviewed_harness_sha256,'candidate_commit':args.candidate_commit,'candidate_tag':args.candidate_tag,
         'manifest_sha256':args.candidate_manifest_sha256,'baseline_commit':OLD_COMMIT,'root':str(root),
         'workflow_head':os.environ.get('GITHUB_SHA'),'workflow_sha':args.workflow_sha,'workflow_run_id':os.environ.get('GITHUB_RUN_ID'),
         'architecture':platform.machine(),'os_version':platform.freedesktop_os_release().get('VERSION_ID'),'parent_interpreter':sys.executable,
         'account':account.pw_name,'uid':os.geteuid(),'wrapper_metadata_scope':'GitHub markers, exact account, umask022 and populated bus are supplied by the reviewed root wrapper.',
         'started_at':time.time(),'stage':'source preflight','observations':[],'controller_calls':[],'cleanup':{},
-        'baseline_setup':'Actual017 deploy() and017 service install code; installer CLI bootstrap/handoff is not tested.',
-        'controller_call_scope':'Parent updater.main calls only; baseline/final/teardown calls and explicit recovery inner calls are not instrumented.',
-        'limits':['Fresh ordinary account and VM per mode; do not reuse its manager.',
-        'Only exact known manager ownership authorizes teardown; no cached-PID signals.',
-        'Selected interpreter prefix probes describe those invocations, not live daemon sys.prefix.',
-        'The locked candidate SDK parent is outside the update target venv; retained017 parent-CLI startup is not tested.',
-        'Uv retains product cache/download policy; no private-cache or no-download claim.',
-        'Recovery has no harness kill timeout; bounded product controls and the disposable CI job wall limit apply.',
-        'Definition deletion assumes this reviewed single-actor disposable job, not hostile same-UID concurrency or atomic compare-and-unlink.',
-        'Restoration checks app/device/selected-client bytes, the original absent previous binding and original native file SHA/enablement on this fixture.',
-        'Baseline017 installer performs a manager-wide daemon-reload only on this freshly prepared manager;017 stop is never invoked.',
-        'User-manager preparation and linger alter only the fresh account and its logind linger state; failed fixtures are preserved until VM disposal.',
-        'Umask022 baseline only;017 registrations created under umask002 are not qualified.',
-        'Target uv cache/base Python may be under the synthetic client home; parent SDK and harness are root-protected.',
-        'No installer CLI bootstrap, real installed017 layout, owner-device execution or arbitrary Linux distro support.']}
+        'baseline_setup':'Actual017 deploy() writes synthetic app/config/auth files only; native service install is not executed.',
+        'controller_call_scope':'No updater/controller lifecycle calls; one actual read-only native preabsence observation only.',
+        'product_unit_registration_attempted':False,
+        'limits':['One fresh ordinary account and populated manager bus are prepared by the unchanged reviewed wrapper.',
+        'Synthetic017 deploy writes only fixture files; native unit install/update/rollback/recovery never run.',
+        'Only frame basenames, function names and positive line numbers are retained; no exception messages or raw stderr.',
+        'A failed observation preserves the fixture and yields no lifecycle qualification.',
+        'A successful preabsence observation is read-only diagnostic evidence, not a native service pass.',
+        'Original failed-host conditions are not reconstructed or normalized.',
+        'No owner-device, GUI, local index/model, reboot/autostart or fresh onboarding acceptance.']}
     created=False;success=False;updater=None;old_payload=None;new_payload=None
     old=boundary/'baseline-v0.1.7';target=root/'releases'/args.candidate_tag
     original_env=dict(os.environ);original_cwd=Path.cwd()
@@ -273,6 +283,24 @@ def main():
         def observe(stage,*,preabsence=False):
             # Read actual product authority and native argv; do not normalize a mismatch in the fixture.
             code=r'''import json,os,sys,time
+def _native_frame_only(kind,error,tb):
+    rows=[];pending=[(error,tb)];seen=set();walked=0
+    while pending and len(seen)<4 and len(rows)<32 and walked<64:
+        current,trace=pending.pop(0)
+        if id(current) in seen:continue
+        seen.add(id(current))
+        while trace is not None and len(rows)<32 and walked<64:
+            walked+=1;code=trace.tb_frame.f_code
+            if type(trace.tb_lineno) is int and trace.tb_lineno>0:
+                rows.append({"filename":os.path.basename(code.co_filename)[:80],"function":code.co_name[:80],"line":trace.tb_lineno})
+            trace=trace.tb_next
+        for related in (current.__cause__,current.__context__):
+            if related is not None:pending.append((related,related.__traceback__))
+    payload=json.dumps({"native_inspection_frames":rows})
+    while len(payload)>8192:
+        rows.pop();payload=json.dumps({"native_inspection_frames":rows})
+    sys.stderr.write(payload+"\n")
+sys.excepthook=_native_frame_only
 sys.path.insert(0,sys.argv[1])
 import brain_service as s,brain_process as p,brain_linux_registration as m
 s._qualified_native_platform()
@@ -312,11 +340,14 @@ print(json.dumps(v))
             result=support.run(arguments,source_app=source_app,env=updater.cli_environment(root),capture_output=True,text=True,encoding='utf-8',timeout=60,check=False)
             if preabsence and result.returncode==24 and json.loads(result.stdout)=={'refusal':'preexisting-default-unit-or-artifact'}:
                 raise PreexistingNativeRegistration('Preexisting default unit or artifact is preserved.')
-            if result.returncode:raise RuntimeError('Actual native product inspection refused at '+stage+'. Preserve the fixture; do not adapt authority.')
+            if result.returncode:
+                state['native_inspection_failure_frames']=frame_only(result.stderr)
+                raise RuntimeError('Actual native product inspection refused at '+stage+'. Preserve the fixture; do not adapt authority.')
             value=json.loads(result.stdout);state['observations'].append({'stage':stage,**value});return value
 
         state['stage']='native default-unit preabsence'
         observe('initial default-unit preabsence',preabsence=True)
+        raise DiagnosticPreabsenceComplete
         # Legacy install uses real HOME; only synthetic client discovery later uses fake HOME.
         created=True;state['native_registration_attempted']=True;state['stage']='actual017 native service installation'
         updater.controller(old_python,old,root,'service','install')
@@ -468,6 +499,8 @@ print(json.dumps(v))
         if any(digest(read(root/'state'/n))!=h for n,h in auth_before.items()):raise RuntimeError('Authentication bytes changed.')
         state.update(final_health_version=final_health['version'],note_and_auth_preserved=True,named_client_acceptance='Synthetic selected-file refresh/restoration only; no actual GUI reload.',update_error_type=update_error)
         success=True
+    except DiagnosticPreabsenceComplete:
+        success=True
     except BaseException as error:
         state['error_type']=type(error).__name__
         state['failure_scope']='Preserve current fixture, loaded definition, transactions and private environments. No guessed cleanup or PID kill.'
@@ -537,11 +570,11 @@ print(json.dumps({'exact_owned_definition_removed':True,'manager_disabled_inacti
                     state['tool_bytes_changed']=True;success=False
         except BaseException as error:state['tool_final_check_error']=type(error).__name__;success=False
         os.environ.clear();os.environ.update(original_env);os.chdir(original_cwd)
-        state['ended_at']=time.time();state['status']='passed' if success and state['cleanup'].get('exact_owned_definition_removed') else 'needs review'
-        if state['status']=='passed':state['stage']='complete'
+        state['ended_at']=time.time();state['status']='read-only native preabsence observed' if success and not created else 'needs review'
+        if state['status']=='read-only native preabsence observed':state['stage']='diagnostic complete; no native unit installation'
         write_new(receipt,(json.dumps(state,indent=2)+'\n').encode())
         print(json.dumps({'status':state['status'],'mode':args.mode,'receipt':str(receipt),'error_type':state.get('error_type'),'cleanup':state['cleanup']}))
-    return 0 if state['status']=='passed' else 1
+    return 0 if state['status']=='read-only native preabsence observed' else 1
 
 
 if __name__=='__main__':raise SystemExit(main())
