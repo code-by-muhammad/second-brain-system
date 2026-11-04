@@ -60,17 +60,32 @@ def source_revision_case(brain,tmp_path,kind,with_history=True):
 
 @pytest.mark.parametrize('kind',['utf16','cp1252','oversize'])
 def test_unavailable_current_source_uses_exact_git_origin_without_unbounded_read(brain,tmp_path,monkeypatch,kind):
-    source,another,packet,result=source_revision_case(brain,tmp_path,kind); before=note_snapshot(); reads=[]
-    real=Path.read_bytes
-    def read(path):
-        if path==source: reads.append(path)
-        return real(path)
-    monkeypatch.setattr(Path,'read_bytes',read); calls=fake_model(monkeypatch,result)
-    report=w.run()
+    source,another,packet,result=source_revision_case(brain,tmp_path,kind); before=note_snapshot(); reads=[]; opens=[]
+    real=Path.read_bytes; real_open=Path.open
+    class SourceStream:
+        def __init__(self,stream): self.stream=stream
+        def __enter__(self): self.stream.__enter__(); return self
+        def __exit__(self,*args): return self.stream.__exit__(*args)
+        def __getattr__(self,name): return getattr(self.stream,name)
+        def read(self,size=-1):
+            reads.append(size)
+            return self.stream.read(size)
+    def opened(path,*args,**kwargs):
+        stream=real_open(path,*args,**kwargs)
+        if path==source:
+            opens.append(args[0] if args else kwargs.get('mode','r'))
+            return SourceStream(stream)
+        return stream
+    calls=fake_model(monkeypatch,result)
+    with monkeypatch.context() as observer:
+        observer.setattr(Path,'open',opened)
+        report=w.run()
     assert report['status']=='complete' and len(calls)==1 and not report['lint']['issues']
     assert report['lint']['historical_evidence_count']==1
     assert 'raw_sha256' not in json.dumps(report['lint'])
-    assert len(reads)==(0 if kind=='oversize' else 1)
+    # Inventory, publication history and final lint each inspect this source once.
+    assert opens==([] if kind=='oversize' else ['rb']*3)
+    assert reads==([] if kind=='oversize' else [2_000_001]*3)
     assert real(source)==before[source.relative_to(s.VAULT).as_posix()] and real(another)==before[another.relative_to(s.VAULT).as_posix()]
     claim=w.meta((s.VAULT/w.BASE/'Projects/example.md').read_text(encoding='utf-8'))['wiki_claims'][0]
     assert claim['source_revision']['sha256']!=s.digest(real(source))

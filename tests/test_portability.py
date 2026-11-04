@@ -21,6 +21,7 @@ def test_startup_definitions(brain,platform):
 def test_client_config_preservation(brain,tmp_path,monkeypatch):
     home=tmp_path/'home'; (home/'.codex').mkdir(parents=True)
     original='model = "user-choice"\n\n[mcp_servers.other]\ncommand = "keep"\n\n[mcp_servers.second-brain]\ncommand = "old"\n\n[mcp_servers.second-brain.env]\nOLD = "value"\n'
+    original=original.replace('command = "old"','command = "old"\nargs = ['+json.dumps(str(cfg.ROOT/'app/brain_client.py'))+']')
     (home/'.codex/config.toml').write_text(original)
     (home/'.claude.json').write_text(json.dumps({'theme':'dark','mcpServers':{'other':{'command':'keep'}}}))
     (home/'.claude').mkdir()
@@ -31,7 +32,10 @@ def test_client_config_preservation(brain,tmp_path,monkeypatch):
     installer.clients(cfg.ROOT,cfg.PYTHON,home)
     data=tomllib.loads((home/'.codex/config.toml').read_text())
     assert data['model']=='user-choice' and data['mcp_servers']['other']['command']=='keep'
-    assert 'env' not in data['mcp_servers']['second-brain']
+    # Refreshing command/args must retain owner options on the managed server.
+    assert data['mcp_servers']['second-brain']['env']=={'OLD':'value'}
+    assert data['mcp_servers']['second-brain']['command']==str(cfg.PYTHON)
+    assert data['mcp_servers']['second-brain']['args']==[str(cfg.ROOT/'app/brain_client.py')]
     claude=json.loads((home/'.claude.json').read_text())
     assert claude['theme']=='dark' and claude['mcpServers']['other']['command']=='keep'
     instructions=(home/'.codex/AGENTS.md').read_text()

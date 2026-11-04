@@ -9,6 +9,9 @@ if PILOT:
     cfg.VAULT=(ROOT/'pilot/vault').resolve()
     cfg.STATE=(ROOT/'pilot/state').resolve()
     cfg.PORT=8767
+for key in list(os.environ):
+    if key.startswith('BASIC_MEMORY_'): os.environ.pop(key)
+os.environ.update(cfg.environment())
 os.environ['BRAIN_VAULT']=str(ROOT/'pilot/vault') if PILOT else str(cfg.VAULT)
 os.environ['BRAIN_STATE']=str(ROOT/'pilot/state') if PILOT else str(cfg.STATE)
 os.environ['BASIC_MEMORY_CONFIG_DIR']=os.environ['BRAIN_STATE']
@@ -21,6 +24,7 @@ os.environ['HF_HUB_DISABLE_TELEMETRY']='1'
 os.environ['HF_HUB_OFFLINE']='1'
 os.environ['DO_NOT_TRACK']='1'
 os.environ['LOGFIRE_IGNORE_NO_CONFIG']='1'
+cfg.require_local_search_runtime()
 from basic_memory.config import init_mcp_logging
 init_mcp_logging()
 import basic_memory.mcp.tools
@@ -90,12 +94,12 @@ async def brain_search(query:str,english_query:str='',limit:int=8) -> dict:
         row=fused.setdefault(hit['path'],{**hit,'fusion_score':0})
         row['fusion_score']+=1/(30+rank)
     combined=sorted(fused.values(),key=lambda h:-h['fusion_score'])[:limit]
-    return {'results':combined,'indexed':results,'fresh_file_matches':fresh,
+    return {'results':combined,'indexed':results,'fresh_file_matches':fresh,'fresh_file_scope':getattr(fresh,'scope',{'status':'unknown'}),
             'guidance':'Verify current files and dates with brain_read. Newer file modification time alone does not supersede a decision.'}
 
 @mcp.tool(annotations={'readOnlyHint':True,'openWorldHint':False})
 def brain_read(path:str,start_line:int=1,max_lines:int=160) -> dict:
-    """Read a current vault-relative Markdown source, with line numbers and a revision hash."""
+    """Read an exact vault-relative Markdown path or wikilink, with line numbers and a current hash. No basename guessing."""
     return store.read(path,start_line,max_lines)
 
 @mcp.tool(annotations={'readOnlyHint':False,'destructiveHint':False,'idempotentHint':True,'openWorldHint':False})
@@ -115,21 +119,33 @@ def brain_health() -> dict:
     health={'status':'running','time':store.stamp(),'vault_exists':store.VAULT.is_dir(),
             'database_exists':(store.STATE/'memory.db').exists(),'mode':'local','version':cfg.VERSION,
             'retrieval_version':'basic-memory 0.23.2','device_id':cfg.DEVICE_ID,'device_role':cfg.ROLE}
+    health['current_index_coverage']={'status':'not checked','command':'brain_cli.py index status',
+                                    'guidance':'Run the read-only current coverage check after imports; cached bootstrap is historical.'}
     try:
-        from brain_wiki import status as wiki_status
-        health['wiki']=wiki_status()
+        from brain_wiki import _worker_summary
+        health['wiki']={'worker':_worker_summary(),'coverage':'not checked; cached worker metadata only','command':'brain_cli.py wiki status'}
+    except RecursionError: health['wiki']={'status':'unavailable; inspect local logs'}
+    except (MemoryError,RuntimeError): raise
     except Exception: health['wiki']={'status':'unavailable; inspect local logs'}
     p=store.STATE/'maintenance-status.json'
-    if p.exists():
+    if p.exists() or p.is_symlink() or p.is_junction():
         from brain_maintenance import health_status
         health['maintenance']=health_status(p)
     p=store.STATE/'index-bootstrap-status.json'
-    if p.exists(): health['initial_index_validation']=json.loads(p.read_text())
+    if p.exists() or p.is_symlink() or p.is_junction():
+        try: initial_index=store.bounded_json_file(p,65536)
+        except (OSError,ValueError,RecursionError): initial_index=None
+        health['initial_index_validation']=initial_index if isinstance(initial_index,dict) else {
+            'status':'needs attention','error':'Initial index status is unavailable or invalid; inspect local logs.'}
     try:
-        import sqlite3
-        with sqlite3.connect((store.STATE/'memory.db').resolve().as_uri()+'?mode=ro',uri=True,timeout=2) as conn:
+        import sqlite3,time
+        from contextlib import closing
+        with closing(sqlite3.connect((store.STATE/'memory.db').resolve().as_uri()+'?mode=ro',uri=True,timeout=2)) as conn:
+            deadline=time.monotonic()+2
+            conn.set_progress_handler(lambda:int(time.monotonic()>=deadline),1000)
             health['index']={t:conn.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in ('entity','search_vector_chunks','search_vector_embeddings_rowids')}
-    except Exception: health['index']={'status':'initializing or unavailable'}
+    except (MemoryError,RuntimeError): raise
+    except Exception: health['index']={'status':'unavailable; inspect index status and local logs'}
     return health
 
 ALLOWED={'brain_context','brain_search','brain_read','brain_capture','brain_update_current','brain_health'}

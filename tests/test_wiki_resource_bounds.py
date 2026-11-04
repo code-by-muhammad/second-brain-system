@@ -33,8 +33,13 @@ def test_deep_yaml_source_keeps_full_body_and_unknown_metadata_date(brain):
     source=s.VAULT/'01-Projects/Deep.md'; source.parent.mkdir()
     raw=('---\nowner_note: '+'['*500+'0'+']'*500+'\n---\n# Source\nHistorical evidence remains accessible.').encode(); source.write_bytes(raw)
     assert w.status()['eligible_sources']==1
-    packet=w.prepare(); assert packet['sources'][0]['date']=='unknown' and packet['sources'][0]['sha256']==s.digest(raw)
-    assert source.read_bytes()==raw and 'Historical evidence remains accessible.' in packet['sources'][0]['text']
+    rows=w.inventory(); assert len(rows)==1
+    assert rows[0]['date']=='unknown' and rows[0]['sha256']==s.digest(raw)
+    assert 'Historical evidence remains accessible.' in rows[0]['text'] and source.read_bytes()==raw
+    with pytest.raises(w.WikiIntegrityError) as caught: w.prepare()
+    assert caught.value.page=='01-Projects/Deep.md' and caught.value.field=='content'
+    assert w.inventory()==rows and w.status()['pending_source_parts']==1 and source.read_bytes()==raw
+    assert not list((cfg.STATE/'wiki/batches').glob('*/input.json'))
 
 
 def aliased_topic(brain,levels=19):

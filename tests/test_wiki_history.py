@@ -202,7 +202,7 @@ def test_missing_promised_git_blob_cannot_fetch_even_without_new_lazy_fetch_vari
     config=(clone/'.git/config').read_bytes()
     packs=sorted(path.name for path in (clone/'.git/objects/pack').iterdir())
     monkeypatch.setattr(s,'VAULT',clone); monkeypatch.setattr(cfg,'VAULT',clone)
-    original=w._GIT_POPEN; observed=[]
+    original=w._GIT_RUN; observed=[]
     def pre_lazy_fetch_variable_git(command,**kwargs):
         # Git 2.38 does not implement GIT_NO_LAZY_FETCH. Removing it on current
         # Git exercises the older supported transport guard without installing
@@ -211,7 +211,7 @@ def test_missing_promised_git_blob_cannot_fetch_even_without_new_lazy_fetch_vari
         env.setdefault('GIT_ALLOW_PROTOCOL','file')
         observed.append(env['GIT_ALLOW_PROTOCOL']); kwargs['env']=env
         return original(command,**kwargs)
-    monkeypatch.setattr(w,'_GIT_POPEN',pre_lazy_fetch_variable_git)
+    monkeypatch.setattr(w,'_GIT_RUN',pre_lazy_fetch_variable_git)
     assert w._EvidenceHistory()._git('cat-file','-s',oid) is None
     assert observed==['']
     assert '?'+oid in missing()

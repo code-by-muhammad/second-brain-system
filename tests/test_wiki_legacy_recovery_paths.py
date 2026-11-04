@@ -14,7 +14,7 @@ def legacy_context(brain,monkeypatch):
     for index,claim in enumerate(claims): claim['text']+=f' Historical statement number {index}.'
     claims[18]['owner_note']={'password':'synthetic_mock_value_1234567890'};info['wiki_claims']=claims
     topic.write_bytes(s.note_text(info,'# Synthetic pre-upgrade metadata.').encode());screen=w._screen_decoded_context
-    monkeypatch.setattr(w,'_screen_decoded_context',lambda value:None);packet=w.prepare()
+    monkeypatch.setattr(w,'_screen_decoded_context',lambda value,**kwargs:None);packet=w.prepare()
     assert packet['current_pages'][0]['claim_count']==20 and len(packet['current_pages'][0]['meta']['wiki_claims'])==12
     return topic,result,packet,screen
 

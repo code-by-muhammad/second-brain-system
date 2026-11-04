@@ -244,38 +244,69 @@ def deep_source_record(source):
     raw = ('---\nsources: ['+relative+']\nlatest_source_part: 0\nwiki_pages: []\nowner_note: '
            +'['*350+'0'+']'*350+'\n---\n# Preserve nested owner metadata.\n').encode('utf-8')
     target.write_bytes(raw)
-    assert 'owner_note' in w.meta(raw.decode('utf-8'))
+    assert w.meta(raw.decode('utf-8')) == {}
     return target
 
 
+def serialization_fault_record(source,monkeypatch):
+    """Defensive late-serializer fault, distinct from real parser rejection."""
+    relative=source.relative_to(s.VAULT).as_posix()
+    target=s.VAULT/w.BASE/'Sources'/(s.digest(relative.encode('utf-8'))[:16]+'.md')
+    target.parent.mkdir(parents=True,exist_ok=True)
+    marker='Synthetic late source serializer fault'
+    target.write_bytes(s.note_text({'sources':[relative],'wiki_pages':[],'latest_source_part':0,
+                                   'owner_note':marker},'# Preserve owner body.').encode('utf-8'))
+    assert w._derived_metadata(target,target.read_text('utf-8'))['owner_note']==marker
+    original=s.note_text;calls=[]
+    def fault(info,body):
+        if info.get('owner_note')==marker:
+            calls.append(relative)
+            raise RecursionError('Synthetic late serializer dependency failure')
+        return original(info,body)
+    monkeypatch.setattr(s,'note_text',fault)
+    return target,calls
+
+
 @pytest.mark.parametrize('mode', ['worker', 'relink'])
-def test_deep_source_record_serialization_failure_is_controlled_and_preserves_bytes(brain, monkeypatch, mode):
+@pytest.mark.parametrize('boundary',['frontmatter','serialization'])
+def test_source_record_parse_and_late_serialization_failures_preserve_bytes(brain, monkeypatch, mode,boundary):
+    faults=[]
     if mode=='worker':
         _, source, _, result = existing_topic(brain)
-        target = deep_source_record(source)
+        if boundary=='frontmatter':target=deep_source_record(source)
+        else:target,faults=serialization_fault_record(source,monkeypatch)
         packet = w.prepare()
         calls = fake_model(monkeypatch, explicit(packet, result))
         before = note_snapshot()
+        plans={p:p.read_bytes() for p in (cfg.STATE/'wiki/batches').glob('*/publication.json')}
         error, _, state = run_caught()
         assert state['attention_required'] and state['consecutive_failures']==0
         assert state['integrity_page']==target.relative_to(s.VAULT).as_posix()
-        assert state['integrity_field']=='serialization'
+        assert state['integrity_field']==boundary
         assert len(calls)==1
         assert w.run()['status']=='attention' and len(calls)==1
+        assert w.status()['pending_source_parts']==1
+        with w.db() as conn:
+            assert conn.execute('SELECT count(*) FROM sources WHERE attempts>0').fetchone()[0]==0
+            assert conn.execute('SELECT count(*) FROM batches WHERE attempts>0').fetchone()[0]==0
+        assert {p:p.read_bytes() for p in (cfg.STATE/'wiki/batches').glob('*/publication.json')}==plans
     else:
         source, packet, result = fixture(brain)
         w.apply(packet, result)
-        target = deep_source_record(source)
+        if boundary=='frontmatter':target=deep_source_record(source)
+        else:target,faults=serialization_fault_record(source,monkeypatch)
         before = note_snapshot()
         with pytest.raises(w.WikiIntegrityError) as caught:
             w.rebuild_source_links()
         error = caught.value
     assert isinstance(error, w.WikiIntegrityError)
-    assert error.page==target.relative_to(s.VAULT).as_posix() and error.field=='serialization'
+    assert error.page==target.relative_to(s.VAULT).as_posix() and error.field==boundary
+    if boundary=='serialization':assert faults
     assert before==note_snapshot()
 
 
-def test_relink_late_unserializable_record_preflights_all_records_before_any_write(brain, monkeypatch):
+@pytest.mark.parametrize('boundary',['frontmatter','serialization'])
+def test_relink_late_bad_record_preflights_all_records_before_any_write(brain, monkeypatch,boundary):
     source, another, _, result = existing_topic(brain)
     packet = w.prepare()
     w.apply(packet, result)
@@ -283,7 +314,8 @@ def test_relink_late_unserializable_record_preflights_all_records_before_any_wri
     info = w.meta(first.read_text(encoding='utf-8'))
     info['wiki_pages'] = []
     first.write_bytes(s.note_text(info, '# First source navigation needs repair.').encode('utf-8'))
-    last = deep_source_record(another)
+    if boundary=='frontmatter':last=deep_source_record(another);faults=[]
+    else:last,faults=serialization_fault_record(another,monkeypatch)
     directory = s.VAULT/w.BASE/'Sources'
     original_glob = Path.glob
 
@@ -296,7 +328,8 @@ def test_relink_late_unserializable_record_preflights_all_records_before_any_wri
     before = note_snapshot()
     with pytest.raises(w.WikiIntegrityError) as caught:
         w.rebuild_source_links()
-    assert caught.value.page==last.relative_to(s.VAULT).as_posix() and caught.value.field=='serialization'
+    assert caught.value.page==last.relative_to(s.VAULT).as_posix() and caught.value.field==boundary
+    if boundary=='serialization':assert faults==[another.relative_to(s.VAULT).as_posix()]
     assert before==note_snapshot()
 
 
