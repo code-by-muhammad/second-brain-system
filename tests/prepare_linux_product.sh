@@ -16,7 +16,7 @@ candidate_source=$1;fixture_source=$2;uv_source=$3;mode=$4;tag=$5;commit=$6;mani
 [[ "$(/usr/bin/sha256sum "$fixture_source" | /usr/bin/cut -d' ' -f1)" == "$harness_sha" ]]
 uv_sha=$(/usr/bin/sha256sum "$uv_source" | /usr/bin/cut -d' ' -f1)
 [[ "$uv_sha" =~ ^[a-f0-9]{64}$ ]]
-qualification_base="/opt/second-brain-product-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${mode}"
+qualification_base="/var/lib/second-brain-product-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${mode}"
 qualification_source="$qualification_base/software"
 case "$mode" in forward) mode_letter=f ;; rollback) mode_letter=b ;; recovery) mode_letter=c ;; esac
 qualification_user="sbci${GITHUB_RUN_ID}${GITHUB_RUN_ATTEMPT}${mode_letter}"
@@ -33,6 +33,30 @@ wrapper_receipt() {
   fi
 }
 trap wrapper_receipt EXIT
+
+# Observed hosted /opt is writable. Never modify shared ancestors.
+qualification_validator='
+import sys
+from pathlib import Path
+def check(paths):
+    for selected in paths:
+        if not selected.is_absolute() or any(p.is_symlink() for p in (selected,*selected.parents)):
+            raise RuntimeError("Linked or relative qualification protection boundary: "+str(selected))
+        for part in (selected,*selected.parents):
+            info=part.stat()
+            if info.st_uid!=0 or info.st_mode&0o022:
+                raise RuntimeError("Unprotected qualification ancestor: "+str(part)+" uid="+str(info.st_uid)+" mode="+oct(info.st_mode&0o7777))
+if sys.argv[1:2]==["--parent-sdk"]:
+    if len(sys.argv)!=5:raise RuntimeError("Exact protected SDK paths required")
+    paths=[Path(sys.argv[2]),Path(sys.prefix),Path(sys._base_executable).resolve(),Path(sys.argv[3]).resolve(),Path(sys.argv[4])]
+else:
+    if len(sys.argv)!=1:raise RuntimeError("Fixed protection ancestor required")
+    paths=[Path("/var/lib")]
+check(paths)
+print("Protected qualification ancestry verified.")
+'
+# Fail before any privileged SDK creation if the proposed ancestor is unsuitable.
+/usr/bin/python3.12 -I -B -c "$qualification_validator"
 
 # Read-only parent SDK, driver and tools are outside the runner's private home.
 # Exact safe.directory is only needed for the reviewed runner-owned source.
@@ -52,6 +76,9 @@ sudo /usr/bin/env -i HOME=/root PATH=/usr/bin:/bin UV_NO_CONFIG=1 UV_CACHE_DIR="
 # All bytes here are public pinned source/tools/packages, with no credentials.
 sudo /usr/bin/chmod -R u=rwX,go=rX "$qualification_base"
 qualification_python="$qualification_source/.venv/bin/python"
+# Repeat the actual harness protection checks BEFORE account/linger/bus work.
+/usr/bin/env -i HOME=/nonexistent PATH=/usr/bin:/bin "$qualification_python" -I -B -c "$qualification_validator" \
+  --parent-sdk "$qualification_source" "$qualification_base/native_linux_upgrade.py" "$qualification_base/uv"
 
 # Actual architecture/service/update admission BEFORE account, linger or bus work.
 /usr/bin/env -i HOME=/nonexistent PATH=/usr/bin:/bin "$qualification_python" -I -B -c \
