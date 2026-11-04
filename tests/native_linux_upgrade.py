@@ -139,6 +139,20 @@ class SyntheticAutomaticStopRejection(RuntimeError):pass
 class PreexistingNativeRegistration(RuntimeError):pass
 
 
+def frame_only(stderr):
+    for line in stderr.splitlines():
+        if len(line)>8192:continue
+        try:value=json.loads(line)
+        except (ValueError,TypeError):continue
+        if not isinstance(value,dict) or set(value)!={"native_inspection_frames"}:continue
+        frames=value["native_inspection_frames"]
+        if not isinstance(frames,list) or not 1<=len(frames)<=32:continue
+        if all(isinstance(row,dict) and set(row)=={"filename","function","line"}
+               and all(isinstance(row[k],str) and re.fullmatch(r"[A-Za-z0-9_.<> -]{1,80}",row[k]) for k in ("filename","function"))
+               and type(row["line"]) is int and 1<=row["line"]<=10_000_000 for row in frames):return frames
+    return []
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--mode',required=True,choices=('forward','rollback','recovery'))
@@ -273,6 +287,24 @@ def main():
         def observe(stage,*,preabsence=False):
             # Read actual product authority and native argv; do not normalize a mismatch in the fixture.
             code=r'''import json,os,sys,time
+def _native_frame_only(kind,error,tb):
+    rows=[];pending=[(error,tb)];seen=set();walked=0
+    while pending and len(seen)<4 and len(rows)<32 and walked<64:
+        current,trace=pending.pop(0)
+        if id(current) in seen:continue
+        seen.add(id(current))
+        while trace is not None and len(rows)<32 and walked<64:
+            walked+=1;code=trace.tb_frame.f_code
+            if type(trace.tb_lineno) is int and trace.tb_lineno>0:
+                rows.append({"filename":os.path.basename(code.co_filename)[:80],"function":code.co_name[:80],"line":trace.tb_lineno})
+            trace=trace.tb_next
+        for related in (current.__cause__,current.__context__):
+            if related is not None:pending.append((related,related.__traceback__))
+    payload=json.dumps({"native_inspection_frames":rows})
+    while len(payload)>8192:
+        rows.pop();payload=json.dumps({"native_inspection_frames":rows})
+    sys.stderr.write(payload+"\n")
+sys.excepthook=_native_frame_only
 sys.path.insert(0,sys.argv[1])
 import brain_service as s,brain_process as p,brain_linux_registration as m
 s._qualified_native_platform()
@@ -312,7 +344,9 @@ print(json.dumps(v))
             result=support.run(arguments,source_app=source_app,env=updater.cli_environment(root),capture_output=True,text=True,encoding='utf-8',timeout=60,check=False)
             if preabsence and result.returncode==24 and json.loads(result.stdout)=={'refusal':'preexisting-default-unit-or-artifact'}:
                 raise PreexistingNativeRegistration('Preexisting default unit or artifact is preserved.')
-            if result.returncode:raise RuntimeError('Actual native product inspection refused at '+stage+'. Preserve the fixture; do not adapt authority.')
+            if result.returncode:
+                state['native_inspection_failure_frames']=frame_only(result.stderr)
+                raise RuntimeError('Actual native product inspection refused at '+stage+'. Preserve the fixture; do not adapt authority.')
             value=json.loads(result.stdout);state['observations'].append({'stage':stage,**value});return value
 
         state['stage']='native default-unit preabsence'
