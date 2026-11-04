@@ -1,403 +1,55 @@
 name: Verify Second Brain
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
-  pull_request:
   workflow_dispatch:
     inputs:
       scope:
-        description: Bounded diagnostic scope
         type: choice
-        default: inventory
-        options: [inventory, contracts, linux-contract, focused-controls, mac-product, linux-product, setup-controls, store-case-fixed]
-      candidate_tag:
-        description: Official nonapproved candidate tag, product qualification only
+        options: [linux-ownership]
+        required: true
+      helper_sha256:
         type: string
-      candidate_commit:
-        description: Reviewed full candidate commit, product qualification only
-        type: string
-      manifest_sha256:
-        description: Reviewed candidate manifest SHA256, product qualification only
-        type: string
-      harness_sha256:
-        description: Reviewed native harness SHA256, product qualification only
-        type: string
-      wrapper_sha256:
-        description: Reviewed privileged wrapper SHA256, linux-product only
-        type: string
-concurrency:
-  group: portable-brain-${{ github.ref }}-${{ inputs.scope || 'default' }}
-  cancel-in-progress: ${{ inputs.scope != 'mac-product' && inputs.scope != 'linux-product' }}
+        description: Independently reviewed metadata helper SHA256
+        required: true
 permissions:
   contents: read
+concurrency:
+  group: linux-ownership-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  store-case-fixed:
-    name: Native existing-note identity (${{ matrix.os }})
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && inputs.scope == 'store-case-fixed'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15, macos-15-intel]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 8
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
-        with:
-          version: '0.9.16'
-          enable-cache: false
-      - run: uv sync --locked --python 3.12
-      - name: Record exact synthetic probe source and tool identity
-        shell: bash
-        run: |
-          mkdir reports
-          git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD > reports/checked-out-commit.txt
-          shasum -a 256 app/*.py pyproject.toml tests/conftest.py tests/isolation_guard.py tests/test_sync_fsmonitor_policy.py tests/native_store_case_identity.py > reports/store-case-source-sha256.txt
-          ./.venv/bin/python -I -B -c 'import json,platform,sys,pytest;print(json.dumps(dict(python=sys.version,pytest=pytest.__version__,machine=platform.machine(),system=platform.system(),release=platform.release(),macos=platform.mac_ver()[0])))' > reports/store-case-tools.json
-          /usr/bin/git --version > reports/store-case-git-version.txt
-      - name: Exercise actual note APIs and local file-only Git in a fresh sandbox
-        shell: bash
-        run: |
-          case_path="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
-          env -i PATH="$case_path" HOME="$HOME" PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 ./.venv/bin/python -I -B tests/native_store_case_identity.py --phase fixed --source-repository "$GITHUB_WORKSPACE" --receipt "$GITHUB_WORKSPACE/reports/store-case.json"
-      - name: Retain sanitized scoped proof only
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: store-case-fixed-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
-          path: |
-            reports/store-case.json
-            reports/store-case.xml
-            reports/store-case.summary.json
-            reports/store-case-source-sha256.txt
-            reports/store-case-tools.json
-            reports/store-case-git-version.txt
-            reports/checked-out-commit.txt
-          if-no-files-found: error
-          retention-days: 30
-  linux-product:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && inputs.scope == 'linux-product'
-    uses: ./.github/workflows/linux-product-candidate.yml
-    with:
-      candidate_tag: ${{ inputs.candidate_tag }}
-      candidate_commit: ${{ inputs.candidate_commit }}
-      manifest_sha256: ${{ inputs.manifest_sha256 }}
-      harness_sha256: ${{ inputs.harness_sha256 }}
-      wrapper_sha256: ${{ inputs.wrapper_sha256 }}
-  setup-posix-cleanup:
-    name: Native setup group cleanup (${{ matrix.os }})
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && inputs.scope == 'setup-controls'
-    strategy:
-      fail-fast: false
-      max-parallel: 3
-      matrix:
-        os: [ubuntu-24.04, macos-15, macos-15-intel]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 8
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
-        with:
-          version: '0.9.16'
-          enable-cache: false
-      - run: uv sync --locked --python 3.12
-      - name: Record exact source and execute bounded synthetic native cases
-        shell: bash
-        run: |
-          mkdir reports
-          git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD > reports/checked-out-commit.txt
-          shasum -a 256 setup_runtime.py tests/test_setup_posix_group_cleanup.py tests/conftest.py tests/isolation_guard.py > reports/setup-source-sha256.txt
-          if [[ "$RUNNER_OS" == macOS ]]; then
-            setup_sandbox=$(mktemp -d /private/tmp/sb-setup-controls.XXXXXXXX)
-          else
-            setup_sandbox=$(mktemp -d /tmp/sb-setup-controls.XXXXXXXX)
-          fi
-          env -i PATH="$PATH" HOME="$HOME" SB_TEST_SANDBOX="$setup_sandbox" PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 ./.venv/bin/python -B -m pytest -q -p no:cacheprovider -p pytest_asyncio.plugin tests/test_setup_posix_group_cleanup.py --basetemp "$setup_sandbox/tmp" --junitxml reports/setup-native-controls.xml
-      - name: Retain sanitized bounded test receipts only
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: setup-native-cleanup-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
-          path: |
-            reports/setup-native-controls.xml
-            reports/checked-out-commit.txt
-            reports/setup-source-sha256.txt
-          if-no-files-found: error
-          retention-days: 30
-  mac-product:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && inputs.scope == 'mac-product'
-    uses: ./.github/workflows/mac-product-candidate.yml
-    with:
-      candidate_tag: ${{ inputs.candidate_tag }}
-      candidate_commit: ${{ inputs.candidate_commit }}
-      manifest_sha256: ${{ inputs.manifest_sha256 }}
-      harness_sha256: ${{ inputs.harness_sha256 }}
-  mac-native-capability:
-    name: Native macOS prerequisites and socket measurements (${{ matrix.os }})
-    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/feature/posix-') && inputs.scope == 'inventory'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15
-            arch: arm64
-          - os: macos-15-intel
-            arch: x86_64
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
-        with:
-          version: '0.9.16'
-          enable-cache: false
-      - run: uv sync --locked --python 3.12
-      - name: Observe actual GUI domain and unprivileged listener primitives
-        shell: bash
-        run: |
-          mkdir reports
-          git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD > reports/checked-out-commit.txt
-          uv run --locked python -I -B tests/native_mac_capabilities.py --expected-arch '${{ matrix.arch }}' | tee reports/mac-capabilities.json
-      - name: Retain prerequisite receipt only
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: mac-prerequisites-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
-          path: |
-            reports/mac-capabilities.json
-            reports/checked-out-commit.txt
-          if-no-files-found: warn
-          retention-days: 30
-      - name: Measure BSD IPv4/IPv6 reuse and TIME_WAIT in disposable CI
-        shell: bash
-        run: uv run --locked python -I -B tests/native_mac_socket_semantics.py | tee reports/mac-socket-semantics.json
-      - name: Retain bounded socket measurement receipt
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: mac-socket-semantics-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
-          path: |
-            reports/mac-socket-semantics.json
-            reports/checked-out-commit.txt
-          if-no-files-found: warn
-          retention-days: 30
-      - name: Measure interpreter topology and actual candidate inventory parser
-        shell: bash
-        run: ./.venv/bin/python -I -B tests/native_mac_identity_inventory.py --expected-arch '${{ matrix.arch }}' --receipt reports/mac-identity-inventory.json
-      - name: Retain create-only identity and inventory observations
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: mac-identity-inventory-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
-          path: |
-            reports/mac-identity-inventory.json
-            reports/checked-out-commit.txt
-          if-no-files-found: error
-          retention-days: 30
-  mac-manager-contract:
-    name: Mac manager contract and native focused controls (${{ matrix.os }})
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && (inputs.scope == 'contracts' || inputs.scope == 'focused-controls')
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15, macos-15-intel]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
-        with:
-          version: '0.9.16'
-          enable-cache: false
-      - run: uv sync --locked --python 3.12
-      - name: Record actual candidate source identity
-        shell: bash
-        run: |
-          mkdir reports
-          git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD > reports/checked-out-commit.txt
-          shasum -a 256 app/brain_process.py app/brain_mac_inventory.py app/brain_index_bootstrap.py tests/test_mac_framework_identity.py tests/test_posix_index_group_cleanup.py tests/native_mac_manager_contract.py > reports/focused-source-sha256.txt
-      - name: Observe one disposable UUID LaunchAgent contract
-        if: inputs.scope == 'contracts'
-        shell: bash
-        run: env -i PATH="$PATH" HOME="$HOME" GITHUB_ACTIONS=true ./.venv/bin/python -I -B tests/native_mac_manager_contract.py --receipt reports/mac-manager-contract.json
-      - name: Observe bounded disabled-state grammar without mutations
-        if: inputs.scope == 'focused-controls'
-        shell: bash
-        run: env -i PATH="$PATH" HOME="$HOME" GITHUB_ACTIONS=true ./.venv/bin/python -I -B tests/native_mac_disabled_contract.py --receipt reports/mac-disabled-contract.json
-      - name: Native focused controls with synthetic state only
-        if: always()
-        shell: bash
-        run: |
-          contract_sandbox=$(mktemp -d /private/tmp/sb-native-controls.XXXXXXXX)
-          env -i PATH="$PATH" HOME="$HOME" SB_TEST_SANDBOX="$contract_sandbox" PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 ./.venv/bin/python -B -m pytest -q -p no:cacheprovider -p pytest_asyncio.plugin tests/test_mac_framework_identity.py tests/test_posix_index_group_cleanup.py --basetemp "$contract_sandbox/tmp" --junitxml reports/native-focused-controls.xml
-      - name: Retain bounded source and observation receipts
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: mac-manager-contract-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
-          path: |
-            reports/mac-manager-contract.json
-            reports/mac-disabled-contract.json
-            reports/native-focused-controls.xml
-            reports/checked-out-commit.txt
-            reports/focused-source-sha256.txt
-          if-no-files-found: error
-          retention-days: 30
-  linux-manager-contract:
-    name: Linux manager contract in a fresh disposable ordinary account
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/posix-native-diagnostics' && (inputs.scope == 'contracts' || inputs.scope == 'linux-contract' || inputs.scope == 'focused-controls')
+  linux-ownership:
+    if: github.ref == 'refs/heads/feature/posix-linux-ownership-diagnostic' && inputs.scope == 'linux-ownership'
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Check out diagnostic and unchanged failed harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          path: harness
           persist-credentials: false
-      - name: Observe native user-manager contract
-        if: inputs.scope != 'focused-controls'
-        shell: bash
-        run: bash tests/prepare_linux_contract.sh
-      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
-        if: always() && inputs.scope != 'linux-contract'
+      - name: Check out exact public candidate as evidence only
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          version: '0.9.16'
-          enable-cache: false
-      - if: always() && inputs.scope != 'linux-contract'
-        run: uv sync --locked --python 3.12
-      - name: Native focused controls with synthetic state only
-        if: always() && inputs.scope != 'linux-contract'
+          ref: afe772bc61fcf747b6a0d8a17ccba67e5104b049
+          path: software
+          persist-credentials: false
+      - name: Read only public source identities and OS ancestor metadata
         shell: bash
+        env:
+          REVIEWED_HELPER_SHA256: ${{ inputs.helper_sha256 }}
+          OBSERVER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
-          mkdir -p reports
-          git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD > reports/checked-out-commit.txt
-          contract_sandbox=$(mktemp -d /tmp/sb-native-controls.XXXXXXXX)
-          env -i PATH="$PATH" HOME="$HOME" SB_TEST_SANDBOX="$contract_sandbox" PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 ./.venv/bin/python -B -m pytest -q -p no:cacheprovider -p pytest_asyncio.plugin tests/test_mac_framework_identity.py tests/test_posix_index_group_cleanup.py --basetemp "$contract_sandbox/tmp" --junitxml reports/native-focused-controls.xml
-      - name: Retain bounded native contract receipt
+          [[ "$(/usr/bin/git -C software rev-parse HEAD)" == afe772bc61fcf747b6a0d8a17ccba67e5104b049 ]]
+          [[ "$(/usr/bin/git -C harness rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ "$GITHUB_SHA" == "$GITHUB_WORKFLOW_SHA" ]]
+          [[ "$REVIEWED_HELPER_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$(sha256sum harness/tests/native_linux_ownership.py | cut -d' ' -f1)" == "$REVIEWED_HELPER_SHA256" ]]
+          mkdir reports
+          /usr/bin/env -i PATH=/usr/bin:/bin GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$OBSERVER_RUNNER_ENVIRONMENT" GITHUB_REF="$GITHUB_REF" GITHUB_SHA="$GITHUB_SHA" GITHUB_WORKFLOW_SHA="$GITHUB_WORKFLOW_SHA" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" ImageOS="$ImageOS" ImageVersion="$ImageVersion" /usr/bin/python3.12 -I -B harness/tests/native_linux_ownership.py --helper-sha256 "$REVIEWED_HELPER_SHA256" --receipt "$GITHUB_WORKSPACE/reports/linux-ownership.json"
+      - name: Retain bounded public metadata only
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: linux-manager-contract-${{ github.sha }}-${{ github.run_attempt }}
-          path: |
-            reports/linux-manager-contract.json
-            reports/native-focused-controls.xml
-            reports/checked-out-commit.txt
+          name: linux-ownership-${{ github.sha }}-${{ github.run_attempt }}
+          path: reports/linux-ownership.json
           if-no-files-found: error
           retention-days: 30
-  test:
-    if: github.ref != 'refs/heads/feature/posix-native-diagnostics'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-2025]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    env:
-      UV_HTTP_TIMEOUT: '60'
-      UV_CONCURRENT_DOWNLOADS: '3'
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
-        with:
-          version: '0.9.16'
-          enable-cache: false
-      - name: Record qualification source identity
-        shell: pwsh
-        env:
-          QUAL_SHA: ${{ github.sha }}
-          QUAL_PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          QUAL_PR_BASE: ${{ github.event.pull_request.base.sha }}
-          QUAL_EVENT: ${{ github.event_name }}
-          QUAL_REF: ${{ github.ref }}
-          QUAL_RUN: ${{ github.run_id }}
-        run: |
-          New-Item -ItemType Directory -Path reports -Force -ErrorAction Stop | Out-Null
-          $qualificationCommit = (git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD).Trim()
-          $qualificationTree = (git --no-optional-locks -c core.fsmonitor=false rev-parse 'HEAD^{tree}').Trim()
-          @{ commit = $env:QUAL_SHA; checked_out_commit = $qualificationCommit; checked_out_tree = $qualificationTree; pr_head = $env:QUAL_PR_HEAD; pr_base = $env:QUAL_PR_BASE; event = $env:QUAL_EVENT; ref = $env:QUAL_REF; run_id = $env:QUAL_RUN; manifest_sha256 = (Get-FileHash -LiteralPath release-manifest.json -Algorithm SHA256).Hash.ToLowerInvariant(); profile_sha256 = (Get-FileHash -LiteralPath security-exceptions.json -Algorithm SHA256).Hash.ToLowerInvariant() } | ConvertTo-Json | Set-Content -LiteralPath reports/source.json -Encoding utf8
-      - run: uv sync --locked --python 3.12
-      - name: Verify shipped payload manifest consistency
-        run: uv run --locked python -I -B -c "import runpy; from pathlib import Path; runpy.run_path('update.py')['verify'](Path.cwd())"
-      - name: Windows guarded regression (synthetic state only)
-        shell: pwsh
-        run: |
-          $testPython = (Resolve-Path -LiteralPath '.venv/Scripts/python.exe').Path
-          $testOwnerHome = [Environment]::GetFolderPath('UserProfile')
-          $testSandbox = Join-Path $env:RUNNER_TEMP ('second-brain-tests-' + [guid]::NewGuid().ToString('N'))
-          $testPrivate = Join-Path $testSandbox 'private'
-          New-Item -ItemType Directory -Path $testPrivate -ErrorAction Stop | Out-Null
-          $testAllowed = @('PATH','SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','USERNAME','USERDOMAIN','HOMEDRIVE','HOMEPATH','PROCESSOR_ARCHITECTURE','NUMBER_OF_PROCESSORS','OS','PROGRAMFILES','PROGRAMFILES(X86)','PROGRAMDATA','ALLUSERSPROFILE')
-          Get-ChildItem Env: | Where-Object { $_.Name.ToUpperInvariant() -notin $testAllowed } | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_.Name) }
-          $env:HOME = $testOwnerHome
-          $env:USERPROFILE = $testOwnerHome
-          $env:APPDATA = Join-Path $testPrivate 'AppData/Roaming'
-          $env:LOCALAPPDATA = Join-Path $testPrivate 'AppData/Local'
-          $env:TEMP = $testPrivate
-          $env:TMP = $testPrivate
-          $env:TMPDIR = $testPrivate
-          $env:SB_TEST_SANDBOX = $testSandbox
-          $env:PYTHONDONTWRITEBYTECODE = '1'
-          $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
-          $env:HF_HUB_OFFLINE = '1'
-          $env:HF_HUB_DISABLE_TELEMETRY = '1'
-          $env:GIT_ALLOW_PROTOCOL = 'file'
-          $env:GIT_CONFIG_NOSYSTEM = '1'
-          $env:GIT_CONFIG_GLOBAL = 'NUL'
-          $env:GIT_TERMINAL_PROMPT = '0'
-          $env:GCM_INTERACTIVE = 'never'
-          & $testPython -B -m pytest -q -p no:cacheprovider -p pytest_asyncio.plugin --basetemp (Join-Path $testSandbox 'tmp') --junitxml reports/windows-regression.xml
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - run: uv run --locked python -m compileall -q app install.py update.py setup_runtime.py build_release.py
-      - run: uv run --locked python tests/smoke_import.py
-      - run: uv export --locked --no-dev --no-hashes --output-file reports/audit-requirements.txt
-      - name: Raw dependency audit and scoped profile gate
-        shell: pwsh
-        run: |
-          $dependencyReport = 'reports/dependency-audit.json'
-          uvx --python 3.12 --from pip-audit==2.9.0 pip-audit --disable-pip --no-deps -r reports/audit-requirements.txt --format json --output $dependencyReport
-          $dependencyAuditExit = $LASTEXITCODE
-          if ($dependencyAuditExit -notin @(0,1)) { exit $dependencyAuditExit }
-          uv run --locked python -I -B check_dependency_audit.py $dependencyReport 2>&1 | Tee-Object -FilePath reports/dependency-profile.txt
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Retain bounded synthetic qualification reports
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: windows-qualification-${{ github.sha }}-${{ github.run_attempt }}
-          path: |
-            reports/source.json
-            reports/windows-regression.xml
-            reports/audit-requirements.txt
-            reports/dependency-audit.json
-            reports/dependency-profile.txt
-          if-no-files-found: warn
-          retention-days: 30
-  library-import:
-    if: github.ref != 'refs/heads/feature/posix-native-diagnostics'
-    name: Library import only (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15, macos-15-intel]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
-        with:
-          version: '0.9.16'
-          enable-cache: false
-      - run: uv sync --locked --python 3.12
-      - run: uv run --locked python -m compileall -q app install.py update.py setup_runtime.py build_release.py
-      - run: uv run --locked python tests/smoke_import.py
