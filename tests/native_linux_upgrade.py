@@ -13,7 +13,7 @@ import importlib.metadata
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path,PurePosixPath
 import platform
 import re
 import shutil
@@ -154,6 +154,45 @@ def frame_only(stderr):
     return []
 
 
+def path_metadata_only(stderr,home,uid):
+    allowed=[PurePosixPath(str(home)),PurePosixPath("/run/user/"+str(uid))]+[PurePosixPath(p) for p in ("/etc/xdg/systemd","/etc/systemd","/run/systemd","/usr/local/share/systemd","/usr/share/systemd","/usr/local/lib/systemd","/usr/lib/systemd","/usr/lib64/systemd","/lib/systemd","/lib64/systemd")]
+    def text(value):return isinstance(value,str) and 0<len(value)<=1024 and not any(ord(c)<32 or ord(c)==127 or c=="\\" for c in value)
+    def selected(value):
+        p=PurePosixPath(value)
+        return text(value) and p.is_absolute() and ".." not in p.parts and len(p.parents)<32 and any(p.is_relative_to(root) for root in allowed)
+    for line in stderr.splitlines():
+        if len(line)>131072:continue
+        try:wrapped=json.loads(line)
+        except (ValueError,TypeError):continue
+        if not isinstance(wrapped,dict) or set(wrapped)!={"native_unit_path_metadata"}:continue
+        value=wrapped["native_unit_path_metadata"]
+        if not isinstance(value,dict) or set(value)!={"unit_paths","ancestors","complete","omitted_unit_path_indexes"} or type(value["complete"]) is not bool:continue
+        paths=value["unit_paths"];rows=value["ancestors"]
+        omitted=value["omitted_unit_path_indexes"]
+        if not isinstance(omitted,list) or len(omitted)>64 or any(type(i) is not int or not 0<=i<64 for i in omitted) or omitted!=sorted(set(omitted)) or (omitted and value["complete"]):continue
+        if not isinstance(paths,list) or not 0<=len(paths)<=64 or not all(isinstance(p,str) and selected(p) for p in paths):continue
+        if len(paths)+len(omitted)>64 or any(i>=len(paths)+len(omitted) for i in omitted):continue
+        if not isinstance(rows,list) or len(rows)>256 or (value["complete"] and not paths):continue
+        expected={str(p) for raw in paths for p in (PurePosixPath(raw),*PurePosixPath(raw).parents)}
+        seen=set();valid=True
+        for row in rows:
+            if not isinstance(row,dict) or not {"path","status"}<=set(row) or not isinstance(row["path"],str) or row["path"] not in expected or row["path"] in seen:valid=False;break
+            seen.add(row["path"])
+            if row["status"] in ("missing","unavailable"):
+                if set(row)!={"path","status"} or (value["complete"] and row["status"]=="unavailable"):valid=False;break
+                continue
+            if row["status"]!="exists" or not {"uid","gid","mode","type"}<=set(row):valid=False;break
+            if any(type(row[k]) is not int or not 0<=row[k]<=4_294_967_295 for k in ("uid","gid")) or type(row["mode"]) is not int or not 0<=row["mode"]<=0o7777 or row["type"] not in ("directory","symlink","regular","other"):valid=False;break
+            fields={"path","status","uid","gid","mode","type"}
+            if row["type"]=="symlink":
+                if "symlink_target" in row and text(row["symlink_target"]):fields.add("symlink_target")
+                elif row.get("target_status") in ("unavailable","over-bound") and not value["complete"]:fields.add("target_status")
+                else:valid=False;break
+            if set(row)!=fields:valid=False;break
+        if valid and (not value["complete"] or seen==expected):return value
+    return None
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--mode',required=True,choices=('forward','rollback','recovery'))
@@ -225,7 +264,8 @@ def main():
         'product_unit_registration_attempted':False,
         'limits':['One fresh ordinary account and populated manager bus are prepared by the unchanged reviewed wrapper.',
         'Synthetic017 deploy writes only fixture files; native unit install/update/rollback/recovery never run.',
-        'Only frame basenames, function names and positive line numbers are retained; no exception messages or raw stderr.',
+        'Exception detail is limited to frame basenames, function names and positive line numbers; no messages or raw stderr.',
+        'Verified UnitPath and lstat/readlink metadata are limited to exact synthetic-account and allowlisted OS paths.',
         'A failed observation preserves the fixture and yields no lifecycle qualification.',
         'A successful preabsence observation is read-only diagnostic evidence, not a native service pass.',
         'Original failed-host conditions are not reconstructed or normalized.',
@@ -301,6 +341,37 @@ def _native_frame_only(kind,error,tb):
         rows.pop();payload=json.dumps({"native_inspection_frames":rows})
     sys.stderr.write(payload+"\n")
 sys.excepthook=_native_frame_only
+from pathlib import Path
+def _unit_path_metadata(registration):
+    import stat
+    allowed=[registration.home,registration.runtime]+[Path(p) for p in ("/etc/xdg/systemd","/etc/systemd","/run/systemd","/usr/local/share/systemd","/usr/share/systemd","/usr/local/lib/systemd","/usr/lib/systemd","/usr/lib64/systemd","/lib/systemd","/lib64/systemd")]
+    value={"unit_paths":[],"ancestors":[],"complete":True,"omitted_unit_path_indexes":[]};seen=set()
+    paths=list(registration.unit_paths)
+    if not 1<=len(paths)<=64:return {"unit_paths":[],"ancestors":[],"complete":False,"omitted_unit_path_indexes":list(range(min(len(paths),64)))}
+    for index,selected in enumerate(paths):
+        if len(str(selected))>1024 or len(selected.parents)>=32 or ".." in selected.parts or not any(selected.is_relative_to(root) for root in allowed):
+            value["complete"]=False;value["omitted_unit_path_indexes"].append(index);continue
+        value["unit_paths"].append(str(selected))
+        for path in (selected,*selected.parents):
+            name=str(path)
+            if name in seen:continue
+            if len(seen)>=256:value["complete"]=False;continue
+            seen.add(name);row={"path":name}
+            try:
+                info=os.lstat(path)
+                kind="symlink" if stat.S_ISLNK(info.st_mode) else "directory" if stat.S_ISDIR(info.st_mode) else "regular" if stat.S_ISREG(info.st_mode) else "other"
+                row.update(status="exists",uid=info.st_uid,gid=info.st_gid,mode=stat.S_IMODE(info.st_mode),type=kind)
+                if kind=="symlink":
+                    try:
+                        target=os.readlink(path)
+                        if 0<len(target)<=1024 and not any(ord(c)<32 or ord(c)==127 or c=="\\" for c in target):row["symlink_target"]=target
+                        else:row["target_status"]="over-bound";value["complete"]=False
+                    except OSError:row["target_status"]="unavailable";value["complete"]=False
+            except FileNotFoundError:row["status"]="missing"
+            except OSError:row["status"]="unavailable";value["complete"]=False
+            value["ancestors"].append(row)
+    if len(json.dumps({"native_unit_path_metadata":value}))>131072:return {"unit_paths":[],"ancestors":[],"complete":False,"omitted_unit_path_indexes":list(range(len(paths)))}
+    return value
 sys.path.insert(0,sys.argv[1])
 import brain_service as s,brain_process as p,brain_linux_registration as m
 s._qualified_native_platform()
@@ -310,7 +381,11 @@ while True:
  except m.NotReady:
   if time.monotonic()>=deadline:raise
   retries+=1;time.sleep(.1)
-token=r._manager();r._disk_boundary()
+token=r._manager()
+try:metadata=_unit_path_metadata(r)
+except Exception:metadata={"unit_paths":[],"ancestors":[],"complete":False,"omitted_unit_path_indexes":[]}
+sys.stderr.write(json.dumps({"native_unit_path_metadata":metadata})+"\n")
+r._disk_boundary()
 if sys.argv[2]=='preabsence':
  paths=[r.directory/'default.target.wants'/r.unit,r.directory/(r.unit+'.d')]
  if (v['file_present'] or v['loaded'] or v['enabled'] is not None
@@ -338,6 +413,10 @@ print(json.dumps(v))
 '''
             arguments=[*support.isolated_python(sys.executable,root),'-c',code,str(source_app),'preabsence' if preabsence else 'observe']
             result=support.run(arguments,source_app=source_app,env=updater.cli_environment(root),capture_output=True,text=True,encoding='utf-8',timeout=60,check=False)
+            try:metadata=path_metadata_only(result.stderr,home,os.geteuid())
+            except Exception:metadata=None
+            state['native_unit_path_metadata_status']='accepted' if metadata is not None else 'absent-or-rejected'
+            if metadata is not None:state['native_unit_path_metadata']=metadata
             if preabsence and result.returncode==24 and json.loads(result.stdout)=={'refusal':'preexisting-default-unit-or-artifact'}:
                 raise PreexistingNativeRegistration('Preexisting default unit or artifact is preserved.')
             if result.returncode:
