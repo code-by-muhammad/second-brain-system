@@ -35,6 +35,69 @@ UNIT='second-brain.service'
 SOURCE_SAFE=None
 
 
+_CREATION_OBSERVER = '"""Diagnostic-only labeled metadata; no permission changes or native manager calls."""\nimport atexit\nimport errno\nimport json\nimport os\nfrom pathlib import Path\nimport stat\nimport struct\nimport sys\n\nMARKER = \'SB_CREATION_AUDIT=\'\nLABELS = (\'home\', \'config\', \'systemd\', \'user\')\n\n\ndef paths(home):\n    return (home, home/\'.config\', home/\'.config/systemd\', home/\'.config/systemd/user\')\n\n\ndef umask_metadata():\n    try:\n        with open(\'/proc/self/status\', \'rb\') as stream:\n            raw = stream.read(4097)\n        rows = [line.split() for line in raw.splitlines() if line.startswith(b\'Umask:\')]\n        if len(raw) > 4096 or len(rows) != 1 or len(rows[0]) != 2:\n            return {\'status\': \'unknown\'}\n        value = rows[0][1]\n        if len(value) != 4 or any(char not in b\'01234567\' for char in value):\n            return {\'status\': \'unknown\'}\n        return {\'status\': \'observed\', \'mode\': int(value, 8)}\n    except (OSError, ValueError):\n        return {\'status\': \'unreadable\'}\n\n\ndef acl_summary(path):\n    try:\n        raw = os.getxattr(path, \'system.posix_acl_default\', follow_symlinks=False)\n    except AttributeError:\n        return {\'status\': \'unsupported\'}\n    except OSError as error:\n        if error.errno == getattr(errno, \'ENODATA\', -1):\n            return {\'status\': \'absent\'}\n        if error.errno in {getattr(errno, \'ENOTSUP\', -2), getattr(errno, \'EOPNOTSUPP\', -3)}:\n            return {\'status\': \'unsupported\'}\n        return {\'status\': \'unreadable\'}\n    if not 4 < len(raw) <= 1024 or (len(raw)-4) % 8 or struct.unpack_from(\'<I\', raw)[0] != 2:\n        return {\'status\': \'malformed\'}\n    singleton = {1: \'owner\', 4: \'group\', 16: \'mask\', 32: \'other\'}\n    permissions = {}; named = {\'users\': 0, \'groups\': 0}\n    for offset in range(4, len(raw), 8):\n        tag, mode, identity = struct.unpack_from(\'<HHI\', raw, offset)\n        if mode > 7:\n            return {\'status\': \'malformed\'}\n        if tag in singleton:\n            name = singleton[tag]\n            if name in permissions or identity != 0xffffffff:\n                return {\'status\': \'malformed\'}\n            permissions[name] = mode\n        elif tag in (2, 8) and identity != 0xffffffff:\n            named[\'users\' if tag == 2 else \'groups\'] += 1\n        else:\n            return {\'status\': \'malformed\'}\n    if not {\'owner\', \'group\', \'other\'} <= permissions.keys() or (any(named.values()) and \'mask\' not in permissions):\n        return {\'status\': \'malformed\'}\n    return {\'status\': \'present\', \'permissions\': permissions, \'named_entries\': named,\n            \'entry_count\': (len(raw)-4)//8}\n\n\ndef snapshot(home):\n    rows = []\n    for label, path in zip(LABELS, paths(Path(home))):\n        row = {\'label\': label, \'type\': \'unavailable\'}\n        try:\n            info = path.lstat()\n            kind = (\'directory\' if stat.S_ISDIR(info.st_mode) else \'symlink\' if stat.S_ISLNK(info.st_mode)\n                    else \'regular\' if stat.S_ISREG(info.st_mode) else \'other\')\n            row.update(type=kind, uid=info.st_uid, gid=info.st_gid, mode=info.st_mode & 0o7777)\n            if kind == \'directory\':\n                row[\'default_acl\'] = acl_summary(path)\n        except FileNotFoundError:\n            row[\'type\'] = \'missing\'\n        except OSError:\n            pass\n        rows.append(row)\n    return {\'euid\': os.geteuid(), \'egid\': os.getegid(), \'umask\': umask_metadata(), \'directories\': rows}\n\n\ndef install_audit(home):\n    exact = dict(zip(map(str, paths(Path(home))), LABELS))\n    rows = []; state = {\'observer_error\': False, \'truncated\': False}\n    def observer(event, arguments):\n        try:\n            if event not in (\'os.mkdir\', \'os.chmod\') or len(arguments) != 3:\n                return\n            path, mode, directory_fd = arguments\n            if type(path) is not str or path not in exact or type(mode) is not int:\n                return\n            if len(rows) == 16:\n                state[\'truncated\'] = True\n                return\n            rows.append({\'event\': event, \'label\': exact[path], \'requested_mode\': mode & 0o7777,\n                         \'metadata_before\': snapshot(home)})\n        except BaseException:\n            # Observation must not interrupt the real operation or print its data.\n            state[\'observer_error\'] = True\n    def emit():\n        try:\n            sys.stderr.write(\'\\n\' + MARKER + json.dumps({\'events\': rows, **state}) + \'\\n\')\n            sys.stderr.flush()\n        except BaseException:\n            pass\n    sys.addaudithook(observer)\n    atexit.register(emit)\n'
+
+
+def creation_observer():
+    namespace={}
+    exec(compile(_CREATION_OBSERVER,'<metadata-only-creation-observer>','exec'),namespace)
+    return namespace
+
+
+def safe_creation_value(value):
+    keys={'events','observer_error','truncated','event','label','requested_mode','metadata_before',
+          'euid','egid','umask','directories','status','mode','type','uid','gid','default_acl',
+          'permissions','owner','group','other','mask','named_entries','users','groups','entry_count'}
+    strings={'os.mkdir','os.chmod','home','config','systemd','user','directory','symlink','regular',
+             'other','missing','unavailable','observed','unknown','unreadable','unsupported','absent',
+             'malformed','present'}
+    if type(value) in (bool,int):return type(value) is bool or 0<=value<=0xffffffff
+    if type(value) is str:return value in strings
+    if type(value) is list:return len(value)<=16 and all(safe_creation_value(item) for item in value)
+    if type(value) is dict:return set(value)<=keys and all(safe_creation_value(item) for item in value.values())
+    return False
+
+
+class CreationBootstrapMismatch(RuntimeError):
+    pass
+
+
+def audited_legacy_install(updater,support,old_python,old,root,home,state):
+    # Observe only the one reviewed017 child. Its original bootstrap suffix is unchanged.
+    app=old/'app';script=app/'brain_cli.py'
+    expected='import runpy,sys;sys.path.insert(0,'+repr(str(app))+');runpy.run_path('+repr(str(script))+',run_name="__main__")'
+    prefix=_CREATION_OBSERVER+'\ninstall_audit('+repr(str(home))+')\n'
+    actual=support.run;calls=0
+    state['legacy_child_creation_audit']={'status':'unavailable'}
+    def observing_run(arguments,**options):
+        nonlocal calls
+        calls+=1
+        if calls!=1 or list(arguments[-4:])!=['-c',expected,'service','install']:
+            state['creation_observer_bootstrap']={'status':'refused-before-launch','suffix_unchanged':False}
+            state['native_registration_attempted']=False
+            raise CreationBootstrapMismatch('Diagnostic child bootstrap did not match actual017 controller.')
+        command=list(arguments);command[-3]=prefix+expected
+        state['creation_observer_bootstrap']={'suffix_unchanged':command[-3][len(prefix):]==expected,
+            'suffix_sha256':digest(expected.encode()),'prefix_sha256':digest(prefix.encode())}
+        result=actual(command,**options)
+        try:
+            matches=[line[len('SB_CREATION_AUDIT='):] for line in result.stderr.splitlines() if line.startswith('SB_CREATION_AUDIT=')]
+            if len(matches)==1 and len(matches[0])<=65536:
+                try:value=json.loads(matches[0])
+                except ValueError:value=None
+                if (type(value) is dict and set(value)=={'events','observer_error','truncated'}
+                        and type(value['events']) is list and len(value['events'])<=16
+                        and type(value['observer_error']) is bool and type(value['truncated']) is bool
+                        and safe_creation_value(value)):
+                    state['legacy_child_creation_audit']=value
+        except Exception:
+            pass  # Observation must not replace the completed product result.
+        return result
+    support.run=observing_run
+    try:return updater.controller(old_python,old,root,'service','install')
+    finally:support.run=actual
+
+
 def digest(raw):return hashlib.sha256(raw).hexdigest()
 
 
@@ -258,6 +321,7 @@ def main():
         'Baseline017 installer performs a manager-wide daemon-reload only on this freshly prepared manager;017 stop is never invoked.',
         'User-manager preparation and linger alter only the fresh account and its logind linger state; failed fixtures are preserved until VM disposal.',
         'Umask022 baseline only;017 registrations created under umask002 are not qualified.',
+        'Actual017 service-install child was audit-prefixed; product source and bootstrap suffix unchanged. Only matching Python mkdir/chmod pre-syscall events are observed; the user directory is first seen after install, and zero events are not proof that no creation occurred.',
         'Target uv cache/base Python may be under the synthetic client home; parent SDK and harness are root-protected.',
         'No installer CLI bootstrap, real installed017 layout, owner-device execution or arbitrary Linux distro support.']}
     created=False;success=False;updater=None;old_payload=None;new_payload=None
@@ -397,8 +461,12 @@ print(json.dumps(v))
         observe('initial default-unit preabsence',preabsence=True)
         # Legacy install uses real HOME; only synthetic client discovery later uses fake HOME.
         created=True;state['native_registration_attempted']=True;state['stage']='actual017 native service installation'
-        updater.controller(old_python,old,root,'service','install')
+        metadata=creation_observer()
+        state['creation_metadata']=[{'stage':'preinstall',**metadata['snapshot'](home)}]
+        audited_legacy_install(updater,support,old_python,old,root,home,state)
+        state['creation_metadata'].append({'stage':'postinstall-before-health',**metadata['snapshot'](home)})
         baseline=updater.wait_health(sys.executable,root,'0.1.7',checkout=target)
+        state['creation_metadata'].append({'stage':'posthealth',**metadata['snapshot'](home)})
         first=observe('first actual legacy product prefix/argv')
         # Diagnostic only: preserve baseline fixture, never enter candidate update.
         raise BaselineInspectionDiagnosticStop()
