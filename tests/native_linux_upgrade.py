@@ -35,69 +35,6 @@ UNIT='second-brain.service'
 SOURCE_SAFE=None
 
 
-_CREATION_OBSERVER = '"""Diagnostic-only labeled metadata; no permission changes or native manager calls."""\nimport atexit\nimport errno\nimport json\nimport os\nfrom pathlib import Path\nimport stat\nimport struct\nimport sys\n\nMARKER = \'SB_CREATION_AUDIT=\'\nLABELS = (\'home\', \'config\', \'systemd\', \'user\')\n\n\ndef paths(home):\n    return (home, home/\'.config\', home/\'.config/systemd\', home/\'.config/systemd/user\')\n\n\ndef umask_metadata():\n    try:\n        with open(\'/proc/self/status\', \'rb\') as stream:\n            raw = stream.read(4097)\n        rows = [line.split() for line in raw.splitlines() if line.startswith(b\'Umask:\')]\n        if len(raw) > 4096 or len(rows) != 1 or len(rows[0]) != 2:\n            return {\'status\': \'unknown\'}\n        value = rows[0][1]\n        if len(value) != 4 or any(char not in b\'01234567\' for char in value):\n            return {\'status\': \'unknown\'}\n        return {\'status\': \'observed\', \'mode\': int(value, 8)}\n    except (OSError, ValueError):\n        return {\'status\': \'unreadable\'}\n\n\ndef acl_summary(path):\n    try:\n        raw = os.getxattr(path, \'system.posix_acl_default\', follow_symlinks=False)\n    except AttributeError:\n        return {\'status\': \'unsupported\'}\n    except OSError as error:\n        if error.errno == getattr(errno, \'ENODATA\', -1):\n            return {\'status\': \'absent\'}\n        if error.errno in {getattr(errno, \'ENOTSUP\', -2), getattr(errno, \'EOPNOTSUPP\', -3)}:\n            return {\'status\': \'unsupported\'}\n        return {\'status\': \'unreadable\'}\n    if not 4 < len(raw) <= 1024 or (len(raw)-4) % 8 or struct.unpack_from(\'<I\', raw)[0] != 2:\n        return {\'status\': \'malformed\'}\n    singleton = {1: \'owner\', 4: \'group\', 16: \'mask\', 32: \'other\'}\n    permissions = {}; named = {\'users\': 0, \'groups\': 0}\n    for offset in range(4, len(raw), 8):\n        tag, mode, identity = struct.unpack_from(\'<HHI\', raw, offset)\n        if mode > 7:\n            return {\'status\': \'malformed\'}\n        if tag in singleton:\n            name = singleton[tag]\n            if name in permissions or identity != 0xffffffff:\n                return {\'status\': \'malformed\'}\n            permissions[name] = mode\n        elif tag in (2, 8) and identity != 0xffffffff:\n            named[\'users\' if tag == 2 else \'groups\'] += 1\n        else:\n            return {\'status\': \'malformed\'}\n    if not {\'owner\', \'group\', \'other\'} <= permissions.keys() or (any(named.values()) and \'mask\' not in permissions):\n        return {\'status\': \'malformed\'}\n    return {\'status\': \'present\', \'permissions\': permissions, \'named_entries\': named,\n            \'entry_count\': (len(raw)-4)//8}\n\n\ndef snapshot(home):\n    rows = []\n    for label, path in zip(LABELS, paths(Path(home))):\n        row = {\'label\': label, \'type\': \'unavailable\'}\n        try:\n            info = path.lstat()\n            kind = (\'directory\' if stat.S_ISDIR(info.st_mode) else \'symlink\' if stat.S_ISLNK(info.st_mode)\n                    else \'regular\' if stat.S_ISREG(info.st_mode) else \'other\')\n            row.update(type=kind, uid=info.st_uid, gid=info.st_gid, mode=info.st_mode & 0o7777)\n            if kind == \'directory\':\n                row[\'default_acl\'] = acl_summary(path)\n        except FileNotFoundError:\n            row[\'type\'] = \'missing\'\n        except OSError:\n            pass\n        rows.append(row)\n    return {\'euid\': os.geteuid(), \'egid\': os.getegid(), \'umask\': umask_metadata(), \'directories\': rows}\n\n\ndef install_audit(home):\n    exact = dict(zip(map(str, paths(Path(home))), LABELS))\n    rows = []; state = {\'observer_error\': False, \'truncated\': False}\n    def observer(event, arguments):\n        try:\n            if event not in (\'os.mkdir\', \'os.chmod\') or len(arguments) != 3:\n                return\n            path, mode, directory_fd = arguments\n            if type(path) is not str or path not in exact or type(mode) is not int:\n                return\n            if len(rows) == 16:\n                state[\'truncated\'] = True\n                return\n            rows.append({\'event\': event, \'label\': exact[path], \'requested_mode\': mode & 0o7777,\n                         \'metadata_before\': snapshot(home)})\n        except BaseException:\n            # Observation must not interrupt the real operation or print its data.\n            state[\'observer_error\'] = True\n    def emit():\n        try:\n            sys.stderr.write(\'\\n\' + MARKER + json.dumps({\'events\': rows, **state}) + \'\\n\')\n            sys.stderr.flush()\n        except BaseException:\n            pass\n    sys.addaudithook(observer)\n    atexit.register(emit)\n'
-
-
-def creation_observer():
-    namespace={}
-    exec(compile(_CREATION_OBSERVER,'<metadata-only-creation-observer>','exec'),namespace)
-    return namespace
-
-
-def safe_creation_value(value):
-    keys={'events','observer_error','truncated','event','label','requested_mode','metadata_before',
-          'euid','egid','umask','directories','status','mode','type','uid','gid','default_acl',
-          'permissions','owner','group','other','mask','named_entries','users','groups','entry_count'}
-    strings={'os.mkdir','os.chmod','home','config','systemd','user','directory','symlink','regular',
-             'other','missing','unavailable','observed','unknown','unreadable','unsupported','absent',
-             'malformed','present'}
-    if type(value) in (bool,int):return type(value) is bool or 0<=value<=0xffffffff
-    if type(value) is str:return value in strings
-    if type(value) is list:return len(value)<=16 and all(safe_creation_value(item) for item in value)
-    if type(value) is dict:return set(value)<=keys and all(safe_creation_value(item) for item in value.values())
-    return False
-
-
-class CreationBootstrapMismatch(RuntimeError):
-    pass
-
-
-def audited_legacy_install(updater,support,old_python,old,root,home,state):
-    # Observe only the one reviewed017 child. Its original bootstrap suffix is unchanged.
-    app=old/'app';script=app/'brain_cli.py'
-    expected='import runpy,sys;sys.path.insert(0,'+repr(str(app))+');runpy.run_path('+repr(str(script))+',run_name="__main__")'
-    prefix=_CREATION_OBSERVER+'\ninstall_audit('+repr(str(home))+')\n'
-    actual=support.run;calls=0
-    state['legacy_child_creation_audit']={'status':'unavailable'}
-    def observing_run(arguments,**options):
-        nonlocal calls
-        calls+=1
-        if calls!=1 or list(arguments[-4:])!=['-c',expected,'service','install']:
-            state['creation_observer_bootstrap']={'status':'refused-before-launch','suffix_unchanged':False}
-            state['native_registration_attempted']=False
-            raise CreationBootstrapMismatch('Diagnostic child bootstrap did not match actual017 controller.')
-        command=list(arguments);command[-3]=prefix+expected
-        state['creation_observer_bootstrap']={'suffix_unchanged':command[-3][len(prefix):]==expected,
-            'suffix_sha256':digest(expected.encode()),'prefix_sha256':digest(prefix.encode())}
-        result=actual(command,**options)
-        try:
-            matches=[line[len('SB_CREATION_AUDIT='):] for line in result.stderr.splitlines() if line.startswith('SB_CREATION_AUDIT=')]
-            if len(matches)==1 and len(matches[0])<=65536:
-                try:value=json.loads(matches[0])
-                except ValueError:value=None
-                if (type(value) is dict and set(value)=={'events','observer_error','truncated'}
-                        and type(value['events']) is list and len(value['events'])<=16
-                        and type(value['observer_error']) is bool and type(value['truncated']) is bool
-                        and safe_creation_value(value)):
-                    state['legacy_child_creation_audit']=value
-        except Exception:
-            pass  # Observation must not replace the completed product result.
-        return result
-    support.run=observing_run
-    try:return updater.controller(old_python,old,root,'service','install')
-    finally:support.run=actual
-
-
 def digest(raw):return hashlib.sha256(raw).hexdigest()
 
 
@@ -242,6 +179,44 @@ def owned_directory_only(stderr):
 class BaselineInspectionDiagnosticStop(BaseException):pass
 
 
+_LOADED_CONTEXT_FIELDS=('WorkingDirectory', 'RootDirectory', 'RootImage', 'User', 'Group', 'PAMName')
+_LOADED_CONTEXT_REASONS=('Native loaded property is missing or has an unqualified type.', 'Invalid expected loaded-registration boundary.', 'Native loaded properties are not structured maps.', 'Loaded unit identity/definition differs from the known registration.', 'Loaded unit has a foreign activation dependency.', 'Loaded unit has a foreign forward dependency.', 'Loaded unit has an unqualified implicit dependency.', 'Loaded unit has an unqualified activation target.', 'Native enablement state is not plain enabled/disabled.', 'Native active state is outside the candidate contract.', 'Native substate is malformed.', 'Native invocation identity is unavailable.', 'Native job identity is malformed.', 'Loaded service execution policy differs from the known definition.', 'Loaded service has an unexpected execution hook.', 'Loaded service has an unexpected environment override.', 'Loaded service has an unexpected execution context.', 'Loaded service argv is not the exact literal expected command.', 'Loaded service has unexpected command-prefix flags.', 'Native stop timeout is not finite.', 'Loaded service cgroup is not exactly this unit.', 'Loaded service process identifiers are malformed.', 'Native command PID differs from the main PID.', 'Native reload state is malformed.', 'Exact native registration requires a verified reload.')
+
+def loaded_context_only(stderr):
+    base_keys={'field','present','variant_keys_exact','signature','data_type','empty'}
+    extra={'WorkingDirectory':{'equals_home','equals_bang_home','equals_tilde','equals_app_cwd'},'User':{'equals_name','equals_id'},'Group':{'equals_name','equals_id'}}
+    for line in stderr.splitlines():
+        if len(line)>8192:continue
+        try:outer=json.loads(line)
+        except (ValueError,TypeError):continue
+        if not isinstance(outer,dict) or set(outer)!={'native_loaded_context'}:continue
+        value=outer['native_loaded_context']
+        if value=={'status':'unavailable'}:return value
+        if (not isinstance(value,dict) or set(value)!={'status','identity_authenticated','unit_id_authenticated','unit_object_authenticated','manager_stable','definition_stable','rows','pure_shadow'}
+            or value['status']!='observed' or any(value[k] is not True for k in ('identity_authenticated','unit_id_authenticated','unit_object_authenticated','manager_stable','definition_stable'))
+            or not isinstance(value['rows'],list) or len(value['rows'])!=6):continue
+        valid=True
+        for field,row in zip(_LOADED_CONTEXT_FIELDS,value['rows']):
+            if (not isinstance(row,dict) or set(row)!=base_keys|extra.get(field,set()) or row['field']!=field
+                or row['data_type'] not in ('str','list','dict','int','bool','float','none','other')
+                or row['signature'] not in (None,'s','as','b','u','i','t','ay','(uo)','v')
+                or any(type(row[k]) is not bool for k in ({'present','variant_keys_exact','empty'}|extra.get(field,set())))):
+                valid=False;break
+        if not valid:continue
+        shadow=value['pure_shadow']
+        if (not isinstance(shadow,dict) or set(shadow)!={'attempted','only_working_directory_shadowed','prove_main','would_accept','reason'}
+            or any(type(shadow[k]) is not bool for k in ('attempted','only_working_directory_shadowed','prove_main','would_accept'))
+            or shadow['prove_main'] is not False or shadow['attempted']!=shadow['only_working_directory_shadowed']
+            or shadow['reason'] not in _LOADED_CONTEXT_REASONS+('preconditions-not-met','unrecognized-registration-error','pure-check-unavailable','accepted-pure-shadow')):continue
+        rows=value['rows']
+        permitted=all(row['variant_keys_exact'] and row['signature']=='s' and row['data_type']=='str' for row in rows) and (rows[0]['equals_home'] or rows[0]['equals_bang_home']) and all(row['empty'] for row in rows[1:])
+        if shadow['attempted']!=permitted or shadow['would_accept'] and not shadow['attempted']:continue
+        if shadow['would_accept']!=(shadow['reason']=='accepted-pure-shadow'):continue
+        if not shadow['attempted'] and shadow['reason']!='preconditions-not-met':continue
+        return value
+    return {'status':'unavailable'}
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--mode',required=True,choices=('forward','rollback','recovery'))
@@ -321,9 +296,9 @@ def main():
         'Baseline017 installer performs a manager-wide daemon-reload only on this freshly prepared manager;017 stop is never invoked.',
         'User-manager preparation and linger alter only the fresh account and its logind linger state; failed fixtures are preserved until VM disposal.',
         'Umask022 baseline only;017 registrations created under umask002 are not qualified.',
-        'Actual017 service-install child was audit-prefixed; product source and bootstrap suffix unchanged. Only matching Python mkdir/chmod pre-syscall events are observed; the user directory is first seen after install, and zero events are not proof that no creation occurred.',
         'Target uv cache/base Python may be under the synthetic client home; parent SDK and harness are root-protected.',
-        'No installer CLI bootstrap, real installed017 layout, owner-device execution or arbitrary Linux distro support.']}
+        'No installer CLI bootstrap, real installed017 layout, owner-device execution or arbitrary Linux distro support.',
+        'Failure-only six-field loaded context summaries; optional exact HOME/bang-HOME pure WorkingDirectory shadow is diagnostic only, never product/native acceptance.']}
     created=False;success=False;updater=None;old_payload=None;new_payload=None
     old=boundary/'baseline-v0.1.7';target=root/'releases'/args.candidate_tag
     original_env=dict(os.environ);original_cwd=Path.cwd()
@@ -377,6 +352,100 @@ def main():
         def observe(stage,*,preabsence=False):
             # Read actual product authority and native argv; do not normalize a mismatch in the fixture.
             code=r'''import json,os,sys,time
+"""Six fixed read-only context summaries and one conditional pure shadow check."""
+import re
+import time
+from pathlib import PurePosixPath
+
+FIELDS = ('WorkingDirectory','RootDirectory','RootImage','User','Group','PAMName')
+SAFE_REASONS = (
+    'Native loaded property is missing or has an unqualified type.',
+    'Invalid expected loaded-registration boundary.',
+    'Native loaded properties are not structured maps.',
+    'Loaded unit identity/definition differs from the known registration.',
+    'Loaded unit has a foreign activation dependency.',
+    'Loaded unit has a foreign forward dependency.',
+    'Loaded unit has an unqualified implicit dependency.',
+    'Loaded unit has an unqualified activation target.',
+    'Native enablement state is not plain enabled/disabled.',
+    'Native active state is outside the candidate contract.',
+    'Native substate is malformed.',
+    'Native invocation identity is unavailable.',
+    'Native job identity is malformed.',
+    'Loaded service execution policy differs from the known definition.',
+    'Loaded service has an unexpected execution hook.',
+    'Loaded service has an unexpected environment override.',
+    'Loaded service has an unexpected execution context.',
+    'Loaded service argv is not the exact literal expected command.',
+    'Loaded service has unexpected command-prefix flags.',
+    'Native stop timeout is not finite.',
+    'Loaded service cgroup is not exactly this unit.',
+    'Loaded service process identifiers are malformed.',
+    'Native command PID differs from the main PID.',
+    'Native reload state is malformed.',
+    'Exact native registration requires a verified reload.',
+)
+
+
+def context_snapshot(registration, module):
+    import os, pwd, grp
+    previous = getattr(registration, '_deadline', None)
+    registration._deadline = min(previous, time.monotonic()+20) if previous else time.monotonic()+20
+    try:
+        uid = os.geteuid(); account = pwd.getpwuid(uid)
+        if (uid != os.getuid() or uid != registration.uid or account.pw_uid != uid
+            or account.pw_dir != str(registration.home)
+            or not re.fullmatch(r'sbci[0-9]{1,24}f', account.pw_name)
+            or os.getgid() != os.getegid() or os.getegid() != account.pw_gid):
+            return {'status':'unavailable'}
+        group = grp.getgrgid(account.pw_gid)
+        token = registration._manager(); definition = registration._read_unit()
+        if definition is None or definition[0] not in registration.known:
+            return {'status':'unavailable'}
+        argv = tuple(registration.known[definition[0]])
+        units = registration._result(registration._method('ListUnits'),'a(ssssssouso)')[0]
+        if (not isinstance(units,list) or len(units)>32768
+            or any(not isinstance(row,list) or len(row)!=10 for row in units)):
+            return {'status':'unavailable'}
+        matches = [row for row in units if row[0]==registration.unit]
+        if len(matches)!=1:return {'status':'unavailable'}
+        obj = registration._result(registration._method('GetUnit','s',registration.unit),'o')[0]
+        if obj!=matches[0][6]:return {'status':'unavailable'}
+        unit = registration._getall(registration.peer,obj,'Unit')
+        service = registration._getall(registration.peer,obj,'Service')
+        if (registration._manager()!=token or registration._read_unit()!=definition
+            or not isinstance(service,dict) or not isinstance(unit,dict)
+            or unit.get('Id')!={'type':'s','data':registration.unit}):
+            return {'status':'unavailable'}
+        rows=[]
+        for field in FIELDS:
+            value=service.get(field); exact=isinstance(value,dict) and set(value)=={'type','data'}
+            signature=value.get('type') if isinstance(value,dict) else None
+            if signature not in ('s','as','b','u','i','t','ay','(uo)','v'):signature=None
+            data=value.get('data') if isinstance(value,dict) else None
+            kind={str:'str',list:'list',dict:'dict',int:'int',bool:'bool',float:'float',type(None):'none'}.get(type(data),'other')
+            row={'field':field,'present':field in service,'variant_keys_exact':exact,'signature':signature,'data_type':kind,'empty':type(data) is str and data==''}
+            if field=='WorkingDirectory':row.update(equals_home=type(data) is str and data==account.pw_dir,equals_bang_home=type(data) is str and data=='!'+account.pw_dir,equals_tilde=type(data) is str and data=='~',equals_app_cwd=type(data) is str and data==str(PurePosixPath(argv[1]).parent))
+            if field=='User':row.update(equals_name=type(data) is str and data==account.pw_name,equals_id=type(data) is str and data==str(uid))
+            if field=='Group':row.update(equals_name=type(data) is str and data==group.gr_name,equals_id=type(data) is str and data==str(account.pw_gid))
+            rows.append(row)
+        shadow={'attempted':False,'only_working_directory_shadowed':False,'prove_main':False,'would_accept':False,'reason':'preconditions-not-met'}
+        typed=all(row['variant_keys_exact'] and row['signature']=='s' and row['data_type']=='str' for row in rows)
+        if typed and (rows[0]['equals_home'] or rows[0]['equals_bang_home']) and all(row['empty'] for row in rows[1:]):
+            projected=dict(service);projected['WorkingDirectory']={'type':'s','data':''}
+            shadow.update(attempted=True,only_working_directory_shadowed=True)
+            try:module.loaded_contract(registration.unit,registration.path,argv,registration.prefix,unit,projected,allow_reload=True,prove_main=False)
+            except module.RegistrationError as error:
+                reason=str(error);shadow['reason']=reason if reason in SAFE_REASONS else 'unrecognized-registration-error'
+            except BaseException:shadow['reason']='pure-check-unavailable'
+            else:shadow.update(would_accept=True,reason='accepted-pure-shadow')
+        if registration._manager()!=token or registration._read_unit()!=definition:return {'status':'unavailable'}
+        return {'status':'observed','identity_authenticated':True,'unit_id_authenticated':True,'unit_object_authenticated':True,'manager_stable':True,'definition_stable':True,'rows':rows,'pure_shadow':shadow}
+    except BaseException:
+        return {'status':'unavailable'}
+    finally:
+        registration._deadline=previous
+
 def _native_frame_only(kind,error,tb):
     rows=[];pending=[(error,tb)];seen=set();walked=0
     while pending and len(seen)<4 and len(rows)<32 and walked<64:
@@ -410,6 +479,11 @@ def _native_frame_only(kind,error,tb):
                 values.append(value)
             encoded=json.dumps({'native_owned_directories':values},ensure_ascii=True)
             if len(values)==4 and len(encoded)<=2048:sys.stderr.write(encoded+"\n")
+        except BaseException:pass
+    if any(row['filename']=='brain_linux_registration.py' and row['function']=='loaded_contract' and row['line']==130 for row in rows):
+        try:
+            encoded=json.dumps({'native_loaded_context':context_snapshot(r,m)},ensure_ascii=True)
+            if len(encoded)<=8192:sys.stderr.write(encoded+"\n")
         except BaseException:pass
 sys.excepthook=_native_frame_only
 sys.path.insert(0,sys.argv[1])
@@ -454,6 +528,7 @@ print(json.dumps(v))
             if result.returncode:
                 state['native_inspection_failure_frames']=frame_only(result.stderr)
                 state['native_owned_directory_metadata']=owned_directory_only(result.stderr)
+                state['native_loaded_context_observation']=loaded_context_only(result.stderr)
                 raise RuntimeError('Actual native product inspection refused at '+stage+'. Preserve the fixture; do not adapt authority.')
             value=json.loads(result.stdout);state['observations'].append({'stage':stage,**value});return value
 
@@ -461,12 +536,8 @@ print(json.dumps(v))
         observe('initial default-unit preabsence',preabsence=True)
         # Legacy install uses real HOME; only synthetic client discovery later uses fake HOME.
         created=True;state['native_registration_attempted']=True;state['stage']='actual017 native service installation'
-        metadata=creation_observer()
-        state['creation_metadata']=[{'stage':'preinstall',**metadata['snapshot'](home)}]
-        audited_legacy_install(updater,support,old_python,old,root,home,state)
-        state['creation_metadata'].append({'stage':'postinstall-before-health',**metadata['snapshot'](home)})
+        updater.controller(old_python,old,root,'service','install')
         baseline=updater.wait_health(sys.executable,root,'0.1.7',checkout=target)
-        state['creation_metadata'].append({'stage':'posthealth',**metadata['snapshot'](home)})
         first=observe('first actual legacy product prefix/argv')
         # Diagnostic only: preserve baseline fixture, never enter candidate update.
         raise BaselineInspectionDiagnosticStop()
