@@ -1,8 +1,8 @@
-"""Read-only native unit preabsence diagnostic on one fresh Ubuntu24 VM.
+"""One actual017 Linux migration on a fresh disposable Ubuntu24/systemd255 VM.
 
-Prepare the reviewed isolated SDK/account and synthetic017 deployment files,
-then observe native unit preabsence once. No product unit installation,
-update, rollback or recovery is executed or qualified.
+External qualification fixture, not product payload. Each mode uses a fresh
+ordinary account and VM. Actual product guards must admit the official pinned
+candidate; none are substituted. No PID signals or old uncertain fixtures.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import importlib.metadata
 import io
 import json
 import os
-from pathlib import Path,PurePosixPath
+from pathlib import Path
 import platform
 import re
 import shutil
@@ -137,7 +137,6 @@ def interpreter_identity(python,env):
 class SyntheticAcceptanceRejection(RuntimeError):pass
 class SyntheticAutomaticStopRejection(RuntimeError):pass
 class PreexistingNativeRegistration(RuntimeError):pass
-class DiagnosticPreabsenceComplete(Exception):pass
 
 
 def frame_only(stderr):
@@ -154,43 +153,30 @@ def frame_only(stderr):
     return []
 
 
-def path_metadata_only(stderr,home,uid):
-    allowed=[PurePosixPath(str(home)),PurePosixPath("/run/user/"+str(uid))]+[PurePosixPath(p) for p in ("/etc/xdg/systemd","/etc/systemd","/run/systemd","/usr/local/share/systemd","/usr/share/systemd","/usr/local/lib/systemd","/usr/lib/systemd","/usr/lib64/systemd","/lib/systemd","/lib64/systemd")]
-    def text(value):return isinstance(value,str) and 0<len(value)<=1024 and not any(ord(c)<32 or ord(c)==127 or c=="\\" for c in value)
-    def selected(value):
-        p=PurePosixPath(value)
-        return text(value) and p.is_absolute() and ".." not in p.parts and len(p.parents)<32 and any(p.is_relative_to(root) for root in allowed)
+def owned_directory_only(stderr):
+    labels=['home','config','systemd','user']
     for line in stderr.splitlines():
-        if len(line)>131072:continue
-        try:wrapped=json.loads(line)
+        if len(line)>2048:continue
+        try:value=json.loads(line)
         except (ValueError,TypeError):continue
-        if not isinstance(wrapped,dict) or set(wrapped)!={"native_unit_path_metadata"}:continue
-        value=wrapped["native_unit_path_metadata"]
-        if not isinstance(value,dict) or set(value)!={"unit_paths","ancestors","complete","omitted_unit_path_indexes"} or type(value["complete"]) is not bool:continue
-        paths=value["unit_paths"];rows=value["ancestors"]
-        omitted=value["omitted_unit_path_indexes"]
-        if not isinstance(omitted,list) or len(omitted)>64 or any(type(i) is not int or not 0<=i<64 for i in omitted) or omitted!=sorted(set(omitted)) or (omitted and value["complete"]):continue
-        if not isinstance(paths,list) or not 0<=len(paths)<=64 or not all(isinstance(p,str) and selected(p) for p in paths):continue
-        if len(paths)+len(omitted)>64 or any(i>=len(paths)+len(omitted) for i in omitted):continue
-        if not isinstance(rows,list) or len(rows)>256 or (value["complete"] and not paths):continue
-        expected={str(p) for raw in paths for p in (PurePosixPath(raw),*PurePosixPath(raw).parents)}
-        seen=set();valid=True
-        for row in rows:
-            if not isinstance(row,dict) or not {"path","status"}<=set(row) or not isinstance(row["path"],str) or row["path"] not in expected or row["path"] in seen:valid=False;break
-            seen.add(row["path"])
-            if row["status"] in ("missing","unavailable"):
-                if set(row)!={"path","status"} or (value["complete"] and row["status"]=="unavailable"):valid=False;break
-                continue
-            if row["status"]!="exists" or not {"uid","gid","mode","type"}<=set(row):valid=False;break
-            if any(type(row[k]) is not int or not 0<=row[k]<=4_294_967_295 for k in ("uid","gid")) or type(row["mode"]) is not int or not 0<=row["mode"]<=0o7777 or row["type"] not in ("directory","symlink","regular","other"):valid=False;break
-            fields={"path","status","uid","gid","mode","type"}
-            if row["type"]=="symlink":
-                if "symlink_target" in row and text(row["symlink_target"]):fields.add("symlink_target")
-                elif row.get("target_status") in ("unavailable","over-bound") and not value["complete"]:fields.add("target_status")
-                else:valid=False;break
-            if set(row)!=fields:valid=False;break
-        if valid and (not value["complete"] or seen==expected):return value
-    return None
+        if not isinstance(value,dict) or set(value)!={'native_owned_directories'}:continue
+        rows=value['native_owned_directories']
+        if not isinstance(rows,list) or len(rows)!=4:continue
+        valid=True
+        for label,row in zip(labels,rows):
+            if (not isinstance(row,dict) or set(row)!={'label','uid','gid','type','mode'}
+                or row['label']!=label or row['type'] not in ('directory','symlink','regular','other','missing','unavailable')):
+                valid=False;break
+            if row['type'] in ('missing','unavailable'):
+                if any(row[k] is not None for k in ('uid','gid','mode')):valid=False;break
+            elif (not all(type(row[k]) is int and 0<=row[k]<=4_294_967_295 for k in ('uid','gid'))
+                  or type(row['mode']) is not int or not 0<=row['mode']<=0o7777):
+                valid=False;break
+        if valid:return rows
+    return []
+
+
+class BaselineInspectionDiagnosticStop(BaseException):pass
 
 
 def main():
@@ -213,7 +199,7 @@ def main():
     if receipt.exists():raise RuntimeError('Preserve the first receipt; never overwrite or silently retry.')
     previous_umask=os.umask(0o022)
     if previous_umask!=0o022:raise RuntimeError('The reviewed wrapper must pin umask022 before execution.')
-    if (args.mode!='forward' or not args.execute_reviewed_native or sys.platform!='linux' or os.geteuid()==0
+    if (not args.execute_reviewed_native or sys.platform!='linux' or os.geteuid()==0
         or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted'
         or not sys.flags.isolated or not sys.dont_write_bytecode
         or sys.flags.optimize or sys.version_info[:2]!=(3,12)):
@@ -252,24 +238,28 @@ def main():
     temporary=boundary/'tmp';temporary.mkdir();fake_home=boundary/'client-home';fake_home.mkdir()
     env=environment(home,temporary,Path(sys._base_executable))
     env['PATH']=str(tool.parent)+':'+env['PATH']
-    state={'status':'in progress','mode':args.mode,'unit':UNIT,'scope':'Diagnostic first native preabsence only; fresh account/manager and synthetic runtime files prepared, no product unit install/update/lifecycle acceptance.',
+    state={'status':'in progress','mode':args.mode,'unit':UNIT,'scope':'Diagnostic017 baseline installation then first native inspection only; preserve fixture; no candidate update/rollback/recovery or acceptance.',
         'harness_sha256':args.reviewed_harness_sha256,'candidate_commit':args.candidate_commit,'candidate_tag':args.candidate_tag,
         'manifest_sha256':args.candidate_manifest_sha256,'baseline_commit':OLD_COMMIT,'root':str(root),
         'workflow_head':os.environ.get('GITHUB_SHA'),'workflow_sha':args.workflow_sha,'workflow_run_id':os.environ.get('GITHUB_RUN_ID'),
         'architecture':platform.machine(),'os_version':platform.freedesktop_os_release().get('VERSION_ID'),'parent_interpreter':sys.executable,
         'account':account.pw_name,'uid':os.geteuid(),'wrapper_metadata_scope':'GitHub markers, exact account, umask022 and populated bus are supplied by the reviewed root wrapper.',
         'started_at':time.time(),'stage':'source preflight','observations':[],'controller_calls':[],'cleanup':{},
-        'baseline_setup':'Actual017 deploy() writes synthetic app/config/auth files only; native service install is not executed.',
-        'controller_call_scope':'No updater/controller lifecycle calls; one actual read-only native preabsence observation only.',
-        'product_unit_registration_attempted':False,
-        'limits':['One fresh ordinary account and populated manager bus are prepared by the unchanged reviewed wrapper.',
-        'Synthetic017 deploy writes only fixture files; native unit install/update/rollback/recovery never run.',
-        'Exception detail is limited to frame basenames, function names and positive line numbers; no messages or raw stderr.',
-        'Verified UnitPath and lstat/readlink metadata are limited to exact synthetic-account and allowlisted OS paths.',
-        'A failed observation preserves the fixture and yields no lifecycle qualification.',
-        'A successful preabsence observation is read-only diagnostic evidence, not a native service pass.',
-        'Original failed-host conditions are not reconstructed or normalized.',
-        'No owner-device, GUI, local index/model, reboot/autostart or fresh onboarding acceptance.']}
+        'baseline_setup':'Actual017 deploy() and017 service install code; installer CLI bootstrap/handoff is not tested.',
+        'controller_call_scope':'Parent updater.main calls only; baseline/final/teardown calls and explicit recovery inner calls are not instrumented.',
+        'limits':['Fresh ordinary account and VM per mode; do not reuse its manager.',
+        'Only exact known manager ownership authorizes teardown; no cached-PID signals.',
+        'Selected interpreter prefix probes describe those invocations, not live daemon sys.prefix.',
+        'The locked candidate SDK parent is outside the update target venv; retained017 parent-CLI startup is not tested.',
+        'Uv retains product cache/download policy; no private-cache or no-download claim.',
+        'Recovery has no harness kill timeout; bounded product controls and the disposable CI job wall limit apply.',
+        'Definition deletion assumes this reviewed single-actor disposable job, not hostile same-UID concurrency or atomic compare-and-unlink.',
+        'Restoration checks app/device/selected-client bytes, the original absent previous binding and original native file SHA/enablement on this fixture.',
+        'Baseline017 installer performs a manager-wide daemon-reload only on this freshly prepared manager;017 stop is never invoked.',
+        'User-manager preparation and linger alter only the fresh account and its logind linger state; failed fixtures are preserved until VM disposal.',
+        'Umask022 baseline only;017 registrations created under umask002 are not qualified.',
+        'Target uv cache/base Python may be under the synthetic client home; parent SDK and harness are root-protected.',
+        'No installer CLI bootstrap, real installed017 layout, owner-device execution or arbitrary Linux distro support.']}
     created=False;success=False;updater=None;old_payload=None;new_payload=None
     old=boundary/'baseline-v0.1.7';target=root/'releases'/args.candidate_tag
     original_env=dict(os.environ);original_cwd=Path.cwd()
@@ -340,38 +330,24 @@ def _native_frame_only(kind,error,tb):
     while len(payload)>8192:
         rows.pop();payload=json.dumps({"native_inspection_frames":rows})
     sys.stderr.write(payload+"\n")
+    # Pinned021 guard only: metadata for its four exact owned ancestors, no paths.
+    if any(row['filename']=='brain_linux_registration.py' and row['function']=='_read_unit' and row['line']==448 for row in rows):
+        try:
+            import stat
+            values=[]
+            for label,path in (('home',r.home),('config',r.home/'.config'),('systemd',r.home/'.config/systemd'),('user',r.directory)):
+                value={'label':label,'uid':None,'gid':None,'type':'unavailable','mode':None}
+                try:
+                    info=path.lstat()
+                    kind='directory' if stat.S_ISDIR(info.st_mode) else 'symlink' if stat.S_ISLNK(info.st_mode) else 'regular' if stat.S_ISREG(info.st_mode) else 'other'
+                    value.update(uid=info.st_uid,gid=info.st_gid,type=kind,mode=info.st_mode&0o7777)
+                except FileNotFoundError:value['type']='missing'
+                except OSError:pass
+                values.append(value)
+            encoded=json.dumps({'native_owned_directories':values},ensure_ascii=True)
+            if len(values)==4 and len(encoded)<=2048:sys.stderr.write(encoded+"\n")
+        except BaseException:pass
 sys.excepthook=_native_frame_only
-from pathlib import Path
-def _unit_path_metadata(registration):
-    import stat
-    allowed=[registration.home,registration.runtime]+[Path(p) for p in ("/etc/xdg/systemd","/etc/systemd","/run/systemd","/usr/local/share/systemd","/usr/share/systemd","/usr/local/lib/systemd","/usr/lib/systemd","/usr/lib64/systemd","/lib/systemd","/lib64/systemd")]
-    value={"unit_paths":[],"ancestors":[],"complete":True,"omitted_unit_path_indexes":[]};seen=set()
-    paths=list(registration.unit_paths)
-    if not 1<=len(paths)<=64:return {"unit_paths":[],"ancestors":[],"complete":False,"omitted_unit_path_indexes":list(range(min(len(paths),64)))}
-    for index,selected in enumerate(paths):
-        if len(str(selected))>1024 or len(selected.parents)>=32 or ".." in selected.parts or not any(selected.is_relative_to(root) for root in allowed):
-            value["complete"]=False;value["omitted_unit_path_indexes"].append(index);continue
-        value["unit_paths"].append(str(selected))
-        for path in (selected,*selected.parents):
-            name=str(path)
-            if name in seen:continue
-            if len(seen)>=256:value["complete"]=False;continue
-            seen.add(name);row={"path":name}
-            try:
-                info=os.lstat(path)
-                kind="symlink" if stat.S_ISLNK(info.st_mode) else "directory" if stat.S_ISDIR(info.st_mode) else "regular" if stat.S_ISREG(info.st_mode) else "other"
-                row.update(status="exists",uid=info.st_uid,gid=info.st_gid,mode=stat.S_IMODE(info.st_mode),type=kind)
-                if kind=="symlink":
-                    try:
-                        target=os.readlink(path)
-                        if 0<len(target)<=1024 and not any(ord(c)<32 or ord(c)==127 or c=="\\" for c in target):row["symlink_target"]=target
-                        else:row["target_status"]="over-bound";value["complete"]=False
-                    except OSError:row["target_status"]="unavailable";value["complete"]=False
-            except FileNotFoundError:row["status"]="missing"
-            except OSError:row["status"]="unavailable";value["complete"]=False
-            value["ancestors"].append(row)
-    if len(json.dumps({"native_unit_path_metadata":value}))>131072:return {"unit_paths":[],"ancestors":[],"complete":False,"omitted_unit_path_indexes":list(range(len(paths)))}
-    return value
 sys.path.insert(0,sys.argv[1])
 import brain_service as s,brain_process as p,brain_linux_registration as m
 s._qualified_native_platform()
@@ -381,11 +357,7 @@ while True:
  except m.NotReady:
   if time.monotonic()>=deadline:raise
   retries+=1;time.sleep(.1)
-token=r._manager()
-try:metadata=_unit_path_metadata(r)
-except Exception:metadata={"unit_paths":[],"ancestors":[],"complete":False,"omitted_unit_path_indexes":[]}
-sys.stderr.write(json.dumps({"native_unit_path_metadata":metadata})+"\n")
-r._disk_boundary()
+token=r._manager();r._disk_boundary()
 if sys.argv[2]=='preabsence':
  paths=[r.directory/'default.target.wants'/r.unit,r.directory/(r.unit+'.d')]
  if (v['file_present'] or v['loaded'] or v['enabled'] is not None
@@ -413,25 +385,23 @@ print(json.dumps(v))
 '''
             arguments=[*support.isolated_python(sys.executable,root),'-c',code,str(source_app),'preabsence' if preabsence else 'observe']
             result=support.run(arguments,source_app=source_app,env=updater.cli_environment(root),capture_output=True,text=True,encoding='utf-8',timeout=60,check=False)
-            try:metadata=path_metadata_only(result.stderr,home,os.geteuid())
-            except Exception:metadata=None
-            state['native_unit_path_metadata_status']='accepted' if metadata is not None else 'absent-or-rejected'
-            if metadata is not None:state['native_unit_path_metadata']=metadata
             if preabsence and result.returncode==24 and json.loads(result.stdout)=={'refusal':'preexisting-default-unit-or-artifact'}:
                 raise PreexistingNativeRegistration('Preexisting default unit or artifact is preserved.')
             if result.returncode:
                 state['native_inspection_failure_frames']=frame_only(result.stderr)
+                state['native_owned_directory_metadata']=owned_directory_only(result.stderr)
                 raise RuntimeError('Actual native product inspection refused at '+stage+'. Preserve the fixture; do not adapt authority.')
             value=json.loads(result.stdout);state['observations'].append({'stage':stage,**value});return value
 
         state['stage']='native default-unit preabsence'
         observe('initial default-unit preabsence',preabsence=True)
-        raise DiagnosticPreabsenceComplete
         # Legacy install uses real HOME; only synthetic client discovery later uses fake HOME.
         created=True;state['native_registration_attempted']=True;state['stage']='actual017 native service installation'
         updater.controller(old_python,old,root,'service','install')
         baseline=updater.wait_health(sys.executable,root,'0.1.7',checkout=target)
         first=observe('first actual legacy product prefix/argv')
+        # Diagnostic only: preserve baseline fixture, never enter candidate update.
+        raise BaselineInspectionDiagnosticStop()
         if not first['running'] or not first['listener']:raise RuntimeError('Actual legacy product identity is unavailable.')
         state['baseline_health_version']=baseline['version']
         original_native_sha=first.get('definition_sha256')
@@ -578,8 +548,6 @@ print(json.dumps(v))
         if any(digest(read(root/'state'/n))!=h for n,h in auth_before.items()):raise RuntimeError('Authentication bytes changed.')
         state.update(final_health_version=final_health['version'],note_and_auth_preserved=True,named_client_acceptance='Synthetic selected-file refresh/restoration only; no actual GUI reload.',update_error_type=update_error)
         success=True
-    except DiagnosticPreabsenceComplete:
-        success=True
     except BaseException as error:
         state['error_type']=type(error).__name__
         state['failure_scope']='Preserve current fixture, loaded definition, transactions and private environments. No guessed cleanup or PID kill.'
@@ -649,11 +617,11 @@ print(json.dumps({'exact_owned_definition_removed':True,'manager_disabled_inacti
                     state['tool_bytes_changed']=True;success=False
         except BaseException as error:state['tool_final_check_error']=type(error).__name__;success=False
         os.environ.clear();os.environ.update(original_env);os.chdir(original_cwd)
-        state['ended_at']=time.time();state['status']='read-only native preabsence observed' if success and not created else 'needs review'
-        if state['status']=='read-only native preabsence observed':state['stage']='diagnostic complete; no native unit installation'
+        state['ended_at']=time.time();state['status']='passed' if success and state['cleanup'].get('exact_owned_definition_removed') else 'needs review'
+        if state['status']=='passed':state['stage']='complete'
         write_new(receipt,(json.dumps(state,indent=2)+'\n').encode())
         print(json.dumps({'status':state['status'],'mode':args.mode,'receipt':str(receipt),'error_type':state.get('error_type'),'cleanup':state['cleanup']}))
-    return 0 if state['status']=='read-only native preabsence observed' else 1
+    return 0 if state['status']=='passed' else 1
 
 
 if __name__=='__main__':raise SystemExit(main())

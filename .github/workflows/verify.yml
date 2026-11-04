@@ -1,4 +1,4 @@
-name: Linux native preabsence stack diagnostic
+name: Linux017 owned-directory failure diagnostic
 on:
   workflow_dispatch:
     inputs:
@@ -29,7 +29,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   qualify:
-    name: Read-only Linux first native preabsence (forward fixture only)
+    name: Linux017 baseline directory diagnostic (forward only; no candidate update)
     if: github.ref == 'refs/heads/feature/posix-linux-preabsence-diagnostic' && inputs.scope == 'linux-preabsence'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -92,7 +92,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: linux-preabsence-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
+          name: linux-owned-directory-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             reports/linux-product-qualification.json
             reports/harness-commit.txt
