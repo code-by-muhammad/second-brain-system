@@ -4,9 +4,9 @@ A local authenticated MCP service for an Obsidian Markdown vault, current-file s
 
 ## Release scope — 4 November 2026
 
-**v0.2.0 is a portable hardening candidate; qualification is pending.** Use only a trusted handover that supplies its approved commit, manifest SHA256 and qualification report. A branch name or this document is not deployment acceptance. The previously accepted Windows and Apple Silicon Mac deployment is v0.1.7. Owner devices must retain their accepted installation until the new lifecycle has real qualification receipts and independent merge. The candidate declares Windows x64, Mac ARM64/Intel and Linux x64 source support; imports alone do not qualify those services. Library imports on another OS do not establish native service acceptance.
+**v0.2.1 is a portable hardening candidate; qualification is pending.** Use only a trusted handover that supplies its approved commit, manifest SHA256 and qualification report. A branch name or this document is not deployment acceptance. The previously accepted Windows and Apple Silicon Mac deployment is v0.1.7. Owner devices must retain their accepted installation until the exact release/platform has qualification receipts and deployment follows the owner's current dated approval. Repository merge policy is separate from deployment authority. The candidate declares Windows x64, Mac ARM64/Intel and Linux x64 source support; imports alone do not qualify those services. Library imports on another OS do not establish native service acceptance.
 
-Read [device setup](docs/DEVICE-SETUP.md), [verification boundaries](docs/DEVICE-TESTING.md) and [v0.2.0 changes](docs/RELEASE-v0.2.0.md). Historical preparation text remains in the [accepted v0.1.7 source](https://github.com/code-by-muhammad/second-brain-system/tree/0c29118bb9170048b5e2b534f96a9d13468b17fa); its old release holds are historical, not current instructions.
+Read [device setup](docs/DEVICE-SETUP.md), [verification boundaries](docs/DEVICE-TESTING.md) and [v0.2.1 changes](docs/RELEASE-v0.2.1.md). The [v0.2.0 notes](docs/RELEASE-v0.2.0.md) retain the prior unqualified candidate history. Historical preparation text remains in the [accepted v0.1.7 source](https://github.com/code-by-muhammad/second-brain-system/tree/0c29118bb9170048b5e2b534f96a9d13468b17fa); its old release holds are historical, not current instructions.
 
 The declared [security profile](SECURITY.md) uses FastEmbed with reranking disabled and deliberately excludes LiteLLM. uv 0.9.16+ is required. The raw dependency audit retains one time-limited FastMCP OAuth exception, bound to the exact static-token transport and source hashes; it is not a clean-audit claim.
 
@@ -43,13 +43,13 @@ Fresh setup leaves client files alone unless selected. Add `--configure-clients 
 
 ## Updates use new code and retained Python
 
-For the v0.1.7 or controlled-acceptance v0.1.8 to v0.2.0 Windows candidate path, read and verify the retained interpreter in `device.json`. Download the approved new checkout into exactly `<runtime>/releases/v0.2.0`, independently verify it, and change into that folder. The `text` command is a schematic argument template, not a paste-ready shell command; use the shell-specific device procedure. Do not manually run `uv sync` there first. Do not run the old updater or launch the new updater from the target venv it must rebuild.
+For the v0.1.7 or controlled-acceptance v0.1.8 to v0.2.1 Windows candidate path, read and verify the retained interpreter in `device.json`. Download the approved new checkout into exactly `<runtime>/releases/v0.2.1`, independently verify it, and change into that folder. The `text` command is a schematic argument template, not a paste-ready shell command; use the shell-specific device procedure. Do not manually run `uv sync` there first. Do not run the old updater or launch the new updater from the target venv it must rebuild.
 
 ```text
-"<retained v0.1.7 Python>" -I -B "<verified v0.2.0 checkout>/update.py" --root "<runtime root>" --version v0.2.0
+"<retained v0.1.7 Python>" -I -B "<verified v0.2.1 checkout>/update.py" --root "<runtime root>" --version v0.2.1
 ```
 
-For a controlled-acceptance v0.1.8 installation, substitute its recorded retained Python for the v0.1.7 placeholder. Require no active `state/service-transaction.json` before either upgrade path. A hold created by v0.1.8 is bound to its original controller and cannot be recovered or migrated by v0.2.0; preserve it for a separately reviewed recovery path.
+For a controlled-acceptance v0.1.8 installation, substitute its recorded retained Python for the v0.1.7 placeholder. Require no active `state/service-transaction.json` before either upgrade path. A hold created by v0.1.8 is bound to its original controller and cannot be recovered or migrated by v0.2.1; preserve it for a separately reviewed recovery path.
 
 The new updater provisions a fresh locked target environment, seals owned-client plans and snapshots before stopping, verifies an empty runtime, starts a fresh owned listener, checks authenticated versioned health and archives the exact transaction. Partial-stop uncertainty keeps a recovery hold. Recovery must use the original verified new checkout and exact recorded UUID; see [the recovery procedure](docs/DEVICE-SETUP.md#recovery).
 

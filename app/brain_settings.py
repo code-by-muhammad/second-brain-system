@@ -3,7 +3,7 @@ from __future__ import annotations
 import json, os, sys, re
 from pathlib import Path
 
-VERSION = '0.2.0'
+VERSION = '0.2.1'
 ROOT = Path(os.environ.get('BRAIN_SYSTEM_ROOT', str(Path(__file__).resolve().parents[1]))).resolve()
 DEVICE_PATH = ROOT / 'device.json'
 DEVICE = json.loads(DEVICE_PATH.read_text(encoding='utf-8')) if DEVICE_PATH.exists() else {}

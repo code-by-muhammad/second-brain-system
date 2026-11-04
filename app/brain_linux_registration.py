@@ -170,6 +170,23 @@ def _plain(path: Path) -> Path:
     return path
 
 
+def _lookup_directory(path: Path) -> Path:
+    # One observed OS lookup alias, never an owned definition or general link policy.
+    if path != Path('/etc/xdg/systemd/user') or not path.is_symlink():
+        return _plain(path)
+    target = Path('/etc/systemd/user')
+    try:
+        if path.lstat().st_uid != 0 or os.readlink(path) != '../../systemd/user':
+            raise RegistrationError('Unrecognized OS unit lookup alias.')
+        for directory in (path.parent, *path.parent.parents, target, *target.parents):
+            info = directory.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+                raise RegistrationError('OS unit lookup alias boundary is not protected.')
+    except OSError:
+        raise RegistrationError('OS unit lookup alias metadata is unavailable.') from None
+    return target
+
+
 def _text(value: str) -> str:
     if not isinstance(value, str) or not value or any(ord(char) < 32 or ord(char) == 127 for char in value):
         raise RegistrationError('Native registration path/identity contains control characters.')
@@ -452,7 +469,7 @@ class LinuxRegistration:
         names={'service.d',self.unit+'.d'}
         names.update('-'.join(parts[:index])+'-.service.d' for index in range(1,len(parts)))
         for index,path in enumerate(paths):
-            _plain(path)
+            path=_lookup_directory(path)
             if index<priority and os.path.lexists(path/self.unit):
                 raise RegistrationError('A higher-priority native fragment appeared before reload.')
             for name in names:

@@ -2436,7 +2436,7 @@ def _model_executable():
     return _native_model_identity(value['executable'])
 
 def _run_model(command,model_input,timeout,*,cwd,log,on_started,on_cleanup_wait):
-    if os.name!='nt':raise RuntimeError('The v0.2.0 compiler requires the qualified Windows maintainer.')
+    if os.name!='nt':raise RuntimeError('The v0.2.1 compiler requires the qualified Windows maintainer.')
     from brain_windows_process import run
     return run(command,input=model_input,text=True,encoding='utf-8',cwd=str(cwd),
                stdout=log,stderr=log,direct_output=True,timeout=timeout,max_output_bytes=5_000_000,

@@ -1,10 +1,10 @@
 # Verification and device acceptance
 
-Revision: 4 November 2026. v0.2.0 is a candidate for Windows x64, Mac ARM64/Intel and Linux x64; every real platform lifecycle receipt is required before promotion. The accepted Windows/Apple Silicon Mac installation remains v0.1.7. No owner Linux device acceptance is inferred. Never turn a library import, configuration entry or historical test into a new physical-device claim.
+Revision: 4 November 2026. v0.2.1 is a candidate for Windows x64, Mac ARM64/Intel and Linux x64; every real platform lifecycle receipt is required before promotion. The accepted Windows/Apple Silicon Mac installation remains v0.1.7. No owner Linux device acceptance is inferred. Never turn a library import, configuration entry or historical test into a new physical-device claim.
 
-The v0.2.0 corrective candidate still needs exact-source full qualification. The v0.1.8 explicit-recovery restoration succeeded, but its final stop failed before End; the original failed receipt remains preserved. Require mask-aware stale-parent regression controls and native checks of the fixed controller, then independently qualify both v0.1.7→v0.2.0 and controlled v0.1.8→v0.2.0 forward, automatic rollback and explicit recovery paths. Confirm the new fixed controller handles every stop inside the forward, rollback and recovery transaction; routine commands after rollback use the restored old controller. See [corrective release scope](RELEASE-v0.2.0.md).
+The v0.2.1 corrective candidate still needs exact-source full qualification. The v0.1.8 explicit-recovery restoration succeeded, but its final stop failed before End; the original failed receipt remains preserved. Require mask-aware stale-parent regression controls and native checks of the fixed controller, then independently qualify both v0.1.7→v0.2.1 and controlled v0.1.8→v0.2.1 forward, automatic rollback and explicit recovery paths. Confirm the new fixed controller handles every stop inside the forward, rollback and recovery transaction; routine commands after rollback use the restored old controller. See [corrective release scope](RELEASE-v0.2.1.md).
 
-Both forward paths require no active service transaction. A v0.1.8 hold cannot be migrated to v0.2.0: recovery is bound to its original checkout, and a failed old-controller stop needs a separately reviewed recovery path. Preserve the hold; do not change snapshot identity to make a test pass. After rollback, routine service commands use the restored old controller; a later upgrade attempt must use the verified new updater.
+Both forward paths require no active service transaction. A v0.1.8 hold cannot be migrated to v0.2.1: recovery is bound to its original checkout, and a failed old-controller stop needs a separately reviewed recovery path. Preserve the hold; do not change snapshot identity to make a test pass. After rollback, routine service commands use the restored old controller; a later upgrade attempt must use the verified new updater.
 
 ## Automated regression boundary
 
@@ -36,7 +36,7 @@ Use only synthetic notes and a copied local model cache. Keep original model byt
 
 Counts alone cannot establish all-file coverage. File fallback/read alone cannot establish indexed retrieval. Unsupported metadata remains reviewable rather than silently normalized or discarded.
 
-## v0.2.0 Mac/Linux qualification requirements
+## v0.2.1 Mac/Linux qualification requirements
 
 Keep accepted v0.1.7 on owner devices. The independently reviewed native harness must use exact owned process identities, real launchd GUI/session or systemd user-bus evidence and safe retained cleanup. On Mac, prove bootout absence and re-bootstrap/start in the intended user's GUI domain on each architecture claimed. On Linux, prove the actual escaped ExecStart, daemon-reload/enable/start/stop with an existing user bus; a required CI bus missing is a failure, not a skipped pass. Do not mutate an owner's session or use cached PID plus command-line substring matching to manufacture acceptance.
 
