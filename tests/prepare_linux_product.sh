@@ -100,7 +100,7 @@ bus_events="/sys/fs/cgroup/user.slice/user-${qualification_uid}.slice/user@${qua
 
 set +e
 wrapper_stage='actual product fixture'
-sudo /usr/sbin/runuser -u "$qualification_user" -- /bin/bash -c 'umask 022; cd / && exec "$@"' sbci /usr/bin/env -i HOME="$qualification_home" USER="$qualification_user" LOGNAME="$qualification_user" \
+sudo /usr/sbin/runuser -u "$qualification_user" -- /bin/bash -c 'umask 022; cd -- "$1" && shift && exec "$@"' sbci "$qualification_home" /usr/bin/env -i HOME="$qualification_home" USER="$qualification_user" LOGNAME="$qualification_user" \
   PATH=/usr/bin:/bin XDG_RUNTIME_DIR="/run/user/$qualification_uid" GITHUB_ACTIONS=true GITHUB_SHA="$GITHUB_SHA" \
   GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_WORKFLOW_SHA="$workflow_sha" RUNNER_ENVIRONMENT=github-hosted \
   "$qualification_python" -I -B "$qualification_base/native_linux_upgrade.py" --execute-reviewed-native \
