@@ -58,7 +58,7 @@ def _variant(properties: dict, name: str, signature: str):
 
 
 def loaded_contract(unit: str, path: Path, argv: tuple[str, ...], prefix: str,
-                    unit_properties: dict, service_properties: dict, *, allow_reload=False,prove_main=True) -> dict:
+                    unit_properties: dict, service_properties: dict, *, trusted_home: Path, allow_reload=False,prove_main=True) -> dict:
     """Validate a candidate systemd-255 GetAll snapshot; no I/O or authority.
 
     This pure contract is exercised by fault controls before it may be used by
@@ -66,6 +66,7 @@ def loaded_contract(unit: str, path: Path, argv: tuple[str, ...], prefix: str,
     """
     if (not isinstance(unit, str) or not re.fullmatch(r'second-brain(?:-(?:test|ci)-[a-f0-9]{32})?\.service', unit)
             or not isinstance(path, Path) or not path.is_absolute()
+            or not isinstance(trusted_home, Path) or not trusted_home.is_absolute()
             or not isinstance(argv, tuple) or len(argv) != 2
             or any(not isinstance(arg, str) or not arg or not Path(arg).is_absolute() for arg in argv)
             or not isinstance(prefix, str) or not re.fullmatch(r'/user\.slice/user-[0-9]+\.slice/user@[0-9]+\.service', prefix)):
@@ -125,7 +126,9 @@ def loaded_contract(unit: str, path: Path, argv: tuple[str, ...], prefix: str,
                             ('PassEnvironment', 'as'), ('UnsetEnvironment', 'as'), ('ExecSearchPath', 'as')):
         if _variant(s, name, signature) != []:
             raise RegistrationError('Loaded service has an unexpected environment override.')
-    for name in ('WorkingDirectory', 'RootDirectory', 'RootImage', 'User', 'Group', 'PAMName'):
+    if _variant(s, 'WorkingDirectory', 's') != '!'+str(trusted_home):
+        raise RegistrationError('Loaded service working directory differs from the trusted user home.')
+    for name in ('RootDirectory', 'RootImage', 'User', 'Group', 'PAMName'):
         if _variant(s, name, 's') != '':
             raise RegistrationError('Loaded service has an unexpected execution context.')
     execute = _variant(s, 'ExecStart', 'a(sasbttttuii)')
@@ -168,6 +171,23 @@ def _plain(path: Path) -> Path:
     if not path.is_absolute() or any(part.is_symlink() for part in (path, *path.parents)):
         raise RegistrationError('Linked or relative native registration boundary refused.')
     return path
+
+
+def _lookup_directory(path: Path) -> Path:
+    # One observed OS lookup alias, never an owned definition or general link policy.
+    if path != Path('/etc/xdg/systemd/user') or not path.is_symlink():
+        return _plain(path)
+    target = Path('/etc/systemd/user')
+    try:
+        if path.lstat().st_uid != 0 or os.readlink(path) != '../../systemd/user':
+            raise RegistrationError('Unrecognized OS unit lookup alias.')
+        for directory in (path.parent, *path.parent.parents, target, *target.parents):
+            info = directory.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+                raise RegistrationError('OS unit lookup alias boundary is not protected.')
+    except OSError:
+        raise RegistrationError('OS unit lookup alias metadata is unavailable.') from None
+    return target
 
 
 def _text(value: str) -> str:
@@ -452,7 +472,7 @@ class LinuxRegistration:
         names={'service.d',self.unit+'.d'}
         names.update('-'.join(parts[:index])+'-.service.d' for index in range(1,len(parts)))
         for index,path in enumerate(paths):
-            _plain(path)
+            path=_lookup_directory(path)
             if index<priority and os.path.lexists(path/self.unit):
                 raise RegistrationError('A higher-priority native fragment appeared before reload.')
             for name in names:
@@ -496,7 +516,7 @@ class LinuxRegistration:
                      and isinstance(execute[0],list) and execute[0][:3]==[known[0],list(known),False]]
             if len(choices)!=1:raise RegistrationError('Dirty loaded command is not an exact retained definition.')
             argv=choices[0]
-        value=loaded_contract(self.unit,self.path,argv,self.prefix,u,s,allow_reload=True,prove_main=prove_main)
+        value=loaded_contract(self.unit,self.path,argv,self.prefix,u,s,trusted_home=self.home,allow_reload=True,prove_main=prove_main)
         value['object_path']=obj;value['arguments']=list(argv)
         if prove_main and value['main_pid']:
             import brain_process as processes
