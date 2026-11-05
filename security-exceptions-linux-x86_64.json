@@ -179,19 +179,19 @@
     "app/brain_process.py": "5e9fc0886e50303a0a6779c43c78d972239c1ddf65027ddde2abbcba07d58b49",
     "app/brain_server.py": "256979525793b388577c7a3a3c7dbf0b490666da76c69d5cf696068ee0793acd",
     "app/brain_service.py": "6d39492432a753677f02a42e2ecfbd671e1673a738fa8eaad86852610915ffff",
-    "app/brain_settings.py": "7bb6418942383336cbca036760b4b25573a06f649ee8571cbbef220e74848c80",
+    "app/brain_settings.py": "90b7dd70a0596dd782cda32ace64e5ce277f95c077f0f22397e58b690712c500",
     "app/brain_store.py": "f3025605f8c75fd6b34dc4d4250fdf96b70848ede1110eb7a9a6c76c89717539",
     "app/brain_supervisor.py": "68d73fdf794a3fbbf455dc71a1baafe0a42561dbd7c5607ae4d875caa8e98179",
     "app/brain_walk.py": "92d7e35a59a052f1ae920b8249a929477e2c42aa5535a5f81004c09f8f7ad24a",
-    "app/brain_wiki.py": "6df56dc63960cb4e92f3b6515577d7b96898a38aaf632048f6bd41f61ad39fca",
+    "app/brain_wiki.py": "4fae31c279e73424e8e20d81a62d8b6c9c2f371ea1b371cfa66e6bbf01bc6f43",
     "app/brain_windows_process.py": "803eb93b9a23fc941f7eed4aa5e53512b91ae38f5694d11f75cf91de30a83758",
     "check_dependency_audit.py": "413bdcdf23bcf8afcfe6d96e4ed13a7336898bf5ea2c448fc2ea08d0332dfd62",
-    "install.py": "d0c1791d14bc61134a742d6be2fff61a9c5c7b82b9af9f997d6b16aa2d8921cc",
-    "pyproject.toml": "94d1a273505fd4a5866ceb21d28a35e58fa5b20f9e6111dbc461ba6ef877da19",
+    "install.py": "5e8eb106f0de817874a219796655164addbdbd10ede165f1dc10d6a6c2e3f3b2",
+    "pyproject.toml": "fa4970a1076aa7dc4918517a9791465e0562ba54f78107f94d55095aafbeddbe",
     "setup_runtime.py": "1048c261984199a95668ada824c9b3caadef8e2ccd4d84ffca4d379b5fd2e43a",
     "tests/test_security_profile.py": "f12a8faa872e75bc3522e2efd37db32102f5d91a355076718ef129a574a3c988",
     "update.py": "4b6657652632a725c5468734994d09c01b5475f4c2a100a37edce4c5e91485e8",
-    "uv.lock": "42445d05425c9d7792117de459bfa319e5185239c13fb0d9998531f02c130e0c"
+    "uv.lock": "4a16212eed831f125af8851b62bb3cb5f08c9690067647f87d3c6f283a25e1bd"
   },
   "exceptions": [
     {

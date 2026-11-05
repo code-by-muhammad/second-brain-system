@@ -1,7 +1,7 @@
 """Version-dependent updater/metadata controls; OS and controller execution are fake.
 
 The real planner, snapshot, deploy and restore functions run on synthetic bytes.
-These tests do not execute historical v0.1.7/v0.1.8 app code or prove native E2E.
+These tests do not execute v0.1.7/v0.1.8/v0.2.2 app code or prove native E2E.
 The fixture uses one shared Python placeholder. Checkout/metadata selection is
 checked here; actual old/new interpreter separation needs the native receipts.
 """
@@ -42,43 +42,43 @@ def assert_new_controller(h,expected_finish):
     return events
 
 
-@pytest.mark.parametrize('previous_version',['0.1.7','0.1.8'])
-def test_current_forward_uses_new_controller_and_replaces_existing_binding(portable,monkeypatch,previous_version):
-    h=prepare(portable,monkeypatch,previous_version=previous_version,target_version='0.2.0')
+@pytest.mark.parametrize('previous_version,target_version',[('0.1.7','0.2.0'),('0.1.8','0.2.0'),('0.2.2','0.2.3')])
+def test_current_forward_uses_new_controller_and_replaces_existing_binding(portable,monkeypatch,previous_version,target_version):
+    h=prepare(portable,monkeypatch,previous_version=previous_version,target_version=target_version)
     old_binding=install_prior_binding(h)
-    result=h.updater.perform(h.root,'v0.2.0')
-    assert result['status']=='updated' and result['version']=='0.2.0'
-    assert json.loads((h.root/'device.json').read_bytes())['version']=='0.2.0'
+    result=h.updater.perform(h.root,'v'+target_version)
+    assert result['status']=='updated' and result['version']==target_version
+    assert json.loads((h.root/'device.json').read_bytes())['version']==target_version
     current=json.loads(binding_path(h).read_bytes())
     assert binding_path(h).read_bytes()!=old_binding
     assert current['version']==previous_version and current['python']==h.device['python']
     assert current['controller_python']==sys.executable and current['snapshot']==result['snapshot']
-    assert h.health==['0.2.0'] and not (h.root/'state/service-transaction.json').exists()
-    assert [row['action'] for row in assert_new_controller(h,'0.2.0')]==[
+    assert h.health==[target_version] and not (h.root/'state/service-transaction.json').exists()
+    assert [row['action'] for row in assert_new_controller(h,target_version)]==[
         'inspect','hold','stop','install','start','finish']
 
 
-@pytest.mark.parametrize('previous_version',['0.1.7','0.1.8'])
-def test_current_automatic_rollback_restores_prior_binding_and_exact_runtime(portable,monkeypatch,previous_version):
-    h=prepare(portable,monkeypatch,previous_version=previous_version,target_version='0.2.0')
+@pytest.mark.parametrize('previous_version,target_version',[('0.1.7','0.2.0'),('0.1.8','0.2.0'),('0.2.2','0.2.3')])
+def test_current_automatic_rollback_restores_prior_binding_and_exact_runtime(portable,monkeypatch,previous_version,target_version):
+    h=prepare(portable,monkeypatch,previous_version=previous_version,target_version=target_version)
     old_binding=install_prior_binding(h)
     before_device=(h.root/'device.json').read_bytes()
     before_app={p.name:p.read_bytes() for p in (h.root/'app').glob('*.py')}
     h.fail_health=True
     with pytest.raises(RuntimeError,match='previous runtime health verified'):
-        h.updater.perform(h.root,'v0.2.0')
+        h.updater.perform(h.root,'v'+target_version)
     assert (h.root/'device.json').read_bytes()==before_device
     assert {p.name:p.read_bytes() for p in (h.root/'app').glob('*.py')}==before_app
     assert binding_path(h).read_bytes()==old_binding
-    assert h.health==['0.2.0',previous_version]
+    assert h.health==[target_version,previous_version]
     assert not (h.root/'state/service-transaction.json').exists()
     assert [row['action'] for row in assert_new_controller(h,previous_version)]==[
         'inspect','hold','stop','install','start','stop','install','start','finish']
 
 
-@pytest.mark.parametrize('previous_version',['0.1.7','0.1.8'])
-def test_current_explicit_uuid_recovery_uses_snapshot_controller_and_restores_sealed_binding(portable,monkeypatch,previous_version):
-    h=prepare(portable,monkeypatch,previous_version=previous_version,target_version='0.2.0')
+@pytest.mark.parametrize('previous_version,target_version',[('0.1.7','0.2.0'),('0.1.8','0.2.0'),('0.2.2','0.2.3')])
+def test_current_explicit_uuid_recovery_uses_snapshot_controller_and_restores_sealed_binding(portable,monkeypatch,previous_version,target_version):
+    h=prepare(portable,monkeypatch,previous_version=previous_version,target_version=target_version)
     old_binding=install_prior_binding(h)
     before_device=(h.root/'device.json').read_bytes()
     before_app={p.name:p.read_bytes() for p in (h.root/'app').glob('*.py')}
@@ -91,11 +91,11 @@ def test_current_explicit_uuid_recovery_uses_snapshot_controller_and_restores_se
         return actual(python,checkout,root,command,action,*flags)
     monkeypatch.setattr(h.updater,'controller',controlled_failure)
     with pytest.raises(RuntimeError,match='recovery is incomplete'):
-        h.updater.perform(h.root,'v0.2.0')
+        h.updater.perform(h.root,'v'+target_version)
     transaction=json.loads((h.root/'state/service-transaction.json').read_bytes())
     snapshot=json.loads((Path(transaction['snapshot'])/'snapshot.json').read_bytes())
     assert snapshot['controller_checkout']==str(h.release)
-    assert snapshot['controller_identity']['tag']=='v0.2.0'
+    assert snapshot['controller_identity']['tag']=='v'+target_version
     assert snapshot['previous']['version']==previous_version
     forward_binding=binding_path(h).read_bytes()
     assert forward_binding!=old_binding
@@ -109,7 +109,7 @@ def test_current_explicit_uuid_recovery_uses_snapshot_controller_and_restores_se
     assert {p.name:p.read_bytes() for p in (h.root/'app').glob('*.py')}==before_app
     assert binding_path(h).read_bytes()==old_binding
     assert not (h.root/'state/service-transaction.json').exists()
-    assert h.health==['0.2.0',previous_version]
+    assert h.health==[target_version,previous_version]
     assert_new_controller(h,previous_version)
 
 
