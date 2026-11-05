@@ -1,10 +1,10 @@
 # Verification and device acceptance
 
-Revision: 4 November 2026. v0.2.2 is a candidate for Windows x64, Mac ARM64/Intel and Linux x64; every real platform lifecycle receipt is required before promotion. The accepted Windows/Apple Silicon Mac installation remains v0.1.7. No owner Linux device acceptance is inferred. Never turn a library import, configuration entry or historical test into a new physical-device claim.
+Revision: 5 November 2026. v0.2.3 is a Windows compiler compatibility candidate carrying the existing Windows x64, Mac ARM64/Intel and Linux x64 source support. Qualification of the patch remains pending. The qualified predecessor v0.2.2 and its 15 scoped native fixture outcomes remain v0.2.2 evidence, not v0.2.3 passes. No owner Linux device acceptance is inferred. Never turn a library import, configuration entry or historical test into a new physical-device claim.
 
-The v0.2.2 corrective candidate still needs exact-source full qualification. The v0.1.8 explicit-recovery restoration succeeded, but its final stop failed before End; the original failed receipt remains preserved. Require mask-aware stale-parent regression controls and native checks of the fixed controller, then independently qualify both v0.1.7→v0.2.2 and controlled v0.1.8→v0.2.2 forward, automatic rollback and explicit recovery paths. Confirm the new fixed controller handles every stop inside the forward, rollback and recovery transaction; routine commands after rollback use the restored old controller. See [corrective release scope](RELEASE-v0.2.2.md).
+The v0.2.2 qualification records cover its legacy v0.1.7 and controlled v0.1.8 forward, automatic-rollback and explicit-recovery paths. Preserve the original failed receipts and subsequent successful corrective receipts as dated v0.2.2 evidence. For v0.2.3, retain exact unchanged-controller/component hashes and regression evidence separately from new successor qualification. Require focused v0.2.2→v0.2.3 forward, automatic-rollback and explicit-UUID-recovery controls and scoped native Windows qualification before that deployment; pure OS-boundary fixtures do not establish native execution. Other starting-version/platform routes remain unqualified for v0.2.3 until separately demonstrated. Do not relabel the predecessor's 15 native outcomes as successor passes. See [corrective release scope](RELEASE-v0.2.3.md).
 
-Both forward paths require no active service transaction. A v0.1.8 hold cannot be migrated to v0.2.2: recovery is bound to its original checkout, and a failed old-controller stop needs a separately reviewed recovery path. Preserve the hold; do not change snapshot identity to make a test pass. After rollback, routine service commands use the restored old controller; a later upgrade attempt must use the verified new updater.
+Any forward path requires no active service transaction. A v0.1.8 hold cannot be migrated to v0.2.3: recovery is bound to its original checkout, and a failed old-controller stop needs a separately reviewed recovery path. Preserve the hold; do not change snapshot identity to make a test pass. After rollback, routine service commands use the restored old controller; a later upgrade attempt must use the verified new updater.
 
 ## Automated regression boundary
 
@@ -36,9 +36,9 @@ Use only synthetic notes and a copied local model cache. Keep original model byt
 
 Counts alone cannot establish all-file coverage. File fallback/read alone cannot establish indexed retrieval. Unsupported metadata remains reviewable rather than silently normalized or discarded.
 
-## v0.2.2 Mac/Linux qualification requirements
+## v0.2.3 Mac/Linux qualification requirements
 
-Keep accepted v0.1.7 on owner devices. The independently reviewed native harness must use exact owned process identities, real launchd GUI/session or systemd user-bus evidence and safe retained cleanup. On Mac, prove bootout absence and re-bootstrap/start in the intended user's GUI domain on each architecture claimed. On Linux, prove the actual escaped ExecStart, daemon-reload/enable/start/stop with an existing user bus; a required CI bus missing is a failure, not a skipped pass. Do not mutate an owner's session or use cached PID plus command-line substring matching to manufacture acceptance.
+Keep each owner device on its accepted installation until the exact proposed release/platform is qualified and its deployment is approved. The independently reviewed native harness must use exact owned process identities, real launchd GUI/session or systemd user-bus evidence and safe retained cleanup. On Mac, prove bootout absence and re-bootstrap/start in the intended user's GUI domain on each architecture claimed. On Linux, prove the actual escaped ExecStart, daemon-reload/enable/start/stop with an existing user bus; a required CI bus missing is a failure, not a skipped pass. Do not mutate an owner's session or use cached PID plus command-line substring matching to manufacture acceptance.
 
 ## Target device remains a separate gate
 

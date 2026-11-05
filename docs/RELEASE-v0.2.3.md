@@ -1,0 +1,13 @@
+# v0.2.3 candidate - Windows compiler temporary working directory
+
+Status: candidate preparation, 5 November 2026. Exact source/manifest, review, CI/audit and scoped successor qualification are pending. This note is not publication, deployment, compiler or physical-device acceptance.
+
+The Windows compiler created a fresh private temporary directory using the host TEMP spelling, which can contain an 8.3 short-name ancestor. The native runner correctly refused that noncanonical working directory before model execution. The correction validates the raw temporary path and every ancestor as unlinked, then strictly resolves that existing directory at the compiler caller before invoking the unchanged runner. The TemporaryDirectory lifecycle and runner guard remain intact. It does not change global TEMP, process ownership, service/update/recovery code, providers, credentials, queue/retry policy, source exclusions or original notes.
+
+The focused regression controls cover the short-name caller route and unsafe raw-path refusals. The current accepted v0.2.2 starting version needs focused 0.2.2-to-0.2.3 forward, automatic-rollback and explicit-UUID-recovery controls; pure fixtures are not native receipts. A bounded real compiler outcome must be reported by its actual journal/publication receipt, not inferred from a model-boundary mock. Existing v0.2.2 tags, assets, failures, release notes and 15 scoped native fixture outcomes remain unchanged and labeled v0.2.2. Unchanged-component evidence is distinct from a new successor runtime result.
+
+Only the project's own version and exact-source bindings change in packaging. The dependency graph, four host profiles' non-source policy, protected source key set and scoped FastMCP exception deadline of **12 November 2026** remain unchanged. Rebind source hashes from the actual final bytes and retain current audits; this is not a clean-audit claim.
+
+Use the verified new checkout at `<runtime>/releases/v0.2.3` with the installed device's recorded retained Python. Do not manually provision the target venv or patch the installed v0.2.2 app. Require no outstanding hold and preserve fresh private backups, identity, selected clients, source policy, maintenance ownership and the existing schedule. A real device update follows its exact qualified pins and the owner's dated approval. Guide/PDF/helper assets are separate versioned deliverables, not silently relabeled by this source patch. Repository merge remains an attended owner action.
+
+See [device setup](DEVICE-SETUP.md), [verification boundaries](DEVICE-TESTING.md), [security limits](../SECURITY.md) and the retained [v0.2.2 source history](RELEASE-v0.2.2.md).

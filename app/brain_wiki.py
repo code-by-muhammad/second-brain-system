@@ -2435,8 +2435,15 @@ def _model_executable():
         raise ValueError('Invalid model configuration; no model called.')
     return _native_model_identity(value['executable'])
 
+def _temporary_model_cwd(value):
+    path=Path(value)
+    if (not path.is_absolute() or not path.is_dir()
+            or any(item.is_symlink() or item.is_junction() for item in (path,*path.parents))):
+        raise ValueError('Use a plain absolute model working directory.')
+    return path.resolve(strict=True)
+
 def _run_model(command,model_input,timeout,*,cwd,log,on_started,on_cleanup_wait):
-    if os.name!='nt':raise RuntimeError('The v0.2.2 compiler requires the qualified Windows maintainer.')
+    if os.name!='nt':raise RuntimeError('The v0.2.3 compiler requires the qualified Windows maintainer.')
     from brain_windows_process import run
     return run(command,input=model_input,text=True,encoding='utf-8',cwd=str(cwd),
                stdout=log,stderr=log,direct_output=True,timeout=timeout,max_output_bytes=5_000_000,
@@ -2560,6 +2567,7 @@ def run(limit=4,timeout=480):
                                  'attention_required':True,'model_called':True,'pending_work':'preserved',
                                  'cleanup':'worker lock retained until all owned process lifetimes are verified exited'})
                 with tempfile.TemporaryDirectory(prefix='brain-wiki-') as cwd:
+                    cwd=_temporary_model_cwd(cwd)
                     with (folder/'runner.log').open('wb') as log:
                         proc=_run_model(command,model_input,timeout,cwd=cwd,log=log,on_started=started,on_cleanup_wait=cleanup_wait)
                 if proc.returncode!=0 or not output.exists(): raise RuntimeError('Wiki model failed; inspect private batch runner.log; no claims published.')
