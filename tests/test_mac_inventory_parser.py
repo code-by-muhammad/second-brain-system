@@ -98,6 +98,9 @@ def test_hidden_native_table_reads_the_users_own_listeners(monkeypatch):
     (0, b'p1\nf3\nn127.0.0.1:8765\n', b''), (0, b'p1\nf3\ntUDP\nn127.0.0.1:8765\n', b''),
     (0, b'px\nf3\ntIPv4\nn127.0.0.1:8765\n', b''), (0, b'p1\nf3\ntIPv4\nn127.0.0.1:9999\n', b''),
     (0, b'p1\nf3\ntIPv4\nn127.0.0.1\n', b''), (0, b'p1\nf3\ntIPv4\nn127.0.0.1:8765\nc python\n', b''),
+    (0, b'p1\nf3\ntIPv4\nn127.0.0.1:1->10.0.0.1:8765\n', b''), (0, b'p1\nf3\ntIPv4\nn[::1]:8765\n', b''),
+    (0, b'p1\nf3\ntIPv6\nn::1:8765\n', b''), (0, b'p1\nf3\ntIPv4\nnjunk junk:8765\n', b''),
+    (0, b'p1\nf3\ntIPv4\nn127.0.0.1:8765\r\n', b''), (0, b'p1\nf3\ntIPv4\nn127.0.0.1:8765', b''),
     (0, b'\xff', b'')])
 def test_malformed_own_listener_output_cannot_authorize_absence(monkeypatch, returncode, stdout, stderr):
     own_user_run(monkeypatch, returncode, stdout, stderr)

@@ -8,6 +8,7 @@ Only then the calling user's own listeners are read with lsof. Listeners of othe
 users are not visible on that path, and the port is never probed to find them.
 """
 from pathlib import Path
+import re
 import stat
 import subprocess
 
@@ -69,7 +70,7 @@ def parse_own(raw: bytes, port: int) -> tuple[tuple[str, str, int], ...]:
     result = []
     expected = 'p'
     family = ''
-    for line in () if malformed else text.splitlines():
+    for line in () if malformed else text.split('\n')[:-1] if text.endswith('\n') else ('',):
         key, value = line[:1], line[1:]
         if not key or key not in expected:
             malformed = True
@@ -82,9 +83,9 @@ def parse_own(raw: bytes, port: int) -> tuple[tuple[str, str, int], ...]:
             expected = 'n'
         else:
             host, separator, number = value.rpartition(':')
-            if family == 'tcp6' and host.startswith('[') and host.endswith(']'):
-                host = host[1:-1]
-            malformed = not separator or not host or number != str(port)
+            shape = r'\*|[0-9.]+' if family == 'tcp4' else r'\*|\[[0-9A-Za-z:.%]+\]'
+            malformed = not separator or number != str(port) or not re.fullmatch(shape, host)
+            host = host.strip('[]')
             result.append((family, host, port))
             expected = 'pf'
         if malformed:

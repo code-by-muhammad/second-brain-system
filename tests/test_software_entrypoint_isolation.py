@@ -94,7 +94,7 @@ def documented_prefix(route, release, python):
             if line.startswith('"<retained v0.1.7 Python>" '):
                 prefix=line.split(' --root ',1)[0]
                 arguments=shlex.split(prefix)
-                assert arguments==['<retained v0.1.7 Python>','-I','-B','<verified v0.2.4 checkout>/update.py'], 'Unexpected updater entrypoint or flags.'
+                assert arguments==['<retained v0.1.7 Python>','-I','-B','<verified v0.2.5 checkout>/update.py'], 'Unexpected updater entrypoint or flags.'
                 if route=='updater-help':choices.append([str(python),'-I','-B',str(release/'update.py')])
             elif line.startswith(('& $retainedPython ','& $recoveryPython ')):
                 variable,checkout=('$retainedPython','$brainRelease') if line.startswith('& $retainedPython ') else ('$recoveryPython','$originalCheckout')
