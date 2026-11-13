@@ -174,7 +174,7 @@
     "app/brain_index_bootstrap.py": "ed416818b8ed22a0a76af2c85af22c729d6733d73761177c9ce6c75da90cd1d8",
     "app/brain_linux_identity.py": "9a1d506b72b18e7c6c918f799f20e758605884ff220b67280af6265b017e2437",
     "app/brain_linux_registration.py": "176ecadb4ef01081cc6354b93bf9dc7475c731394c01b5df6e73536719a2c043",
-    "app/brain_mac_inventory.py": "e589dbdbbd2a168e4137643b6e2a8e9871eb6900f25909f811896369dcb353dc",
+    "app/brain_mac_inventory.py": "8c9fa104f8fc109ecf971b2ff9ef1409e1587b14ce0b72efa2b9c79cfaca3d6a",
     "app/brain_mac_registration.py": "d263304109b31d7679e12422e2c709007684df6cfdcd95b8b3f1435c9603dd4e",
     "app/brain_maintenance.py": "07081715af1b17f9747c73148edf1833e97d63c043c4675da651310cd0b2194b",
     "app/brain_markdown.py": "3bc18c92524364acdce8bbf0abf00e69d7acf72d0d9cfbc809461424c3379892",
