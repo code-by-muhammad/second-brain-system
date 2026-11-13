@@ -2,8 +2,13 @@
 
 Output is checked after capture, so the byte limit is an acceptance bound rather
 than a streaming memory limit. Unknown native formats always refuse.
+
+macOS 27 returns an empty netstat table to callers that are not system binaries.
+Only then the calling user's own listeners are read with lsof. Listeners of other
+users are not visible on that path, and the port is never probed to find them.
 """
 from pathlib import Path
+import re
 import stat
 import subprocess
 
@@ -53,8 +58,45 @@ def parse(raw: bytes, port: int) -> tuple[tuple[str, str, int], ...]:
     return tuple(sorted(result))
 
 
-def native_tool() -> Path:
-    tool = Path('/usr/sbin/netstat')
+def parse_own(raw: bytes, port: int) -> tuple[tuple[str, str, int], ...]:
+    """Read `lsof -Fptn` records: one p line per process, then f, t, n per socket."""
+    if not isinstance(raw, bytes) or len(raw) > 2_000_000 or type(port) is not int or not 1 <= port <= 65535:
+        raise InventoryError('Native TCP inventory input is outside its bound.')
+    malformed = False
+    try:
+        text = raw.decode('ascii')
+    except UnicodeError:
+        malformed = True
+    result = []
+    expected = 'p'
+    family = ''
+    for line in () if malformed else text.split('\n')[:-1] if text.endswith('\n') else ('',):
+        key, value = line[:1], line[1:]
+        if not key or key not in expected:
+            malformed = True
+        elif key in 'pf':
+            malformed = not value.isdigit()
+            expected = 'f' if key == 'p' else 't'
+        elif key == 't':
+            malformed = value not in ('IPv4', 'IPv6')
+            family = 'tcp4' if value == 'IPv4' else 'tcp6'
+            expected = 'n'
+        else:
+            host, separator, number = value.rpartition(':')
+            shape = r'\*|[0-9.]+' if family == 'tcp4' else r'\*|\[[0-9A-Za-z:.%]+\]'
+            malformed = not separator or number != str(port) or not re.fullmatch(shape, host)
+            host = host.strip('[]')
+            result.append((family, host, port))
+            expected = 'pf'
+        if malformed:
+            break
+    if malformed or not result or expected != 'pf':
+        raise InventoryError('Native TCP inventory is unreadable.')
+    return tuple(sorted(result))
+
+
+def native_tool(path: str = '/usr/sbin/netstat') -> Path:
+    tool = Path(path)
     failed = False
     try:
         for part in (tool, *tool.parents):
@@ -87,4 +129,26 @@ def read(port: int, *, timeout: float = 5) -> tuple[tuple[str, str, int], ...]:
         raise InventoryError('Native TCP inventory is unreadable.') from None
     if value.returncode or value.stderr:
         raise InventoryError('Native TCP inventory is unreadable.')
-    return parse(value.stdout, port)
+    if value.stdout:
+        return parse(value.stdout, port)
+    return _read_own(port, timeout)
+
+
+def _read_own(port: int, timeout: float) -> tuple[tuple[str, str, int], ...]:
+    tool = native_tool('/usr/sbin/lsof')
+    failed = False
+    try:
+        value = subprocess.run([str(tool), '-nP', f'-iTCP:{port}', '-sTCP:LISTEN', '-Fptn'],
+                               env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LC_ALL': 'C'},
+                               stdin=subprocess.DEVNULL, capture_output=True,
+                               timeout=timeout, check=False, shell=False)
+    except (OSError, subprocess.TimeoutExpired):
+        failed = True
+    if failed or value.stderr or value.returncode not in (0, 1):
+        raise InventoryError('Native TCP inventory is unreadable.') from None
+    if value.returncode:
+        # lsof exits 1 with no output when nothing matches.
+        if value.stdout:
+            raise InventoryError('Native TCP inventory is unreadable.')
+        return ()
+    return parse_own(value.stdout, port)

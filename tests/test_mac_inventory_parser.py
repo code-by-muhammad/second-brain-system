@@ -71,6 +71,44 @@ def test_native_transport_refuses_without_raw_error_context(brain, monkeypatch, 
     assert error.value.__cause__ is None and error.value.__context__ is None
 
 
+def own_user_run(monkeypatch, returncode, stdout, stderr=b''):
+    monkeypatch.setattr(inventory, 'native_tool', lambda path='/usr/sbin/netstat': Path(path).name)
+    def run(arguments, **options):
+        assert options['stdin'] == subprocess.DEVNULL and options['shell'] is False
+        if arguments[0] == 'netstat':
+            return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
+        assert arguments == ['lsof', '-nP', '-iTCP:8765', '-sTCP:LISTEN', '-Fptn']
+        return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+    monkeypatch.setattr(inventory.subprocess, 'run', run)
+
+
+def test_hidden_native_table_reads_the_users_own_listeners(monkeypatch):
+    # Observed on macOS 27.2: netstat prints nothing for a non-system interpreter.
+    own_user_run(monkeypatch, 0, b'p842\nf10\ntIPv4\nn127.0.0.1:8765\n')
+    assert inventory.read(8765) == (('tcp4', '127.0.0.1', 8765),)
+    own_user_run(monkeypatch, 1, b'')
+    assert inventory.read(8765) == ()
+    own_user_run(monkeypatch, 0, b'p1\nf3\ntIPv4\nn127.0.0.1:8765\nf4\ntIPv6\nn[::1]:8765\np2\nf5\ntIPv6\nn*:8765\n')
+    assert inventory.read(8765) == (('tcp4', '127.0.0.1', 8765), ('tcp6', '*', 8765), ('tcp6', '::1', 8765))
+
+
+@pytest.mark.parametrize('returncode,stdout,stderr', [
+    (0, b'', b''), (1, b'p1\n', b''), (2, b'', b''), (1, b'', b'lsof: warning'),
+    (0, b'f3\ntIPv4\nn127.0.0.1:8765\n', b''), (0, b'p1\nf3\ntIPv4\n', b''),
+    (0, b'p1\nf3\nn127.0.0.1:8765\n', b''), (0, b'p1\nf3\ntUDP\nn127.0.0.1:8765\n', b''),
+    (0, b'px\nf3\ntIPv4\nn127.0.0.1:8765\n', b''), (0, b'p1\nf3\ntIPv4\nn127.0.0.1:9999\n', b''),
+    (0, b'p1\nf3\ntIPv4\nn127.0.0.1\n', b''), (0, b'p1\nf3\ntIPv4\nn127.0.0.1:8765\nc python\n', b''),
+    (0, b'p1\nf3\ntIPv4\nn127.0.0.1:1->10.0.0.1:8765\n', b''), (0, b'p1\nf3\ntIPv4\nn[::1]:8765\n', b''),
+    (0, b'p1\nf3\ntIPv6\nn::1:8765\n', b''), (0, b'p1\nf3\ntIPv4\nnjunk junk:8765\n', b''),
+    (0, b'p1\nf3\ntIPv4\nn127.0.0.1:8765\r\n', b''), (0, b'p1\nf3\ntIPv4\nn127.0.0.1:8765', b''),
+    (0, b'\xff', b'')])
+def test_malformed_own_listener_output_cannot_authorize_absence(monkeypatch, returncode, stdout, stderr):
+    own_user_run(monkeypatch, returncode, stdout, stderr)
+    with pytest.raises(inventory.InventoryError) as error:
+        inventory.read(8765)
+    assert error.value.__cause__ is None and error.value.__context__ is None
+
+
 @pytest.mark.parametrize('fault', ['symlink', 'foreign_owner', 'writable', 'directory'])
 def test_unprotected_native_tool_refuses_before_exec(monkeypatch, fault):
     mode = stat.S_IFDIR | 0o755 if fault == 'directory' else stat.S_IFREG | 0o755
