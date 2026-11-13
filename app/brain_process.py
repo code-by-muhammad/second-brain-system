@@ -123,7 +123,10 @@ def _framework_image(interpreter,home):
             or version.parent.parent.name!='Python.framework'):
         return None
     if home is not None:
-        try:matching=home.is_absolute() and home.resolve(strict=True)==version/'bin'
+        # Either the framework's own bin, or a prefix bin (Homebrew) whose same-named
+        # interpreter is a link to this exact framework binary.
+        try:matching=home.is_absolute() and (home.resolve(strict=True)==version/'bin'
+                or (home/interpreter.name).resolve(strict=True)==interpreter)
         except OSError:matching=False
         if not matching:raise OwnershipError('Python framework home disagrees with the selected interpreter.')
     image=version/'Resources/Python.app/Contents/MacOS/Python'

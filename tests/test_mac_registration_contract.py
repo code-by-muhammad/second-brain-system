@@ -33,6 +33,27 @@ def test_measured_loaded_contract_extracts_exact_arguments_and_fields():
     assert fields['type']=='LaunchAgent' and fields['domain']==DOMAIN+' [100003]'
 
 
+def test_measured_nested_requirement_block_does_not_end_the_service_block():
+    # macOS 27.2 prints a nested LWCR block whose inner blocks open with "=>".
+    lwcr=('LWCR = {\n"reqs" => {\n"cdhash" => {\n"$in" => [\n0 = \t\t\t\t]\n}\n}\n'
+          '"vers" => 1\n"comp" => 1\n"ccat" => 0\n}\n')
+    raw=loaded().replace(b'environment = {\nXPC_SERVICE_NAME',lwcr.encode()+b'pid = 804\nenvironment = {\nXPC_SERVICE_NAME')
+    fields=native.loaded_fields(raw,ADDRESS)
+    assert fields['pid']=='804' and fields['type']=='LaunchAgent'
+    assert fields['arguments'][-1]=='/fixture/app/brain_supervisor.py'
+
+
+@pytest.mark.parametrize('change',[
+    lambda raw:raw.replace(b'"cdhash" => {\n',b'"cdhash" => {\n"deeper" => {\n'),
+    lambda raw:raw.replace(b'"vers" => 1\n',b'}\n"vers" => 1\n'),
+])
+def test_unbalanced_nested_requirement_block_still_refuses(change):
+    lwcr=b'LWCR = {\n"reqs" => {\n"cdhash" => {\n}\n}\n"vers" => 1\n}\n'
+    raw=loaded().replace(b'environment = {\nXPC_SERVICE_NAME',lwcr+b'environment = {\nXPC_SERVICE_NAME')
+    assert native.loaded_fields(raw,ADDRESS)['type']=='LaunchAgent'
+    with pytest.raises(native.RegistrationError):native.loaded_fields(change(raw),ADDRESS)
+
+
 @pytest.mark.parametrize('key',['PYTHONPATH','PYTHONHOME','DYLD_INSERT_LIBRARIES','BRAIN_PORT','BASIC_MEMORY_CONFIG_DIR','MCP_CONFIG'])
 def test_denied_environment_keys_refuse_without_reading_values(key):
     raw=loaded().replace(b'SSH_AUTH_SOCK => /not-read',(key+' => synthetic').encode())

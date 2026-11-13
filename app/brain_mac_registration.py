@@ -92,6 +92,9 @@ def loaded_fields(raw,address):
             match=re.fullmatch(r'([A-Za-z_][A-Za-z0-9_]*)\s*=>.*',line)
             if not match:raise RegistrationError('Native environment-key grammar is unknown.')
             entry_environment((match.group(1),));continue
+        # macOS 27 nests blocks that open with "=>" (the LWCR requirement); count them
+        # so their closing braces do not end the service block early.
+        if not separator and line.endswith(' => {'):depth+=1;continue
         if separator and depth==1 and key in critical:
             if key in fields:raise RegistrationError('Native loaded-service identity field is duplicated.')
             fields[key]=value

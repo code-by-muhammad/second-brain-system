@@ -50,6 +50,21 @@ def test_framework_metadata_mismatch_refuses(framework,change,tmp_path):
         processes._launchers()
 
 
+def test_prefix_bin_home_that_links_to_the_same_framework_binary_is_accepted(framework,tmp_path):
+    # Homebrew: pyvenv home is <prefix>/bin, whose python3.12 is a link into the framework.
+    prefix=tmp_path/'prefix/bin';prefix.mkdir(parents=True);(prefix/'python3.12').symlink_to(framework.stub)
+    (framework.env/'pyvenv.cfg').write_text('home = '+str(prefix)+'\n',encoding='utf-8')
+    assert processes._launchers()=={processes._path(framework.stub):processes._path(framework.stub),
+                                    processes._path(framework.image):processes._path(framework.image)}
+
+
+def test_prefix_bin_home_that_links_to_another_binary_refuses(framework,tmp_path):
+    other=tmp_path/'Python.framework/Versions/3.13/bin/python3.12';other.parent.mkdir(parents=True);other.write_bytes(b'never executed')
+    prefix=tmp_path/'prefix/bin';prefix.mkdir(parents=True);(prefix/'python3.12').symlink_to(other)
+    (framework.env/'pyvenv.cfg').write_text('home = '+str(prefix)+'\n',encoding='utf-8')
+    with pytest.raises(processes.OwnershipError,match='framework'):processes._launchers()
+
+
 def test_nonframework_interpreter_has_no_extra_image(framework,tmp_path,monkeypatch):
     executable=tmp_path/'plain/bin/python';executable.parent.mkdir(parents=True);executable.write_bytes(b'not executed')
     monkeypatch.setattr(cfg,'PYTHON',executable)
