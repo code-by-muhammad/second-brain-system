@@ -59,7 +59,17 @@ def test_measured_domain_inventory_requires_closed_block(present):
     with pytest.raises(native.RegistrationError):native.domain_contains(raw.replace(b'}\n',b''),DOMAIN,LABEL)
 
 
-@pytest.mark.parametrize('row',['- - '+LABEL,'1 0 3 '+LABEL,'1 unknown '+LABEL,'1 - '+LABEL+'\n2 - '+LABEL])
+@pytest.mark.parametrize('status',['(jt)','(pe)'])
+@pytest.mark.parametrize('present',[True,False])
+def test_measured_parenthesized_exit_status_rows_are_inventory(status,present):
+    # macOS 27.2 prints e.g. "0   (jt)   com.apple.knowledgeconstructiond" for an unrelated agent.
+    rows='0 '+status+' com.apple.knowledgeconstructiond\n'+(('123 - '+LABEL+'\n') if present else '')
+    raw=(DOMAIN+' = {\nservices = {\n'+rows+'}\n}\n').encode()
+    assert native.domain_contains(raw,DOMAIN,LABEL) is present
+
+
+@pytest.mark.parametrize('row',['- - '+LABEL,'1 0 3 '+LABEL,'1 unknown '+LABEL,'1 - '+LABEL+'\n2 - '+LABEL,
+    '1 (jt '+LABEL,'1 () '+LABEL,'1 (JT) '+LABEL,'1 (toolongstatus) '+LABEL,'1 (j t) '+LABEL])
 def test_domain_unknown_or_duplicate_rows_refuse(row):
     raw=(DOMAIN+' = {\nservices = {\n'+row+'\n}\n}\n').encode()
     with pytest.raises(native.RegistrationError):native.domain_contains(raw,DOMAIN,LABEL)

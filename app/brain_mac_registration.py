@@ -44,7 +44,8 @@ def domain_contains(raw,domain,label):
         if line=='}':closed=True;break
         fields=line.split()
         if (len(fields)!=3 or not fields[0].isdigit()
-                or not (fields[1]=='-' or re.fullmatch('-?[0-9]+',fields[1]))):
+                # macOS 27 reports some last-exit reasons as a short tag, e.g. "(jt)".
+                or not (fields[1]=='-' or re.fullmatch(r'-?[0-9]+|\([a-z]{1,8}\)',fields[1]))):
             raise RegistrationError('Native GUI services inventory grammar is unknown.')
         if fields[2]==label:found+=1
     if not closed or found>1:raise RegistrationError('Native GUI services inventory is incomplete.')

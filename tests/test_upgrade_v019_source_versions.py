@@ -42,7 +42,7 @@ def assert_new_controller(h,expected_finish):
     return events
 
 
-@pytest.mark.parametrize('previous_version,target_version',[('0.1.7','0.2.0'),('0.1.8','0.2.0'),('0.2.2','0.2.3')])
+@pytest.mark.parametrize('previous_version,target_version',[('0.1.7','0.2.0'),('0.1.8','0.2.0'),('0.2.2','0.2.3'),('0.1.7','0.2.4'),('0.2.3','0.2.4')])
 def test_current_forward_uses_new_controller_and_replaces_existing_binding(portable,monkeypatch,previous_version,target_version):
     h=prepare(portable,monkeypatch,previous_version=previous_version,target_version=target_version)
     old_binding=install_prior_binding(h)
@@ -58,7 +58,7 @@ def test_current_forward_uses_new_controller_and_replaces_existing_binding(porta
         'inspect','hold','stop','install','start','finish']
 
 
-@pytest.mark.parametrize('previous_version,target_version',[('0.1.7','0.2.0'),('0.1.8','0.2.0'),('0.2.2','0.2.3')])
+@pytest.mark.parametrize('previous_version,target_version',[('0.1.7','0.2.0'),('0.1.8','0.2.0'),('0.2.2','0.2.3'),('0.1.7','0.2.4'),('0.2.3','0.2.4')])
 def test_current_automatic_rollback_restores_prior_binding_and_exact_runtime(portable,monkeypatch,previous_version,target_version):
     h=prepare(portable,monkeypatch,previous_version=previous_version,target_version=target_version)
     old_binding=install_prior_binding(h)
@@ -76,7 +76,7 @@ def test_current_automatic_rollback_restores_prior_binding_and_exact_runtime(por
         'inspect','hold','stop','install','start','stop','install','start','finish']
 
 
-@pytest.mark.parametrize('previous_version,target_version',[('0.1.7','0.2.0'),('0.1.8','0.2.0'),('0.2.2','0.2.3')])
+@pytest.mark.parametrize('previous_version,target_version',[('0.1.7','0.2.0'),('0.1.8','0.2.0'),('0.2.2','0.2.3'),('0.1.7','0.2.4'),('0.2.3','0.2.4')])
 def test_current_explicit_uuid_recovery_uses_snapshot_controller_and_restores_sealed_binding(portable,monkeypatch,previous_version,target_version):
     h=prepare(portable,monkeypatch,previous_version=previous_version,target_version=target_version)
     old_binding=install_prior_binding(h)
