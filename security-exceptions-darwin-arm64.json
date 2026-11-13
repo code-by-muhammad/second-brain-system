@@ -171,7 +171,7 @@
     "app/brain_linux_identity.py": "9a1d506b72b18e7c6c918f799f20e758605884ff220b67280af6265b017e2437",
     "app/brain_linux_registration.py": "176ecadb4ef01081cc6354b93bf9dc7475c731394c01b5df6e73536719a2c043",
     "app/brain_mac_inventory.py": "e589dbdbbd2a168e4137643b6e2a8e9871eb6900f25909f811896369dcb353dc",
-    "app/brain_mac_registration.py": "3c89fad8fc704afec983d94abbeafe2d8c1f3f98fe42cac7b321ab942068f03d",
+    "app/brain_mac_registration.py": "763898bcc80d6ab019fff11d281fec4a9cf5238185d4ecfe6d43e853013d9ad1",
     "app/brain_maintenance.py": "07081715af1b17f9747c73148edf1833e97d63c043c4675da651310cd0b2194b",
     "app/brain_markdown.py": "3bc18c92524364acdce8bbf0abf00e69d7acf72d0d9cfbc809461424c3379892",
     "app/brain_process.py": "5e9fc0886e50303a0a6779c43c78d972239c1ddf65027ddde2abbcba07d58b49",
@@ -196,7 +196,7 @@
       "package": "fastmcp",
       "version": "4.0.0b1",
       "id": "GHSA-vqqp-x5qm-5qp4",
-      "review_by": "2026-11-12",
+      "review_by": "2026-12-12",
       "disposition": "not_reachable_in_qualified_profile",
       "basis": "Static-token owned loopback transport only; OAuth auth objects rejected; no M2M OAuth credentials/providers."
     },
@@ -204,7 +204,7 @@
       "package": "fastmcp-slim",
       "version": "4.0.0b1",
       "id": "GHSA-vqqp-x5qm-5qp4",
-      "review_by": "2026-11-12",
+      "review_by": "2026-12-12",
       "disposition": "not_reachable_in_qualified_profile",
       "basis": "Static-token owned loopback transport only; OAuth auth objects rejected; no M2M OAuth credentials/providers."
     }

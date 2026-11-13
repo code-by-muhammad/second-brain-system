@@ -20,6 +20,12 @@ The host-selected Windows `security-exceptions.json` and separate Darwin ARM64/I
 
 Basic Memory 0.24.1 was considered during this review. It changes database migrations and semantic-index code, while the current rollback preserves the existing local database. A broad dependency migration therefore needs a separately tested reversible data-migration design. Re-review this exception before any later Basic Memory change, any authentication/transport change or the deadline. No recurring task or new provider is created by this policy.
 
+### Exception re-review, 13 November 2026
+
+The exception was reviewed again after its 12 November deadline and renewed to **12 December 2026** for the same two packages at 4.0.0b1. The advisory is unchanged: it concerns the OAuth client-credentials providers `ClientCredentialsOAuthProvider` and `PrivateKeyJWTOAuthProvider`, and upstream fixed it in FastMCP 4.1.2. Those classes are present in the locked 4.0.0b1 package, but no product module, installer, updater or setup helper references them; the client still refuses any OAuth auth object before an HTTP client is created, and both product transports are built with the static local bearer only. The existing regressions for that (`test_both_product_transport_constructors_have_no_oauth_auth`, `test_oauth_auth_object_is_rejected_before_http_client_creation`, and the redirect/proxy factory test) pass on the reviewed tree. The source binding was rebound for one changed file, `app/brain_mac_registration.py`, whose change is limited to the launchd inventory status column and does not touch authentication or transport.
+
+This renewal is a short bridge, not a resolution. A patched FastMCP exists, so the next step is a separately tested move to 4.1.2 or later with its required MCP SDK, at which point the exception is removed rather than renewed again.
+
 ## Evidence and limits
 
 Package advisories are not proof of exploitation, and passing tests are not proof of absence of every defect. Keep raw audit output and private runtime diagnostics separate from shared notes. Verify the frozen release, current file/body/vector coverage, native lifecycle/upgrade/recovery, each named client and actual device/reboot receipts at their stated scopes. No candidate source declaration, model review or dependency audit establishes physical-device or reboot acceptance. All four architecture-specific native audits and the real service matrix must be retained before candidate promotion.

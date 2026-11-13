@@ -117,7 +117,7 @@ def real_report(profile_name='security-exceptions.json'):
 def test_real_policy_source_bindings_and_both_advisory_entries(system,system_name,os_name,machine,profile_name):
     report,policy=real_report(profile_name)
     assert {(item['package'],item['version'],item['id'],item['review_by']) for item in policy['exceptions']}=={
-        (name,'4.0.0b1','GHSA-vqqp-x5qm-5qp4','2026-11-12') for name in ('fastmcp','fastmcp-slim')}
+        (name,'4.0.0b1','GHSA-vqqp-x5qm-5qp4','2026-12-12') for name in ('fastmcp','fastmcp-slim')}
     # Bind all local modules, including lazy server imports and future additions.
     expected={path.relative_to(audit.ROOT).as_posix() for path in (audit.ROOT/'app').glob('*.py')}
     expected|={'install.py','update.py','setup_runtime.py','pyproject.toml','uv.lock',
@@ -125,8 +125,8 @@ def test_real_policy_source_bindings_and_both_advisory_entries(system,system_nam
     assert set(policy['source_sha256'])==expected
     result=audit.assess(report,policy,audit.ROOT,today=date(2026,10,29),expected_platform=system,expected_machine=machine)
     assert len(result['exceptions_applied'])==2 and not result['unresolved']
-    assert audit.assess(report,policy,audit.ROOT,today=date(2026,11,12),expected_platform=system,expected_machine=machine)['status']=='passed with scoped exception'
-    with pytest.raises(ValueError,match='expired'):audit.assess(report,policy,audit.ROOT,today=date(2026,11,13),expected_platform=system,expected_machine=machine)
+    assert audit.assess(report,policy,audit.ROOT,today=date(2026,12,12),expected_platform=system,expected_machine=machine)['status']=='passed with scoped exception'
+    with pytest.raises(ValueError,match='expired'):audit.assess(report,policy,audit.ROOT,today=date(2026,12,13),expected_platform=system,expected_machine=machine)
 
 
 @pytest.mark.parametrize('mode,code',[('good',0),('unresolved',1),('invalid',2)])
