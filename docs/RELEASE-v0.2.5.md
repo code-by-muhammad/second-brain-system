@@ -12,6 +12,8 @@ Security boundary of the third change: on the lsof path, listeners that belong t
 
 Evidence: grammar fixtures for each change, including malformed variants that must still refuse; and the complete `service inspect`, `service status` and `health` commands run from this source against one real macOS 27.2 arm64 runtime (v0.1.7, Homebrew Python 3.12), which now return results. The native Mac lifecycle harness has not run on macOS 27 and CI runs macOS 15, so stop, install, start, rollback and recovery on macOS 27 remain unqualified until one real update is recorded.
 
+Dependency maintenance: `dnspython` is constrained to 2.9.2 for GHSA-vvf4-9x63-8xvv (excessive memory and CPU use), published on 13 November 2026 while this candidate was in CI. No other dependency version changed.
+
 Carried forward unchanged from v0.2.4: `opentelemetry-api` constrained to 1.45.2 for GHSA-mf5v-w3w3-f6cg; the FastMCP exception for GHSA-vqqp-x5qm-5qp4 reviewed to 2026-12-12 (FastMCP 4.1.2 fixes it and must replace the pin before that date); the v0.2.3 Windows compiler correction.
 
 Known limits carried forward: the updater reports only "Verified controller refused ..." without the refusal reason; hooks, the Claude Code instruction block and the bundled skill are not installed by default; an update refreshes only client entries that already exist; a client file that is a symbolic link stops the update at preflight; there is no local-only profile.

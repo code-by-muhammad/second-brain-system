@@ -59,17 +59,17 @@
     "docs/RELEASE-v0.2.2.md": "227888524546e695b85355c9e2e73ae5dd7c64537321b1b90587a3b63cc08662",
     "docs/RELEASE-v0.2.3.md": "bd656c12c6e62e4f882d6e8dca714c111c9341d1e0839a486a3e96e6de37598d",
     "docs/RELEASE-v0.2.4.md": "b661ec0ed854e3e657c4091eb94742648a789a4bb0f7ac2bd2fc9a7975be9c5d",
-    "docs/RELEASE-v0.2.5.md": "f4dd41abe7d970ba802475f1a7df20db1b03b7d15c0a14f1ff082f3d72a1f145",
+    "docs/RELEASE-v0.2.5.md": "8cdaf59f8fc30669b015a475eaac08600c6a459dbcf7db182dee9df18c310e89",
     "docs/REMEDIATION-v0.1.6.md": "fc9b7179fa84224b733bef7b4878400d740d0315db6f701f033d24de074431a8",
     "docs/REMEDIATION-v0.1.7.md": "8798907f8205bbc27724584cfc25f940ebf75bd0e628622863670aa54c3cafdb",
     "docs/RESEARCH-AND-PLAN.md": "04f0a2ac1a18051687e65bad2f599b144e3ecfac800e4b34d9ee599b5dc7370d",
     "docs/REVIEW-FOLLOWUP-20261102.md": "1c7672c52ee08194b2bf7b04ea269d4aec9ac4fe2dd165857d2cf2a651a72f1f",
     "install.py": "85adeb6e4b07cbd87ef100df507387d2f72b84051842bdf4a4a67ca42da18783",
-    "pyproject.toml": "b406b5a3fcb1aed40a190f633431f416f002d96864a61ec660d4113e84ad1e14",
-    "security-exceptions-darwin-arm64.json": "280270ec3e4ab960f7e82ea48f5e4cafe82473922f684be02cd96facd7084e2b",
-    "security-exceptions-darwin-x86_64.json": "aed8448e813d9f1465982321bfe25897d976bdde5d243dd1367fee17cd14aa16",
-    "security-exceptions-linux-x86_64.json": "775c02d738bdac1b92b9b373a26d6e29dd54e2622f169876152cb9da820e1248",
-    "security-exceptions.json": "6070ec873f649cbfc05cbb2ded8b47163086a5f75fcb623fa853a892db20088e",
+    "pyproject.toml": "c094b4c63304bc5f9f41efae84e0f0138f574903e37b037ee1d80e76968fb95c",
+    "security-exceptions-darwin-arm64.json": "7ca46a62267edb8a94723ed290e8d520f0eb1d3a45d332f11aac2a827278fe79",
+    "security-exceptions-darwin-x86_64.json": "99f0692fb86b4da09e6a38ca72c2fe799ca2fc685c73d9bdd0b210f08025c08a",
+    "security-exceptions-linux-x86_64.json": "080a932246be70cc2f568d0191b248d693d5ea35560029a680e476593cb382bb",
+    "security-exceptions.json": "3017b9b18eba5f1546839206d2ea6572c323b5fc89a4852118439c25f1486bb0",
     "setup_runtime.py": "1048c261984199a95668ada824c9b3caadef8e2ccd4d84ffca4d379b5fd2e43a",
     "skills/second-brain/SKILL.md": "8585b0c3b6f943bfefdbba57cb6ec49d333c285a58a838ad9114c45af56e5aa2",
     "tests/conftest.py": "94c76e9c4793e4f145323fe0c21e4f24f1ac852b35a2f4f9b65415762126892e",
@@ -287,6 +287,6 @@
     "tests/test_yaml_float_constructor_containment.py": "85730d5832db0158ec8d6e76841ef34d4a2911af5407f24020ff2b9187cb96bb",
     "tests/upgrade_fixture.py": "10d0ff7610292a8a0eceef0a5c4147b253163d591fe90a261b39c57f61451d79",
     "update.py": "4b6657652632a725c5468734994d09c01b5475f4c2a100a37edce4c5e91485e8",
-    "uv.lock": "6ed0767207a00d433b0bbf98f8277a64a212918c8f15d1802ac188f7719fed1c"
+    "uv.lock": "62e172d58dd2f1ed36fd0fcef072fe383a5ea9032c71df932081f5f1561e8cbd"
   }
 }
