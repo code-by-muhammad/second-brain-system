@@ -190,6 +190,16 @@ jobs:
           sh bootstrap/setup.sh --yes --vault "$RUNNER_TEMP/second brain notes" --clients claude-code,codex $service
           # A finished device must stay finished.
           sh bootstrap/setup.sh --yes --clients claude-code,codex $service
+          # The first index of the starter notes must verify by itself.
+          if [ -z "$service" ]; then
+            for attempt in $(seq 1 30); do
+              result=$(sh bootstrap/setup.sh --check --clients claude-code,codex) || true
+              if echo "$result" | grep -q "PASS   search index: verified"; then break; fi
+              sleep 10
+            done
+            echo "$result" | grep "search index"
+            echo "$result" | grep -q "PASS   search index: verified"
+          fi
       - name: Set up a new device with one command, then run it again (Windows PowerShell 5.1)
         if: runner.os == 'Windows'
         shell: powershell
@@ -200,6 +210,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 --yes --clients 'claude-code,codex'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # The first index of the starter notes must verify by itself.
+          $verified = $false
+          foreach ($attempt in 1..30) {
+            $result = powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 --check --clients 'claude-code,codex'
+            if ($result -match 'PASS   search index: verified') { $verified = $true; break }
+            Start-Sleep -Seconds 10
+          }
+          $result | Select-String 'search index'
+          if (-not $verified) { exit 1 }
       - name: Show service logs when a step failed (synthetic device only)
         if: failure()
         shell: bash

@@ -183,7 +183,7 @@
     "app/brain_wiki.py": "99cf8fddd5ebcc384e5a8b3aee9708e6a55aeea4b88e2fc7b5194be93b6e38c3",
     "app/brain_windows_process.py": "803eb93b9a23fc941f7eed4aa5e53512b91ae38f5694d11f75cf91de30a83758",
     "check_dependency_audit.py": "413bdcdf23bcf8afcfe6d96e4ed13a7336898bf5ea2c448fc2ea08d0332dfd62",
-    "install.py": "daa87cfeb593925d2bc2eaeb5fc2bbce386f252fe3daae14814cf00dea173030",
+    "install.py": "c4d416e1a9d9968be55aa8a5848f085eea053c1fa3f2b75cb770b9585e092b84",
     "pyproject.toml": "3aa7ccfc1eb586f34175231b53ea09c77472517f484f81cd20de1464961cf72e",
     "setup_runtime.py": "b64ba7f189680b857f6512979c2ddc433a2d044f72350e7560996626dd88cdf5",
     "tests/test_security_profile.py": "f12a8faa872e75bc3522e2efd37db32102f5d91a355076718ef129a574a3c988",

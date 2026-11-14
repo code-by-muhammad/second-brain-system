@@ -160,7 +160,9 @@ def test_new_device_uses_the_system_timezone_and_never_a_silent_default(monkeypa
     import types
     assert installer.local_timezone('Europe/Berlin')=='Europe/Berlin'
     with pytest.raises(ValueError,match='--timezone'):installer.local_timezone('Mars/Olympus')
-    assert installer.device_settings({'timezone':'Asia/Karachi'},Path('v'),Path('p'))['timezone']=='Asia/Karachi'
+    assert installer.device_settings({'timezone':'Europe/Paris'},Path('v'),Path('p'))['timezone']=='Europe/Paris'
+    # A device installed before the key existed has been running on the old built-in zone; an update keeps that.
+    assert installer.device_settings({'device_id':'old'},Path('v'),Path('p'))['timezone']=='Asia/Karachi'
     monkeypatch.setitem(sys.modules,'tzlocal',types.SimpleNamespace(get_localzone_name=lambda:'Pacific/Auckland'))
     assert installer.device_settings({},Path('v'),Path('p'))['timezone']=='Pacific/Auckland'
     assert installer.device_settings({},Path('v'),Path('p'),timezone='Europe/Berlin')['timezone']=='Europe/Berlin'

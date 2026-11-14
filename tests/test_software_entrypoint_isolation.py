@@ -24,6 +24,7 @@ product=namespace['main'].__globals__
 support=product['setup_helpers']()
 support.host_context=lambda:None
 product['setup_helpers']=lambda:support
+product['local_timezone']=lambda explicit=None:'UTC'  # This bare environment has no timezone packages; the lane is about imports.
 selected = release / ('.venv/Scripts/python.exe' if os.name == 'nt' else '.venv/bin/python')
 real_run = subprocess.run
 def record(value):
@@ -54,8 +55,7 @@ support.run = run
 # This lane isolates process/import provenance. The real public journal,
 # interruption, identity and resume contracts have their own test module.
 def fresh(root,python,vault,args,value,finish):
-    result=product['deploy'](root,python,vault,args.role,False,client_value=value,
-                             device_value=product['device_settings']({},vault,python,args.role,args.timezone))
+    result=product['deploy'](root,python,vault,args.role,False,client_value=value)
     finish(result,lambda stage:None,'deployed')
     return result
 product['_run_fresh']=fresh
@@ -64,7 +64,7 @@ def provision(*arguments):
     record({'kind':'provision-intercepted','argv':[str(value) for value in arguments]})
     return selected
 support.provision=provision
-sys.argv = [str(release / 'install.py'), '--root', str(root), '--vault', str(vault), '--role', 'capture', '--timezone', 'UTC']
+sys.argv = [str(release / 'install.py'), '--root', str(root), '--vault', str(vault), '--role', 'capture']
 if route == 'model-child':
     selected = release / ('.venv/Scripts/python.exe' if os.name == 'nt' else '.venv/bin/python')
     sys.argv.extend(['--reuse-python', str(selected), '--download-model'])

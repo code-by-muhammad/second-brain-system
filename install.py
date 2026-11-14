@@ -288,9 +288,11 @@ def local_timezone(explicit=None):
 
 
 def device_settings(old,vault,python,role='capture',timezone=None):
+    # An installed device keeps its zone; one from before the key existed keeps the zone it has been running with.
+    zone=old.get('timezone') or ('Asia/Karachi' if old else local_timezone(timezone))
     return {**old,'vault':str(vault),'python':str(python),'release_root':str(REPO),
               'role':old.get('role',role),'device_id':old.get('device_id',secrets.token_hex(8)),
-              'port':old.get('port',8765),'timezone':old.get('timezone') or local_timezone(timezone),'version':VERSION}
+              'port':old.get('port',8765),'timezone':zone,'version':VERSION}
 
 
 def retrieval_settings(root,vault):
