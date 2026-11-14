@@ -113,7 +113,7 @@ def _moving_runner(seen,monkeypatch,embedding=True,observed=True):
     monkeypatch.setattr(bootstrap,'_counts',rows)
     def run(command,log,overall,tick,cleanup):
         seen.append(command[4:])
-        if observed:tick();tick()
+        if observed is True or (observed=='first' and len(seen)==1):tick();tick()
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(bootstrap,'_run_reindex',run)
 
@@ -131,8 +131,8 @@ def test_one_large_note_stays_one_defect_while_its_chunks_grow(brain,monkeypatch
     """256 chunks per run: the defect count does not move, the chunk count does."""
     ready()
     seen=[];reports=iter([_coverage('needs review',invalid=1) for number in range(6)]+[_coverage('verified')])
-    # The child may finish between two samples: progress is measured, not only observed.
-    _moving_runner(seen,monkeypatch,observed=False)
+    # After the first pass a child may finish between two samples: progress is measured, not only observed.
+    _moving_runner(seen,monkeypatch,observed='first')
     monkeypatch.setattr(bootstrap.index,'status',lambda deadline=None:next(reports))
     result=bootstrap.main(overall_seconds=20,stall_seconds=5)
     assert len(seen)==7 and result['status']=='verified'
