@@ -1,7 +1,7 @@
 """Claude Code hooks. Inject policy and request one end-of-work capture without looping."""
 import sys,json
 from pathlib import Path
-POLICY='Second brain is configured as MCP server second-brain. Call brain_context at session start; search then open source notes before recalling prior work. For Roman Urdu include an English search paraphrase. Save meaningful outcomes and decisions through brain_capture with stable event_id, accurate source_reference and evidence_paths. Never capture credentials or assume profile facts. Update only derived memory pages with sources and current SHA256. The local service links captures to daily notes and syncs Git; do not duplicate this log or run a competing sync.'
+POLICY='Second brain is configured as MCP server second-brain. Call brain_context at session start; search then open source notes before recalling prior work. For a query in another language or script include an English search paraphrase. Save meaningful outcomes and decisions through brain_capture with stable event_id, accurate source_reference and evidence_paths. Never capture credentials or assume profile facts. Update only derived memory pages with sources and current SHA256. The local service links captures to daily notes and syncs Git; do not duplicate this log or run a competing sync.'
 def respond(data):
     event=data.get('hook_event_name')
     if event=='SessionStart':
