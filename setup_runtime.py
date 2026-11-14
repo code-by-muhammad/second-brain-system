@@ -200,11 +200,22 @@ def provision(repo,root,uv=None):
     if result.returncode:
         run([str(tool),'python','install','3.12'],source_app=source_app,env=environment,capture_output=True,text=True,encoding='utf-8',check=True,timeout=600)
         result=run(find,source_app=source_app,env=environment,capture_output=True,text=True,encoding='utf-8',check=True,timeout=60)
-    base=Path(result.stdout.strip())
-    if not base.is_absolute() or not base.is_file():raise ValueError('uv did not return an existing absolute Python path.')
-    if any(base.resolve().is_relative_to(Path(folder).resolve()) for folder in (root,repo)):
-        raise ValueError('Refusing a Python base inside the runtime or checkout; select a system/uv-managed Python.')
-    if os.name=='nt' and 'windowsapps' in {part.lower() for part in base.parts}:raise ValueError('Store Python is not qualified; install uv-managed Python 3.12 in the host shell.')
+    def checked(output):
+        base=Path(output.strip())
+        if not base.is_absolute() or not base.is_file():raise ValueError('uv did not return an existing absolute Python path.')
+        if any(base.resolve().is_relative_to(Path(folder).resolve()) for folder in (root,repo)):
+            raise ValueError('Refusing a Python base inside the runtime or checkout; select a system/uv-managed Python.')
+        if os.name=='nt' and 'windowsapps' in {part.lower() for part in base.parts}:raise ValueError('Store Python is not qualified; install uv-managed Python 3.12 in the host shell.')
+        return base
+    base=checked(result.stdout)
+    # The search index loads the sqlite-vec extension. Some system Pythons (python.org and Xcode builds on
+    # macOS) are built without SQLite extension loading; uv's own build is used instead of such a base.
+    probe=run([str(base),'-I','-c','import sqlite3;sqlite3.connect(":memory:").enable_load_extension(True)'],
+              source_app=source_app,env=environment,capture_output=True,text=True,encoding='utf-8',timeout=60)
+    if probe.returncode:
+        run([str(tool),'python','install','3.12'],source_app=source_app,env=environment,capture_output=True,text=True,encoding='utf-8',check=True,timeout=600)
+        base=checked(run([str(tool),'python','find','--managed-python','--no-project','--no-python-downloads','3.12'],
+                         source_app=source_app,env=environment,capture_output=True,text=True,encoding='utf-8',check=True,timeout=60).stdout)
     environment_path=Path(repo)/'.venv'
     if environment_path.exists():
         if environment_path.is_symlink() or environment_path.is_junction() or environment_path.resolve().parent!=Path(repo).resolve():raise ValueError('Linked environment cannot be reprovisioned.')

@@ -70,7 +70,7 @@ What it asks on a new device:
 
 What it does without asking:
 
-- [ ] Builds its own Python environment. Nothing is installed into your system Python.
+- [ ] Builds its own Python environment, on a Python that can run the search index. Nothing is installed into your system Python.
 - [ ] Reads the system timezone.
 - [ ] Downloads the local search model (about 130 MB). Search runs on your computer.
 - [ ] Registers a background service that starts at login.

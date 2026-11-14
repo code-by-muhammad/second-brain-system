@@ -181,7 +181,7 @@
     "check_dependency_audit.py": "413bdcdf23bcf8afcfe6d96e4ed13a7336898bf5ea2c448fc2ea08d0332dfd62",
     "install.py": "c4d416e1a9d9968be55aa8a5848f085eea053c1fa3f2b75cb770b9585e092b84",
     "pyproject.toml": "3aa7ccfc1eb586f34175231b53ea09c77472517f484f81cd20de1464961cf72e",
-    "setup_runtime.py": "b64ba7f189680b857f6512979c2ddc433a2d044f72350e7560996626dd88cdf5",
+    "setup_runtime.py": "94190678c024938d00caf36c592e2b7d5e3a27ea6ac5cbcb6b12f5a57125566b",
     "tests/test_security_profile.py": "f12a8faa872e75bc3522e2efd37db32102f5d91a355076718ef129a574a3c988",
     "update.py": "b193e3b5a29adbf6e00462c5ff8f8c4c6f81c5a73a11dd0119bb4e73e5936fc9",
     "uv.lock": "debf2f07cf11708889f22fa83215177b18238d1667899f47f374a0119626a2e3"
