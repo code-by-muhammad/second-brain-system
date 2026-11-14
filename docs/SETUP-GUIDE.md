@@ -179,8 +179,9 @@ Rules:
 | "Missing: git" or "Missing: uv" | Install it (section 2), open a new terminal, run the command again. |
 | "Release check failed" | Stop. The download is not the reviewed release. Keep the folder and tell the maintainer of this software. |
 | "The installer stopped: ..." | The text after the colon is the reason. Keep everything as it is. Do not run the installer a second time over a half-finished install without reading the reason. |
-| "Client file is linked" or "leaves the home folder" | An assistant settings file is a link that points outside your home folder. Replace it with a regular file. |
-| "loaded from more than one file" | The instruction block exists twice. Remove one copy so exactly one BEGIN and one END marker remain, then run the command again. |
+| "Client file is linked" | An assistant settings file (connection or hooks) is a link. Replace it with a regular file. |
+| "Left alone: ... leaves the home folder" | An instruction or skill file is a link that points outside your home folder. Setup never writes there. Put the shared copy inside your home folder, or make the file a regular one, and run the command again. |
+| "Left alone: ... loaded from more than one file" | The instruction block exists twice. Remove one copy so exactly one BEGIN and one END marker remain, then run the command again. |
 | "Existing second-brain entry belongs to another or unknown runtime" | An older Second Brain connection points somewhere else. Remove that one entry from the assistant's settings, then run the command again. |
 | "Claude Desktop is open" | Close it, or leave `claude-desktop` out of `--clients`. |
 | FAIL on a connection, hooks, instructions or skill line | Close that assistant, run the command again, then open a new chat. |

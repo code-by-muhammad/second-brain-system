@@ -368,20 +368,27 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
     selected=set(CLIENTS if selected is None else selected)
     if not selected<=set(CLIENTS):raise ValueError('Unrecognized client selection.')
     specs={'command':str(python),'args':[str(root/'app/brain_client.py')]}
-    targets=[]
-    codex_block=block_file(home/'.codex/AGENTS.md',home) if 'codex' in selected else None
+    targets=[];records=[];skipped=[];claimed=set()
+    def shared(client,path,kind,locate):
+        # An instruction or skill file that cannot be managed safely (it leaves the home folder, or
+        # the block is loaded twice) is left alone and reported. It never stops the rest of the
+        # plan or an update; check_setup.py then shows what that assistant still lacks.
+        try:located=locate()
+        except ValueError as error:skipped.append({'client':client,'path':str(path),'reason':str(error)});return None
+        targets.append((client,located,kind));return located
+    codex_block=shared('codex',home/'.codex/AGENTS.md','protocol',lambda:block_file(home/'.codex/AGENTS.md',home)) if 'codex' in selected else None
+    codex_rows=targets[:];targets.clear()  # Claude Code is planned first; a file both share is then written once.
     if 'claude-code' in selected:
-        targets.extend([('claude-code',home/'.claude.json','json'),
-                        ('claude-code',block_file(home/'.claude/CLAUDE.md',home,True,[codex_block] if codex_block else ()),'protocol')])
-        if skill is not None:targets.append(('claude-code',_real(home/'.claude/skills/second-brain/SKILL.md',home),'skill'))
+        targets.append(('claude-code',home/'.claude.json','json'))
+        shared('claude-code',home/'.claude/CLAUDE.md','protocol',lambda:block_file(home/'.claude/CLAUDE.md',home,True,[codex_block] if codex_block else ()))
+        if skill is not None:shared('claude-code',home/'.claude/skills/second-brain/SKILL.md','skill',lambda:_real(home/'.claude/skills/second-brain/SKILL.md',home))
     if 'claude-desktop' in selected:
         path=desktop_path(home,desktop,skip_desktop)
         if path is not None:targets.append(('claude-desktop',path,'json'))
     if 'codex' in selected:
-        targets.extend([('codex',home/'.codex/config.toml','toml'),('codex',codex_block,'protocol')])
-        if skill is not None:targets.append(('codex',_real(home/'.codex/skills/second-brain/SKILL.md',home),'skill'))
+        targets.extend([('codex',home/'.codex/config.toml','toml'),*codex_rows])
+        if skill is not None:shared('codex',home/'.codex/skills/second-brain/SKILL.md','skill',lambda:_real(home/'.codex/skills/second-brain/SKILL.md',home))
     if 'hooks' in selected:targets.append(('hooks',home/'.claude/settings.json','hooks'))
-    records=[];skipped=[];claimed=set()
     for client,path,kind in targets:
         # One shared rules or skill file can serve several assistants; write it once.
         if _path(path) in claimed:skipped.append({'client':client,'path':str(path),'reason':'shared file already planned'});continue
@@ -481,10 +488,14 @@ def authorize_plan(value,*,selected=None,desktop=None,skip_desktop=False):
     home=Path.home();selected=set(CLIENTS if selected is None else selected)
     allowed={}
     if not selected<=set(CLIENTS):raise ValueError('Unrecognized client selection.')
+    def inside(locate):
+        try:return {_path(locate())}
+        except ValueError:return set()  # Not manageable, so never an authorized write target.
+    codex_block=inside(lambda:block_file(home/'.codex/AGENTS.md',home)) if 'codex' in selected else set()
     if 'claude-code' in selected:
-        shared=[block_file(home/'.codex/AGENTS.md',home)] if 'codex' in selected else ()
-        allowed['claude-code']={_path(home/'.claude.json'),_path(block_file(home/'.claude/CLAUDE.md',home,True,shared)),_path(_real(home/'.claude/skills/second-brain/SKILL.md',home))}
-    if 'codex' in selected:allowed['codex']={_path(home/'.codex/config.toml'),_path(block_file(home/'.codex/AGENTS.md',home)),_path(_real(home/'.codex/skills/second-brain/SKILL.md',home))}
+        allowed['claude-code']=({_path(home/'.claude.json')}|inside(lambda:block_file(home/'.claude/CLAUDE.md',home,True,codex_block))
+                                |inside(lambda:_real(home/'.claude/skills/second-brain/SKILL.md',home)))
+    if 'codex' in selected:allowed['codex']={_path(home/'.codex/config.toml')}|codex_block|inside(lambda:_real(home/'.codex/skills/second-brain/SKILL.md',home))
     if 'hooks' in selected:allowed['hooks']={_path(home/'.claude/settings.json')}
     if 'claude-desktop' in selected:
         target=desktop_path(home,desktop,skip_desktop)

@@ -184,6 +184,13 @@ jobs:
         shell: bash
         run: |
           export SECOND_BRAIN_ROOT="$RUNNER_TEMP/second-brain-runtime"
+          if [ "$RUNNER_OS" = Linux ]; then
+            # A desktop login has a user service manager; this runner needs it started.
+            sudo loginctl enable-linger "$USER"
+            export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+            export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+            for attempt in $(seq 1 30); do systemctl --user show-environment >/dev/null 2>&1 && break; sleep 1; done
+          fi
           sh bootstrap/setup.sh --yes --vault "$RUNNER_TEMP/second brain notes" --clients claude-code,codex
           # A finished device must stay finished.
           sh bootstrap/setup.sh --yes --clients claude-code,codex

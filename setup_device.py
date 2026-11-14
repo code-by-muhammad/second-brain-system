@@ -94,10 +94,13 @@ def wait_running(device,version,seconds=240):
 
 def start_service(device,version,root):
     """Register and start the background service, then wait until it answers on this version."""
-    cli='"'+device['python']+'" "'+str(root/'app/brain_cli.py')+'"'
     for action in ('install','start'):
-        if brain(device,'service',action,capture=True).returncode:raise SystemExit('The background service could not '+action+'. Run this for the reason: '+cli+' service '+action)
-    if not wait_running(device,version):raise SystemExit('The service did not report running within four minutes. Check with: '+cli+' health')
+        result=brain(device,'service',action,capture=True)
+        if result.returncode:
+            reason=((result.stderr or '').strip().splitlines() or [''])[-1][:400]
+            raise SystemExit('The background service could not '+action+(': '+reason if reason else '.')+'\nThe device is installed but not running. Fix that cause and run this command again.')
+    if not wait_running(device,version):
+        raise SystemExit('The service did not report running within four minutes. Check with: "'+device['python']+'" "'+str(root/'app/brain_cli.py')+'" health')
 
 
 def main():
@@ -176,6 +179,10 @@ def main():
             if result.returncode or '"deferred": []' not in result.stdout:
                 reason=((result.stderr or '').strip().splitlines() or ['a settings file changed while it was being written'])[-1]
                 say('An assistant could not be completed: '+reason[:300]+'\nThe check below shows what is missing. Close that assistant and run this command again.')
+            else:
+                # A shared file that was left alone on purpose is named, so the check result below makes sense.
+                for row in json.loads(result.stdout).get('client_result',{}).get('skipped',[]):
+                    if row.get('reason')!='shared file already planned':say('Left alone: '+str(row.get('path'))+': '+str(row.get('reason'))[:300])
         device['root']=str(root)
         # A first run that stopped before the service was up is finished here.
         if not args.no_service and not wait_running(device,version,seconds=15):start_service(device,version,root)

@@ -100,20 +100,23 @@ def test_first_block_goes_once_into_the_file_both_assistants_share(owner):
     assert (home/'.codex/AGENTS.md').is_symlink()
 
 
-def test_two_loaded_blocks_are_refused(owner):
+def test_two_loaded_blocks_are_reported_and_left_alone_without_stopping_the_rest(owner):
     home,_,_=owner
     for folder in ('.agents','.claude'):(home/folder).mkdir()
     (home/'.agents/RULES.md').write_text(BLOCK)
     (home/'.claude/CLAUDE.md').write_text('@~/.agents/RULES.md\n'+BLOCK)
-    with pytest.raises(ValueError,match='more than one file'):plan(owner,selected=['claude-code'])
+    result=plan(owner,selected=['claude-code'])
+    assert any('more than one file' in row['reason'] for row in result['skipped'])
+    assert str(home/'.claude.json') in by_path(result) and not any(row['path'].endswith(('CLAUDE.md','RULES.md')) for row in result['files'])
 
 
-def test_link_that_leaves_the_home_folder_is_refused(owner,tmp_path):
+def test_link_that_leaves_the_home_folder_is_never_written_and_does_not_stop_the_rest(owner,tmp_path):
     home,_,_=owner
     (home/'.codex').mkdir();outside=tmp_path/'outside.md';outside.write_text('# Elsewhere\n')
     os.symlink(outside,home/'.codex/AGENTS.md')
-    with pytest.raises(ValueError,match='leaves the home folder'):plan(owner,selected=['codex'])
-    assert outside.read_text()=='# Elsewhere\n'
+    result=plan(owner,selected=['codex'])
+    assert any('leaves the home folder' in row['reason'] for row in result['skipped'])
+    assert [Path(row['path']).name for row in result['files']]==['config.toml','SKILL.md'] and outside.read_text()=='# Elsewhere\n'
 
 
 def test_one_shared_skill_copy_is_written_once(owner):
