@@ -20,27 +20,26 @@ esac
 need git "Mac: run 'xcode-select --install'. Linux: install git with your package manager."
 need uv "Install it from https://docs.astral.sh/uv/getting-started/installation/ and open a new terminal."
 
+# Always download fresh, and trust only that download.
 DEST="$ROOT/releases/$TAG"
-if [ ! -d "$DEST/.git" ]; then
-  mkdir -p "$ROOT/releases"
-  git clone -q -c core.autocrlf=false --branch "$TAG" --single-branch "$SOURCE" "$DEST"
-fi
-HEAD=$(git -C "$DEST" rev-parse HEAD)
+mkdir -p "$(dirname "$DEST")"
+FRESH=$(mktemp -d "$(dirname "$DEST")/.download-XXXXXX")
+trap 'rm -rf "$FRESH"' EXIT
+git clone -q -c core.autocrlf=false --branch "$TAG" --single-branch "$SOURCE" "$FRESH/release"
+HEAD=$(git -C "$FRESH/release" rev-parse HEAD)
 if [ "$HEAD" != "$COMMIT" ]; then
-  echo "Release check failed: expected commit $COMMIT, found $HEAD in $DEST." >&2
-  echo "Nothing was installed. Keep that folder for review." >&2
+  echo "Release check failed: expected commit $COMMIT, the download is $HEAD. Nothing was installed." >&2
   exit 1
 fi
-# A release folder kept from an earlier run must still be exactly that commit before any of it runs:
-# no extra or changed file by Git's own view, and every tracked file's bytes equal to its committed blob
-# (hashed here, so a flag in the folder's index cannot hide a change). A failing Git command stops here.
-EXTRA=$(git -C "$DEST" -c core.fsmonitor=false status --porcelain)
-WANT=$(git -C "$DEST" ls-tree -r HEAD | awk '{print $3}')
-HAVE=$(git -C "$DEST" ls-tree -r --name-only HEAD | git -C "$DEST" hash-object --no-filters --stdin-paths)
-if [ -n "$EXTRA" ] || [ -z "$WANT" ] || [ "$WANT" != "$HAVE" ]; then
-  echo "Release check failed: files in $DEST differ from commit $COMMIT." >&2
+if [ ! -e "$DEST" ]; then
+  mv "$FRESH/release" "$DEST"
+# A release folder kept from an earlier run must equal the fresh download, file for file, before any
+# of it runs. Only its own Python environments and Git folder are left out of the comparison.
+elif ! diff -rq -x .git -x '.venv*' "$FRESH/release" "$DEST" >/dev/null; then
+  echo "Release check failed: $DEST differs from a fresh download of commit $COMMIT." >&2
   echo "Nothing was run. Keep that folder for review, or move it away and run this again." >&2
   exit 1
 fi
+rm -rf "$FRESH"; trap - EXIT
 cd "$DEST"
 exec uv run --no-project --python 3.12 python -I -B setup_device.py --root "$ROOT" "$@"

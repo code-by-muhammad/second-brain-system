@@ -212,12 +212,16 @@ def main():
             add('FAIL', 'Claude Desktop connection', 'claude_desktop_config.json unreadable')
 
     if device and vault.is_dir():
-        try:
-            remotes = subprocess.run(['git', '-C', str(vault), 'remote'], capture_output=True, text=True, timeout=30, check=False)
-            names = remotes.stdout.split() if remotes.returncode == 0 else None
-        except (OSError, subprocess.TimeoutExpired):
-            names = None
-        if names:
+        names = []  # A folder that is not a repository of its own has no remote.
+        if (vault / '.git').exists():
+            try:
+                remotes = subprocess.run(['git', '-C', str(vault), 'remote'], capture_output=True, text=True, timeout=30, check=False)
+                names = remotes.stdout.split() if remotes.returncode == 0 else None
+            except (OSError, subprocess.TimeoutExpired):
+                names = None
+        if names is None:
+            add('FAIL' if args.local_only else 'WARN', 'notes repository', 'Git could not say whether the notes have a remote')
+        elif names:
             add('FAIL' if args.local_only else 'PASS', 'notes repository',
                 ('the owner wants no Git remote, but one is configured: ' if args.local_only else 'remote: ') + ', '.join(names))
         else:

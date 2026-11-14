@@ -18,27 +18,38 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
   throw "Missing: uv. Run 'winget install --id astral-sh.uv -e' and open a new PowerShell window."
 }
 
+# Every file below a folder with its SHA256, without the folder's own Python environments and Git folder.
+function Get-Listing([string]$Folder) {
+  $Base = (Resolve-Path -LiteralPath $Folder).Path.TrimEnd('\')
+  Get-ChildItem -LiteralPath $Base -Recurse -File -Force |
+    ForEach-Object { $_.FullName.Substring($Base.Length) } |
+    Where-Object { $_ -notmatch '\\(\.git|\.venv[^\\]*)\\' } |
+    Sort-Object |
+    ForEach-Object { $_ + ' ' + (Get-FileHash -LiteralPath ($Base + $_) -Algorithm SHA256).Hash }
+}
+
+# Always download fresh, and trust only that download.
 $Dest = Join-Path (Join-Path $Root 'releases') $Tag
-if (-not (Test-Path -LiteralPath (Join-Path $Dest '.git'))) {
-  New-Item -ItemType Directory -Force -Path (Join-Path $Root 'releases') | Out-Null
-  git clone -q -c core.autocrlf=false --branch $Tag --single-branch $Source $Dest
+$Parent = Split-Path -Parent $Dest
+New-Item -ItemType Directory -Force -Path $Parent | Out-Null
+$Fresh = Join-Path $Parent ('.download-' + [guid]::NewGuid().ToString('N'))
+try {
+  git clone -q -c core.autocrlf=false --branch $Tag --single-branch $Source $Fresh
   if ($LASTEXITCODE -ne 0) { throw 'The release could not be downloaded.' }
+  $Head = (git -C $Fresh rev-parse HEAD).Trim()
+  if ($Head -ne $Commit) {
+    throw "Release check failed: expected commit $Commit, the download is $Head. Nothing was installed."
+  }
+  if (-not (Test-Path -LiteralPath $Dest)) {
+    Move-Item -LiteralPath $Fresh -Destination $Dest
+  }
+  # A release folder kept from an earlier run must equal the fresh download, file for file, before any of it runs.
+  elseif (Compare-Object @(Get-Listing $Fresh) @(Get-Listing $Dest)) {
+    throw "Release check failed: $Dest differs from a fresh download of commit $Commit. Nothing was run. Keep that folder for review, or move it away and run this again."
+  }
 }
-$Head = (git -C $Dest rev-parse HEAD).Trim()
-if ($Head -ne $Commit) {
-  throw "Release check failed: expected commit $Commit, found $Head in $Dest. Nothing was installed. Keep that folder for review."
-}
-# A release folder kept from an earlier run must still be exactly that commit before any of it runs:
-# no extra or changed file by Git's own view, and every tracked file's bytes equal to its committed blob
-# (hashed here, so a flag in the folder's index cannot hide a change).
-$Extra = git -C $Dest -c core.fsmonitor=false status --porcelain
-$Failed = $LASTEXITCODE -ne 0
-$Want = @(git -C $Dest ls-tree -r HEAD | ForEach-Object { ($_ -split '\s+')[2] })
-$Failed = $Failed -or $LASTEXITCODE -ne 0
-$Have = @(git -C $Dest ls-tree -r --name-only HEAD | git -C $Dest hash-object --no-filters --stdin-paths)
-$Failed = $Failed -or $LASTEXITCODE -ne 0
-if ($Failed -or $Extra -or $Want.Count -eq 0 -or (($Want -join ' ') -ne ($Have -join ' '))) {
-  throw "Release check failed: files in $Dest differ from commit $Commit. Nothing was run. Keep that folder for review, or move it away and run this again."
+finally {
+  if (Test-Path -LiteralPath $Fresh) { Remove-Item -LiteralPath $Fresh -Recurse -Force }
 }
 Set-Location -LiteralPath $Dest
 uv run --no-project --python 3.12 python -I -B setup_device.py --root $Root @args
