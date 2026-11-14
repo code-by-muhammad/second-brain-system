@@ -38,6 +38,7 @@ If this copy still shows `{{...}}` placeholders, it is the source file. Use the 
 ## 2. Before you start
 
 - [ ] Git is installed. Mac: `xcode-select --install`. Windows: `winget install --id Git.Git -e`.
+- [ ] Mac only: Homebrew Python 3.12 is installed: `brew install python@3.12`. Other Python builds on a Mac cannot run both the service and the search index, and setup refuses them.
 - [ ] uv 0.9.16 or newer is installed. Mac and Linux: see https://docs.astral.sh/uv/getting-started/installation/. Windows: `winget install --id astral-sh.uv -e`.
 - [ ] Open a new terminal after installing either tool. Windows: ordinary PowerShell, not Git Bash.
 - [ ] Decide where the notes live. It must be a plain local folder, not inside OneDrive, iCloud or Dropbox. A folder that does not exist yet is created for you with a blank starter layout.
@@ -70,7 +71,7 @@ What it asks on a new device:
 
 What it does without asking:
 
-- [ ] Builds its own Python environment, on a Python that can run the search index. Nothing is installed into your system Python.
+- [ ] Builds its own Python environment. Nothing is installed into your system Python.
 - [ ] Reads the system timezone.
 - [ ] Downloads the local search model (about 130 MB). Search runs on your computer.
 - [ ] Registers a background service that starts at login.
@@ -177,6 +178,7 @@ Rules:
 | What you see | What to do |
 |---|---|
 | "Missing: git" or "Missing: uv" | Install it (section 2), open a new terminal, run the command again. |
+| "This Mac has no Python 3.12 that can run both the service and the search index" | Run `brew install python@3.12`, then the command again. |
 | "Release check failed" | Stop. The download is not the reviewed release. Keep the folder and tell the maintainer of this software. |
 | "The installer stopped: ..." | The text after the colon is the reason. Keep everything as it is. Do not run the installer a second time over a half-finished install without reading the reason. |
 | "Client file is linked" | An assistant settings file (connection or hooks) is a link. Replace it with a regular file. |

@@ -230,19 +230,26 @@ def test_uv_failure_installs_then_finds_before_sync(tmp_path,monkeypatch):
     assert [command[1:3] for command in calls]==[['python','find'],['python','install'],['python','find'],['-I','-c'],['sync','--locked']]
 
 
-def test_base_without_sqlite_extension_loading_is_replaced_by_the_managed_python(tmp_path,monkeypatch):
-    """The search index cannot load sqlite-vec on such a base; the service would run with a dead index."""
+@pytest.mark.parametrize('platform',['linux','darwin','darwin-none'])
+def test_base_that_cannot_run_the_index_is_replaced(tmp_path,monkeypatch,platform):
+    """Such a base runs the service with a dead index. Elsewhere uv's build replaces it; a Mac needs a framework build."""
     repo=tmp_path/'checkout';repo.mkdir();root=tmp_path/'runtime';tools=tmp_path/'tools';tools.mkdir()
-    uv=tools/'uv.exe';uv.touch();system=tools/'system-python.exe';system.touch();managed=tools/'managed-python.exe';managed.touch();calls=[]
+    uv=tools/'uv.exe';uv.touch();system=tools/'system-python.exe';system.touch();better=tools/'better-python.exe';better.touch();calls=[]
     monkeypatch.setattr(helpers,'host_context',lambda:None);monkeypatch.setattr(helpers,'service_python',lambda value:None)
+    monkeypatch.setattr(helpers.sys,'platform',platform.split('-')[0])
+    monkeypatch.setattr(helpers,'MAC_FRAMEWORK_PYTHONS',(str(tools/'absent'),) if platform=='darwin-none' else (str(tools/'absent'),str(better)))
     def run(command,**kwargs):
         calls.append(command)
         if command[0]==str(system):return subprocess.CompletedProcess(command,1,'','AttributeError')
-        return subprocess.CompletedProcess(command,0,str(managed if '--managed-python' in command else system)+'\n')
+        return subprocess.CompletedProcess(command,0,str(better if '--managed-python' in command else system)+'\n')
     monkeypatch.setattr(helpers,'run',run)
+    if platform=='darwin-none':
+        with pytest.raises(ValueError,match='brew install python@3.12'):helpers.provision(repo,root,str(uv))
+        assert not any('sync' in command for command in calls)
+        return
     helpers.provision(repo,root,str(uv))
-    assert [command[1:3] for command in calls]==[['python','find'],['-I','-c'],['python','install'],['python','find'],['sync','--locked']]
-    assert calls[-1][-2:]==['--python',str(managed)]
+    expected=[['python','find'],['-I','-c'],['python','install'],['python','find'],['sync','--locked']] if platform=='linux' else [['python','find'],['-I','-c'],['-I','-c'],['sync','--locked']]
+    assert [command[1:3] for command in calls]==expected and calls[-1][-2:]==['--python',str(better)]
 
 
 def test_planted_uv_refused(tmp_path):

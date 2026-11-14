@@ -147,6 +147,9 @@ MAX_CONFIG=64*1024*1024
 BEGIN='<!-- BEGIN SECOND-BRAIN -->'
 END='<!-- END SECOND-BRAIN -->'
 CLIENTS=('claude-code','claude-desktop','codex','hooks')
+BASE_PROBE=('import sqlite3,sys,sysconfig;sqlite3.connect(":memory:").enable_load_extension(True);'
+            'sys.exit(0 if sys.platform!="darwin" or sysconfig.get_config_var("PYTHONFRAMEWORK") else 1)')
+MAC_FRAMEWORK_PYTHONS=('/opt/homebrew/bin/python3.12','/usr/local/bin/python3.12')
 
 class ConcurrentWriteError(ValueError):
     """Destination changed while a private replacement was being prepared."""
@@ -208,14 +211,20 @@ def provision(repo,root,uv=None):
         if os.name=='nt' and 'windowsapps' in {part.lower() for part in base.parts}:raise ValueError('Store Python is not qualified; install uv-managed Python 3.12 in the host shell.')
         return base
     base=checked(result.stdout)
-    # The search index loads the sqlite-vec extension. Some system Pythons (python.org and Xcode builds on
-    # macOS) are built without SQLite extension loading; uv's own build is used instead of such a base.
-    probe=run([str(base),'-I','-c','import sqlite3;sqlite3.connect(":memory:").enable_load_extension(True)'],
-              source_app=source_app,env=environment,capture_output=True,text=True,encoding='utf-8',timeout=60)
-    if probe.returncode:
-        run([str(tool),'python','install','3.12'],source_app=source_app,env=environment,capture_output=True,text=True,encoding='utf-8',check=True,timeout=600)
-        base=checked(run([str(tool),'python','find','--managed-python','--no-project','--no-python-downloads','3.12'],
-                         source_app=source_app,env=environment,capture_output=True,text=True,encoding='utf-8',check=True,timeout=60).stdout)
+    # The search index loads the sqlite-vec extension, and the Mac service is qualified on framework builds
+    # only. python.org and Xcode Pythons on macOS cannot load SQLite extensions and uv's own build is not a
+    # framework: on a Mac, Homebrew's Python is the one that is both. Elsewhere uv's build replaces a base
+    # that cannot load extensions.
+    def usable(candidate):
+        return run([str(candidate),'-I','-c',BASE_PROBE],source_app=source_app,env=environment,capture_output=True,text=True,encoding='utf-8',timeout=60).returncode==0
+    if not usable(base):
+        if sys.platform=='darwin':
+            base=next((checked(item) for item in MAC_FRAMEWORK_PYTHONS if Path(item).is_file() and usable(item)),None)
+            if base is None:raise ValueError('This Mac has no Python 3.12 that can run both the service and the search index. Install Homebrew Python (brew install python@3.12) and run this again.')
+        else:
+            run([str(tool),'python','install','3.12'],source_app=source_app,env=environment,capture_output=True,text=True,encoding='utf-8',check=True,timeout=600)
+            base=checked(run([str(tool),'python','find','--managed-python','--no-project','--no-python-downloads','3.12'],
+                             source_app=source_app,env=environment,capture_output=True,text=True,encoding='utf-8',check=True,timeout=60).stdout)
     environment_path=Path(repo)/'.venv'
     if environment_path.exists():
         if environment_path.is_symlink() or environment_path.is_junction() or environment_path.resolve().parent!=Path(repo).resolve():raise ValueError('Linked environment cannot be reprovisioned.')

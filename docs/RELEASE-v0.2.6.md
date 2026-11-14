@@ -17,7 +17,7 @@ v0.2.5 could update a Mac, but a device was only complete after manual steps tha
 9. **FastMCP 4.1.8, no advisory exception.** Basic Memory 0.23.2 pins `fastmcp==4.0.0b1`. `[tool.uv] override-dependencies` now selects `fastmcp` and `fastmcp-slim` 4.1.8, which contain the fix for GHSA-vqqp-x5qm-5qp4 (fixed upstream in 4.1.2). The exception is removed from all four profiles and the gate no longer excuses that advisory. The raw audit of this lock reported no finding on 14 November 2026. `authlib` moves to 1.9.5 and the keyring packages leave the graph as a result.
 10. **Shipped with the release.** The blank starter vault (`starter/`), the read-only acceptance checker (`check_setup.py`) and one setup guide (`docs/SETUP-GUIDE.md`).
 11. **Wording.** The protocol block, the skill and the hook text no longer name one language or one operating system for the maintainer.
-12. **A Python that can run the index.** The search index loads the sqlite-vec extension. Some system Pythons, including the python.org and Xcode builds on macOS, are built without SQLite extension loading: the service ran on such a base and the index never verified. Provisioning now tests the selected base and uses uv's own Python build when that test fails. The new CI job found this on macOS 15, where the first index of a fresh install stayed unverified.
+12. **A Python that can run the index and the service.** The search index loads the sqlite-vec extension. Some system Pythons, including the python.org and Xcode builds on macOS, are built without SQLite extension loading: the service ran on such a base and the index never verified. The new CI job found this on macOS 15, and then found that uv's own Python build, which can load extensions, is not a framework build and the Mac service does not start on it. Provisioning now tests the selected base. On a Mac it falls back to Homebrew's Python 3.12, which is both, and refuses with that instruction when there is none. Elsewhere it falls back to uv's build.
 13. **Devices from before the timezone key.** An update of a device whose `device.json` has no timezone keeps the zone that device has been running with, instead of reading the system zone.
 
 ## Boundaries to review
@@ -35,6 +35,7 @@ v0.2.5 could update a Mac, but a device was only complete after manual steps tha
 - The folder of the version a device was updated from must stay until the next update.
 - A full index rebuild of a very large vault still takes long, because each upstream run ends with the quadratic cleanup until the watchdog stops it.
 - Changing the timezone or the role of an installed device is not supported.
+- A Mac needs Homebrew Python 3.12 (`brew install python@3.12`). No other common Python build runs both the Mac service and the search index.
 - A packaged desktop installer is not part of this release.
 
 See [the setup guide](SETUP-GUIDE.md), [device setup](DEVICE-SETUP.md), [verification boundaries](DEVICE-TESTING.md), [security limits](../SECURITY.md) and the [v0.2.5 notes](RELEASE-v0.2.5.md).
