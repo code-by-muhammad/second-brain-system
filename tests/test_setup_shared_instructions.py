@@ -75,6 +75,31 @@ def test_inline_import_counts_and_an_import_outside_home_or_in_a_code_block_does
     assert outside.read_text()==BLOCK
 
 
+def test_import_that_climbs_out_of_home_is_never_written(owner,tmp_path):
+    home,root,_=owner
+    (home/'.claude').mkdir();outside=tmp_path/'outside.md';outside.write_text(BLOCK)
+    (home/'.claude/CLAUDE.md').write_text('@../../outside.md\n')
+    result=plan(owner,selected=['claude-code'])
+    assert all(Path(row['path']).resolve().is_relative_to(home.resolve()) for row in result['files'])
+    assert str(home/'.claude/CLAUDE.md') in by_path(result)
+    helpers.apply(result,installer.atomic,lambda path,root:None,root)
+    assert outside.read_text()==BLOCK and (home/'.claude/CLAUDE.md').read_text().count(helpers.BEGIN)==1
+
+
+def test_first_block_goes_once_into_the_file_both_assistants_share(owner):
+    """No block anywhere yet: Claude imports the shared file and Codex links to it."""
+    home,root,_=owner
+    for folder in ('.agents','.claude','.codex'):(home/folder).mkdir()
+    shared=home/'.agents/RULES.md';shared.write_text('# Shared\n')
+    (home/'.claude/CLAUDE.md').write_text('@~/.agents/RULES.md\n')
+    os.symlink(shared,home/'.codex/AGENTS.md')
+    result=plan(owner,selected=['claude-code','codex'])
+    helpers.apply(result,installer.atomic,lambda path,root:None,root)
+    loaded=(home/'.claude/CLAUDE.md').read_text()+shared.read_text()
+    assert loaded.count(helpers.BEGIN)==1 and shared.read_text().count(helpers.BEGIN)==1
+    assert (home/'.codex/AGENTS.md').is_symlink()
+
+
 def test_two_loaded_blocks_are_refused(owner):
     home,_,_=owner
     for folder in ('.agents','.claude'):(home/folder).mkdir()
@@ -127,9 +152,28 @@ def test_clients_only_adds_missing_pieces_to_an_installed_device(owner,monkeypat
     assert json.loads((root/'device.json').read_text())==device
 
 
-def test_new_device_uses_the_system_timezone_and_refuses_an_unknown_one(monkeypatch):
+def test_new_device_uses_the_system_timezone_and_never_a_silent_default(monkeypatch):
+    import types
     assert installer.local_timezone('Europe/Berlin')=='Europe/Berlin'
     with pytest.raises(ValueError,match='--timezone'):installer.local_timezone('Mars/Olympus')
     assert installer.device_settings({'timezone':'Asia/Karachi'},Path('v'),Path('p'))['timezone']=='Asia/Karachi'
-    import zoneinfo
-    assert installer.device_settings({},Path('v'),Path('p'))['timezone'] in zoneinfo.available_timezones()
+    monkeypatch.setitem(sys.modules,'tzlocal',types.SimpleNamespace(get_localzone_name=lambda:'Pacific/Auckland'))
+    assert installer.device_settings({},Path('v'),Path('p'))['timezone']=='Pacific/Auckland'
+    assert installer.device_settings({},Path('v'),Path('p'),timezone='Europe/Berlin')['timezone']=='Europe/Berlin'
+    monkeypatch.setitem(sys.modules,'tzlocal',types.SimpleNamespace(get_localzone_name=lambda:'local'))
+    with pytest.raises(ValueError,match='--timezone'):installer.device_settings({},Path('v'),Path('p'))
+    monkeypatch.setitem(sys.modules,'tzlocal',None)  # The package is absent: refuse, do not guess.
+    with pytest.raises(ValueError,match='--timezone'):installer.device_settings({},Path('v'),Path('p'))
+
+
+def test_updater_shows_why_its_controller_refused(tmp_path,monkeypatch):
+    import types
+    spec=importlib.util.spec_from_file_location('shared_update',SOURCE/'update.py')
+    updater=importlib.util.module_from_spec(spec);spec.loader.exec_module(updater)
+    support=updater.installer().setup_helpers()
+    refused=types.SimpleNamespace(returncode=1,stdout='',stderr='Traceback (most recent call last):\n  ...\nRegistrationError: Native manager process ownership is unavailable.\n')
+    monkeypatch.setattr(support,'isolated_python',lambda python,root:[str(python),'-I'])
+    monkeypatch.setattr(support,'run',lambda *args,**kwargs:refused)
+    monkeypatch.setattr(updater,'cli_environment',lambda root=None:{})
+    with pytest.raises(RuntimeError,match='refused service inspect .exit 1.: RegistrationError: Native manager process ownership is unavailable'):
+        updater.controller(tmp_path/'python',tmp_path,tmp_path,'service','inspect')

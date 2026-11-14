@@ -159,8 +159,8 @@ jobs:
           retention-days: 30
   fresh-setup:
     name: One-command fresh setup (${{ matrix.os }})
-    # Runs the published bootstrap script against this exact commit on a disposable machine:
-    # download, release check, install, service start, assistant wiring and the acceptance check.
+    # Runs the bootstrap script against this exact commit on a disposable machine: download,
+    # release check, install, service start, assistant wiring and the acceptance check.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
@@ -171,7 +171,6 @@ jobs:
     env:
       SECOND_BRAIN_REF: ${{ github.head_ref || github.ref_name }}
       SECOND_BRAIN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-      SECOND_BRAIN_ROOT: ${{ runner.temp }}/second-brain-runtime
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -180,32 +179,31 @@ jobs:
         with:
           version: '0.9.16'
           enable-cache: false
-      - name: Set up a new device with one command (Mac, Linux)
+      - name: Set up a new device with one command, then run it again (Mac, Linux)
         if: runner.os != 'Windows'
         shell: bash
-        run: sh bootstrap/setup.sh --yes --vault "$RUNNER_TEMP/second-brain-notes" --clients claude-code,codex
-      - name: Set up a new device with one command (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
         run: |
-          & ./bootstrap/setup.ps1 --yes --vault (Join-Path $env:RUNNER_TEMP 'second-brain-notes') --clients 'claude-code,codex'
+          export SECOND_BRAIN_ROOT="$RUNNER_TEMP/second-brain-runtime"
+          sh bootstrap/setup.sh --yes --vault "$RUNNER_TEMP/second brain notes" --clients claude-code,codex
+          # A finished device must stay finished.
+          sh bootstrap/setup.sh --yes --clients claude-code,codex
+      - name: Set up a new device with one command, then run it again (Windows PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:SECOND_BRAIN_ROOT = Join-Path $env:RUNNER_TEMP 'second-brain-runtime'
+          $notes = Join-Path $env:RUNNER_TEMP 'second brain notes'
+          powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 --yes --vault $notes --clients 'claude-code,codex'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Run the same command again; a finished device must stay finished
-        if: runner.os != 'Windows'
-        shell: bash
-        run: sh bootstrap/setup.sh --yes --clients claude-code,codex
-      - name: Run the same command again; a finished device must stay finished (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          & ./bootstrap/setup.ps1 --yes --clients 'claude-code,codex'
+          powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 --yes --clients 'claude-code,codex'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Show service logs when a step failed (synthetic device only)
         if: failure()
         shell: bash
         run: |
-          ls -la "$SECOND_BRAIN_ROOT" "$SECOND_BRAIN_ROOT/logs" "$SECOND_BRAIN_ROOT/state" || true
-          tail -n 60 "$SECOND_BRAIN_ROOT"/logs/service-*.log || true
+          root="$RUNNER_TEMP/second-brain-runtime"
+          ls -la "$root" "$root/logs" "$root/state" || true
+          tail -n 60 "$root"/logs/*.log || true
   library-import:
     name: Library and native dependency audit (${{ matrix.os }})
     strategy:

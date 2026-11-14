@@ -87,12 +87,12 @@ Options, added after `setup.sh` or `setup.ps1`:
 | `--clients "claude-code,codex"` | Choose the assistants. Keep the quotes on Windows. Add `claude-desktop` for the Claude Desktop chat app, which must be closed while you run this. |
 | `--no-hooks` | Leave out the Claude Code session hooks. |
 | `--timezone Europe/Berlin` | Use this timezone instead of the system one. |
-| `--local-only` | The owner wants no Git remote for these notes. The check fails if one exists. |
+| `--local-only` | The owner wants no Git remote for these notes. Setup refuses to start if the notes folder has one, and the check fails if one appears later. |
 | `--check` | Only run the acceptance check. Use it after a restart. |
 
 A runtime folder other than the default: set `SECOND_BRAIN_ROOT` before the command. Default: `~/.local/share/second-brain` (Windows `C:\Second-Brain-System`).
 
-Running the same command again is safe. On a device that is already set up it adds whatever is missing and runs the check.
+Running the same command again is safe. On a device that is already set up it adds whatever is missing, starts the service if it is not running, and runs the check.
 
 ## 4. The device is done when this passes
 
@@ -158,7 +158,8 @@ First device:
 - [ ] Install the GitHub CLI and sign in as the owner of the notes: `gh auth login --web`, then `gh auth setup-git`.
 - [ ] In the notes folder: `git init -b main`, set `git config user.name` and `git config user.email`, then review and commit the files.
 - [ ] `gh repo create "<ACCOUNT>/<NOTES REPO>" --private --source "<NOTES FOLDER>" --remote origin --push`. Confirm on GitHub that it is private.
-- [ ] Nothing else. The service notices the remote and syncs on its own. The check line "notes sync" changes from "off" to "synced".
+- [ ] Nothing else. The service notices the remote named `origin` and syncs on its own. The check line "notes sync" changes from "off" to "synced".
+- [ ] The notes need a repository of their own. A notes folder that only sits inside another repository is never synced through it.
 
 An additional device for the same notes:
 
@@ -185,7 +186,7 @@ Rules:
 | FAIL on a connection, hooks, instructions or skill line | Close that assistant, run the command again, then open a new chat. |
 | The assistant cannot see the `brain_` tools | It was open during setup. Restart it and open a new chat. |
 | Port 8765 is in use | If Second Brain already holds it, this device is already installed. If another program holds it, stop and ask. |
-| "search index" stays on WARN | Run `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" index retry --full --stall-seconds 300` and wait. It repeats by itself until the index verifies. On a very large vault this can take over an hour. Judge the result with `index status`. |
+| "search index" stays on WARN | Run `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" index retry --full --stall-seconds 300` and wait. It repeats by itself while it makes progress and then says `verified` or what is still wrong. On a very large vault this can take over an hour. Judge the result with `index status`. |
 | "notes sync: needs attention" | Read the text after it. Usual causes: no network, the GitHub sign-in expired, or other uncommitted files in the notes folder. |
 | "notes sync: paused" | The text after it says what blocks the sync: a conflict between two devices, files you staged yourself, or other uncommitted files. Nothing is lost. Clear that in the notes folder with Git and the sync resumes. |
 | After a restart the service is not running | Mac: `launchctl list | grep second-brain`. Windows: the task `SecondBrainLocalService`. Linux: `systemctl --user status second-brain.service`. Then run the command with `--check`. |

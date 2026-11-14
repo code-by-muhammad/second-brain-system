@@ -469,8 +469,15 @@ def _ordinary_blob(vault,relative,entry):
 
 def sync(vault=None):
     vault=Path(vault or s.VAULT)
-    # Notes without a Git remote are a supported single-device brain, not a fault.
+    # Notes without a Git remote are a supported single-device brain, not a fault. Decide it
+    # from the repository's own files, before any command could stage, commit or publish.
     local_only='off: notes stay on this device (no Git remote named origin)'
+    if not (vault/'.git').exists():
+        # Git would otherwise act on an enclosing repository and publish the notes to its remote.
+        if any((parent/'.git').exists() for parent in vault.resolve().parents):
+            return 'off: the notes folder is inside another Git repository and is never synchronized into it'
+    elif (vault/'.git/config').is_file() and '[remote "origin"]' not in (vault/'.git/config').read_text(encoding='utf-8',errors='replace'):
+        return local_only
     def git(*args,check=True,input=None):
         try:
             p=_run_git(['git','--literal-pathspecs','-C',str(vault),*args],input=input,
@@ -590,8 +597,6 @@ def sync(vault=None):
             if git('status','--porcelain','--untracked-files=all').stdout.strip():
                 return 'paused: other local changes or source deletions require review'
 
-        origin=git('config','--get','remote.origin.url',check=False)
-        if origin.returncode or not origin.stdout.strip():return local_only
         git('fetch','origin')
         with FileLock(str(s.STATE/'writer.lock'),timeout=30):
             _require_no_hold(vault)

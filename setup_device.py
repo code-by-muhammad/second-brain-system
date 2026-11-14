@@ -56,6 +56,27 @@ def new_vault(target):
         with output.open('xb') as stream:stream.write(path.read_bytes())
 
 
+def remotes(vault):
+    """Git remotes of the notes folder; none when it is not a repository of its own."""
+    if not (Path(vault)/'.git').exists() or not shutil.which('git'):return []
+    return run(['git','-C',vault,'remote'],capture=True).stdout.split()
+
+
+def own_the_notes(vault,device_id):
+    """Name this device as the one maintainer. Never through a link, never over an existing owner."""
+    control=vault
+    for part in CONTROL.split('/'):
+        control=control/part
+        if control.is_symlink() or (hasattr(control,'is_junction') and control.is_junction()):
+            raise SystemExit('A linked folder on the way to '+CONTROL+' is refused. Make it a plain folder inside the notes and run this again.')
+    control.parent.mkdir(parents=True,exist_ok=True)
+    try:
+        with control.open('x',encoding='utf-8',newline='\n') as output:
+            output.write('---\nmaintainer_device_id: '+device_id+'\n---\n\n# Shared writer ownership\n\nThis device links saved milestones into daily notes. Additional devices are installed with the capture role.\n')
+    except FileExistsError:
+        raise SystemExit(CONTROL+' appeared while this was running. Another device may own these notes; check it before starting the service.') from None
+
+
 def brain(device,*arguments,capture=False):
     return run([device['python'],Path(device['root'])/'app/brain_cli.py',*arguments],capture=capture)
 
@@ -69,6 +90,14 @@ def wait_running(device,version,seconds=240):
         if isinstance(health,dict) and health.get('status')=='running' and health.get('version')==version:return True
         time.sleep(3)
     return False
+
+
+def start_service(device,version,root):
+    """Register and start the background service, then wait until it answers on this version."""
+    cli='"'+device['python']+'" "'+str(root/'app/brain_cli.py')+'"'
+    for action in ('install','start'):
+        if brain(device,'service',action,capture=True).returncode:raise SystemExit('The background service could not '+action+'. Run this for the reason: '+cli+' service '+action)
+    if not wait_running(device,version):raise SystemExit('The service did not report running within four minutes. Check with: '+cli+' health')
 
 
 def main():
@@ -110,6 +139,8 @@ def main():
         say('New device.\n  Runtime: '+str(root)+'\n  Notes:   '+str(vault)+(' (new, from the blank starter)' if created else ' (existing folder, used as it is)')
             +'\n  Role:    '+role+'\n  Assistants: '+(', '.join(selected) or 'none found'))
         if ask('Continue?','yes',args.yes).lower() not in ('y','yes'):raise SystemExit('Nothing was changed.')
+        if args.local_only and remotes(vault):
+            raise SystemExit('--local-only was given, but these notes have a Git remote ('+', '.join(remotes(vault))+'). Remove the remote or drop --local-only. Nothing was installed.')
         if created:new_vault(vault)
         command=[sys.executable,'-I','-B',REPO/'install.py','--root',root,'--vault',vault,'--role',role,'--uv',Path(uv).resolve()]
         if args.timezone:command+=['--timezone',args.timezone]
@@ -121,18 +152,14 @@ def main():
             reason=(json.loads(reports[-1].read_text(encoding='utf-8')).get('stderr_tail','').strip().splitlines() or [''])[-1] if reports else ''
             raise SystemExit('The installer stopped'+(': '+reason[:400] if reason else '.')+'\nKeep the folders as they are and see the troubleshooting section of the setup guide.')
         device=json.loads((root/'device.json').read_text(encoding='utf-8-sig'))
-        control=vault/CONTROL
-        if role=='maintainer' and not control.exists():
-            # The one device allowed to link captures and write shared summaries names itself before the first start.
-            control.parent.mkdir(parents=True,exist_ok=True)
-            control.write_text('---\nmaintainer_device_id: '+device['device_id']+'\n---\n\n# Shared writer ownership\n\nThis device links saved milestones into daily notes. Additional devices are installed with the capture role.\n',encoding='utf-8',newline='\n')
+        # The one device allowed to link captures and write shared summaries names itself before the first start.
+        if role=='maintainer' and not (vault/CONTROL).exists():own_the_notes(vault,device['device_id'])
         device['root']=str(root)
-        if not args.no_service:
-            for action in ('install','start'):
-                if brain(device,'service',action,capture=True).returncode:raise SystemExit('The background service could not '+action+'. Run this for the reason: "'+device['python']+'" "'+str(root/'app/brain_cli.py')+'" service '+action)
-            if not wait_running(device,version):raise SystemExit('The service did not report running within four minutes. Check with: "'+device['python']+'" "'+str(root/'app/brain_cli.py')+'" health')
+        if not args.no_service:start_service(device,version,root)
     elif not args.check:
         vault=Path(device['vault'])
+        if args.local_only and remotes(vault):
+            raise SystemExit('--local-only was given, but these notes have a Git remote ('+', '.join(remotes(vault))+'). Remove the remote or drop --local-only. Nothing was changed.')
         if device.get('version')!=version:
             release=root/'releases'/('v'+version)
             if REPO!=release:raise SystemExit('To update this device the release must be at exactly '+str(release)+'. Clone the tag there and run its setup_device.py.')
@@ -149,6 +176,9 @@ def main():
             if result.returncode or '"deferred": []' not in result.stdout:
                 reason=((result.stderr or '').strip().splitlines() or ['a settings file changed while it was being written'])[-1]
                 say('An assistant could not be completed: '+reason[:300]+'\nThe check below shows what is missing. Close that assistant and run this command again.')
+        device['root']=str(root)
+        # A first run that stopped before the service was up is finished here.
+        if not args.no_service and not wait_running(device,version,seconds=15):start_service(device,version,root)
     device['root']=str(root)
 
     command=[device['python'],'-I','-B',REPO/'check_setup.py','--root',root,'--clients',','.join(selected),'--expect-version',version,'--release',REPO]

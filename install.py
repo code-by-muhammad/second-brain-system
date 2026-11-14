@@ -278,9 +278,9 @@ def local_timezone(explicit=None):
     from zoneinfo import available_timezones
     zone=explicit
     if zone is None:
-        try:import tzlocal
-        except ImportError:return 'UTC'  # Only outside the locked product environment, which always ships tzlocal.
-        try:zone=tzlocal.get_localzone_name()
+        try:
+            import tzlocal
+            zone=tzlocal.get_localzone_name()
         except Exception:zone=None
     if not isinstance(zone,str) or zone in ('Factory','localtime') or zone not in available_timezones():
         raise ValueError('Timezone is unknown; pass --timezone with an IANA name such as Europe/Berlin or Asia/Karachi.')

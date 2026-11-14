@@ -99,12 +99,13 @@ def test_stall_after_complete_work_is_verified_by_coverage(brain,monkeypatch):
 
 
 def _coverage(status,**vectors):
-    return {'status':status,'inventory_stable':True,'coverage':{'manifest_sha256':None,'missing':0,'stale':0},
-            'vectors':{'invalid':0,'zero_chunk_entities':0,'stale_search_sources':0,**vectors}}
+    return {'status':status,'inventory_stable':True,'coverage':{'manifest_sha256':'synthetic-manifest','missing':0,'stale':0},
+            'vectors':{'invalid':0,'zero_chunk_entities':0,'stale_search_sources':0,'chunks':10,**vectors}}
 
 
 def _moving_runner(seen,monkeypatch):
     """Each child run changes the observed row counts once, as a real embedding pass does."""
+    monkeypatch.setattr(bootstrap.index,'inventory',lambda check:({'01-Projects/Source.md':{}},'synthetic-manifest'))
     counts=iter(range(1,1000))
     monkeypatch.setattr(bootstrap,'_counts',lambda deadline=None:{'entity':next(counts)})
     def run(command,log,overall,tick,cleanup):
@@ -119,7 +120,17 @@ def test_retry_repeats_while_a_large_note_is_still_being_embedded(brain,monkeypa
     _moving_runner(seen,monkeypatch)
     monkeypatch.setattr(bootstrap.index,'status',lambda deadline=None:next(reports))
     result=bootstrap.main(retry=True,full=True,overall_seconds=20,stall_seconds=5)
-    assert seen==[['--full'],[],[]] and result['passes']==3 and result['current_index']['status']=='verified'
+    assert seen==[['--full'],[],[]] and result['passes']==3 and result['status']=='verified'
+
+
+def test_one_large_note_stays_one_defect_while_its_chunks_grow(brain,monkeypatch):
+    """256 chunks per run: the defect count does not move, the chunk count does."""
+    ready()
+    seen=[];reports=iter([_coverage('needs review',invalid=1,chunks=256*number) for number in range(1,7)]+[_coverage('verified',chunks=1700)])
+    _moving_runner(seen,monkeypatch)
+    monkeypatch.setattr(bootstrap.index,'status',lambda deadline=None:next(reports))
+    result=bootstrap.main(overall_seconds=20,stall_seconds=5)
+    assert len(seen)==7 and result['status']=='verified'
 
 
 def test_retry_stops_when_more_passes_do_not_help(brain,monkeypatch):
@@ -139,9 +150,10 @@ def test_search_rows_lost_to_a_lock_are_rebuilt_once_then_embedded(brain,monkeyp
         seen.append(command[4:])
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(bootstrap,'_run_reindex',run)
+    monkeypatch.setattr(bootstrap.index,'inventory',lambda check:({'01-Projects/Source.md':{}},'synthetic-manifest'))
     monkeypatch.setattr(bootstrap.index,'status',lambda deadline=None:next(reports))
     result=bootstrap.main(overall_seconds=20,stall_seconds=5)
-    assert seen==[[],['--full','--search'],[]] and result['current_index']['status']=='verified'
+    assert seen==[[],['--full','--search'],[]] and result['status']=='verified'
 
 
 def test_missing_vector_tables_do_not_hide_entity_progress(brain,monkeypatch):

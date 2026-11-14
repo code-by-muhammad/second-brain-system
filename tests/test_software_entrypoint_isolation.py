@@ -54,7 +54,8 @@ support.run = run
 # This lane isolates process/import provenance. The real public journal,
 # interruption, identity and resume contracts have their own test module.
 def fresh(root,python,vault,args,value,finish):
-    result=product['deploy'](root,python,vault,args.role,False,client_value=value)
+    result=product['deploy'](root,python,vault,args.role,False,client_value=value,
+                             device_value=product['device_settings']({},vault,python,args.role,args.timezone))
     finish(result,lambda stage:None,'deployed')
     return result
 product['_run_fresh']=fresh
@@ -63,7 +64,7 @@ def provision(*arguments):
     record({'kind':'provision-intercepted','argv':[str(value) for value in arguments]})
     return selected
 support.provision=provision
-sys.argv = [str(release / 'install.py'), '--root', str(root), '--vault', str(vault), '--role', 'capture']
+sys.argv = [str(release / 'install.py'), '--root', str(root), '--vault', str(vault), '--role', 'capture', '--timezone', 'UTC']
 if route == 'model-child':
     selected = release / ('.venv/Scripts/python.exe' if os.name == 'nt' else '.venv/bin/python')
     sys.argv.extend(['--reuse-python', str(selected), '--download-model'])

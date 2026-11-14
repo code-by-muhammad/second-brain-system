@@ -16,7 +16,7 @@ OVERALL_SECONDS=28800
 STALL_SECONDS=1800
 LOG_LIMIT=64*1024*1024
 FOLLOW_UP_STALL=300
-MAX_PASSES=16
+MAX_PASSES=64
 
 
 class IndexStalled(RuntimeError): pass
@@ -229,7 +229,9 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
                     if result.returncode or coverage.get('status')=='verified' or passes>=MAX_PASSES:break
                     vectors=coverage.get('vectors') or {};scope=coverage.get('coverage') or {}
                     defects=sum(int(value or 0) for value in (vectors.get('invalid'),scope.get('missing'),scope.get('stale')))
-                    if best is None or defects<best:best=defects;misses=0
+                    # A very large note stays one defect while each pass embeds 256 more of its chunks.
+                    reached=(defects,-int(vectors.get('chunks') or 0))
+                    if best is None or reached<best:best=reached;misses=0
                     else:misses+=1
                     lost=vectors.get('zero_chunk_entities') or vectors.get('stale_search_sources')
                     if arguments==['--full','--search'] or (moved and misses<2):arguments=[]

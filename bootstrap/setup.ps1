@@ -8,6 +8,9 @@ $Commit = if ($env:SECOND_BRAIN_COMMIT) { $env:SECOND_BRAIN_COMMIT } else { '__C
 $Root = if ($env:SECOND_BRAIN_ROOT) { $env:SECOND_BRAIN_ROOT } else { 'C:\Second-Brain-System' }
 $Source = 'https://github.com/code-by-muhammad/second-brain-system.git'
 
+if ($Commit -eq '__COMMIT__') {
+  throw 'This copy of setup.ps1 is the source file. Use the setup.ps1 attached to the release.'
+}
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
   throw "Missing: git. Run 'winget install --id Git.Git -e' and open a new PowerShell window."
 }
@@ -24,6 +27,11 @@ if (-not (Test-Path -LiteralPath (Join-Path $Dest '.git'))) {
 $Head = (git -C $Dest rev-parse HEAD).Trim()
 if ($Head -ne $Commit) {
   throw "Release check failed: expected commit $Commit, found $Head in $Dest. Nothing was installed. Keep that folder for review."
+}
+# A release folder kept from an earlier run must still be exactly that commit before any of it runs.
+$Changed = git -C $Dest -c core.fsmonitor=false status --porcelain
+if ($LASTEXITCODE -ne 0 -or $Changed) {
+  throw "Release check failed: files in $Dest differ from commit $Commit. Nothing was run. Keep that folder for review, or move it away and run this again."
 }
 Set-Location -LiteralPath $Dest
 uv run --no-project --python 3.12 python -I -B setup_device.py --root $Root @args
