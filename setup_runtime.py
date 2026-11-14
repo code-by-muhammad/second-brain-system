@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -236,6 +237,49 @@ def read(path):
 def digest(data):return None if data is None else hashlib.sha256(data).hexdigest()
 
 
+def _linked(path):
+    path=Path(path)
+    return any(part.is_symlink() or (hasattr(part,'is_junction') and part.is_junction()) for part in (path,*path.parents))
+
+
+def _real(path,home):
+    """Instruction and skill files may be links to one shared copy; follow them only inside the home folder."""
+    path=Path(path);real=path.resolve() if _linked(path) else path.absolute()
+    if not any(real.is_relative_to(base) for base in (Path(home).resolve(),Path(home).absolute())) or _linked(real):
+        raise ValueError('Instruction file leaves the home folder; preserve it and select a regular file there: '+str(path))
+    return real if _linked(path) else path
+
+
+def block_file(path,home,imports=False):
+    """The one file this assistant loads the managed block from, or the file to add it to.
+
+    Claude Code also loads files named on their own line as @path, so a block kept in a
+    shared rules file is refreshed there and never duplicated."""
+    first=_real(path,home);texts={};queue=[(first,0)]
+    while queue:
+        current,depth=queue.pop(0)
+        if current in texts:continue
+        try:data=read(current)
+        except ValueError:
+            if depth:continue  # An imported path that is not a plain file is not ours to manage.
+            raise
+        if data is None:continue
+        texts[current]=data.decode('utf-8-sig',errors='replace')
+        if not imports or depth>=5:continue
+        fenced=False
+        for line in texts[current].splitlines():
+            if line.lstrip().startswith('```'):fenced=not fenced
+            if fenced:continue  # Claude Code does not import from inside a code block.
+            for name in re.findall(r'(?:^|\s)@([^\s`]+)',line):
+                target=Path(home)/name[2:] if name.startswith('~/') else Path(name)
+                if not target.is_absolute():target=current.parent/target
+                try:queue.append((_real(target,home),depth+1))
+                except (ValueError,OSError):pass  # An import outside the home folder is not ours to manage.
+    holders=[item for item,text in texts.items() if BEGIN in text]
+    if len(holders)>1:raise ValueError('The managed protocol block is loaded from more than one file; keep one: '+', '.join(map(str,holders)))
+    return holders[0] if holders else first
+
+
 def json_object(data):
     def pairs(entries):
         result={}
@@ -315,25 +359,32 @@ def desktop_path(home,explicit=None,skip=False):
     return None
 
 
-def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,desktop=None,skip_desktop=False):
+def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,desktop=None,skip_desktop=False,skill=None):
     root=Path(root).resolve();home=Path(home or Path.home());python=Path(python)
     selected=set(CLIENTS if selected is None else selected)
     if not selected<=set(CLIENTS):raise ValueError('Unrecognized client selection.')
     specs={'command':str(python),'args':[str(root/'app/brain_client.py')]}
     targets=[]
-    if 'claude-code' in selected:targets.append(('claude-code',home/'.claude.json','json'))
+    if 'claude-code' in selected:
+        targets.extend([('claude-code',home/'.claude.json','json'),('claude-code',block_file(home/'.claude/CLAUDE.md',home,True),'protocol')])
+        if skill is not None:targets.append(('claude-code',_real(home/'.claude/skills/second-brain/SKILL.md',home),'skill'))
     if 'claude-desktop' in selected:
         path=desktop_path(home,desktop,skip_desktop)
         if path is not None:targets.append(('claude-desktop',path,'json'))
-    if 'codex' in selected:targets.extend([('codex',home/'.codex/config.toml','toml'),('codex',home/'.codex/AGENTS.md','protocol')])
+    if 'codex' in selected:
+        targets.extend([('codex',home/'.codex/config.toml','toml'),('codex',block_file(home/'.codex/AGENTS.md',home),'protocol')])
+        if skill is not None:targets.append(('codex',_real(home/'.codex/skills/second-brain/SKILL.md',home),'skill'))
     if 'hooks' in selected:targets.append(('hooks',home/'.claude/settings.json','hooks'))
-    records=[];skipped=[]
+    records=[];skipped=[];claimed=set()
     for client,path,kind in targets:
+        # One shared rules or skill file can serve several assistants; write it once.
+        if _path(path) in claimed:skipped.append({'client':client,'path':str(path),'reason':'shared file already planned'});continue
+        claimed.add(_path(path))
         before=read(path)
         if refresh and before is None:skipped.append({'client':client,'path':str(path),'reason':'absent; refresh creates no client file'});continue
         # Declined clients are never opened. Malformed unrelated existing files
         # without an owned entry remain byte-for-byte untouched in refresh mode.
-        if refresh and kind!='protocol':
+        if refresh and kind not in ('protocol','skill'):
             try:
                 if kind=='toml':
                     import tomllib
@@ -374,6 +425,7 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
                 if last<first:raise ValueError('Managed protocol marker order is invalid: '+str(path))
                 after=content[:first]+block+content[last+len(END):]
             else:after=content.rstrip()+'\n\n'+block+'\n'
+        elif kind=='skill':after=skill
         else:
             data=json_object(before);hooks=data.get('hooks',{})
             if not isinstance(hooks,dict):raise ValueError('Invalid hooks object: '+str(path))
@@ -423,8 +475,8 @@ def authorize_plan(value,*,selected=None,desktop=None,skip_desktop=False):
     home=Path.home();selected=set(CLIENTS if selected is None else selected)
     allowed={}
     if not selected<=set(CLIENTS):raise ValueError('Unrecognized client selection.')
-    if 'claude-code' in selected:allowed['claude-code']={_path(home/'.claude.json')}
-    if 'codex' in selected:allowed['codex']={_path(home/'.codex/config.toml'),_path(home/'.codex/AGENTS.md')}
+    if 'claude-code' in selected:allowed['claude-code']={_path(home/'.claude.json'),_path(block_file(home/'.claude/CLAUDE.md',home,True)),_path(home/'.claude/skills/second-brain/SKILL.md')}
+    if 'codex' in selected:allowed['codex']={_path(home/'.codex/config.toml'),_path(home/'.codex/AGENTS.md'),_path(home/'.codex/skills/second-brain/SKILL.md')}
     if 'hooks' in selected:allowed['hooks']={_path(home/'.claude/settings.json')}
     if 'claude-desktop' in selected:
         target=desktop_path(home,desktop,skip_desktop)

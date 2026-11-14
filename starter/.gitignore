@@ -1,0 +1,18 @@
+# Keep application state, temporary files and secrets off the notes remote.
+.obsidian/
+.trash/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
+*.swp
+*.sqlite*
+*.db
+*.db-*
+.env
+.env.*
+.venv/
+__pycache__/
+# Attachments need their own reviewed publication/backup decision.
+Attachments/**
+!Attachments/.gitkeep
