@@ -67,12 +67,12 @@ def test_inline_import_counts_and_an_import_outside_home_or_in_a_code_block_does
     home,_,_=owner
     for folder in ('.agents','.claude'):(home/folder).mkdir()
     (home/'.agents/RULES.md').write_text(BLOCK)
-    outside=tmp_path/'outside.md';outside.write_text(BLOCK)
+    outside=tmp_path/'outside.md';outside.write_text('# No block here\n')
     (home/'.claude/CLAUDE.md').write_text('Team rules: @~/.agents/RULES.md\n@'+str(outside)+'\n```\n@~/.agents/OTHER.md\n```\nMail me @example\n')
     (home/'.agents/OTHER.md').write_text(BLOCK)
     files=by_path(plan(owner,selected=['claude-code']))
     assert str(home/'.agents/RULES.md') in files and str(home/'.claude/CLAUDE.md') not in files
-    assert outside.read_text()==BLOCK
+    assert outside.read_text()=='# No block here\n'
 
 
 def test_import_that_climbs_out_of_home_is_never_written(owner,tmp_path):
@@ -81,9 +81,10 @@ def test_import_that_climbs_out_of_home_is_never_written(owner,tmp_path):
     (home/'.claude/CLAUDE.md').write_text('@../../outside.md\n')
     result=plan(owner,selected=['claude-code'])
     assert all(Path(row['path']).resolve().is_relative_to(home.resolve()) for row in result['files'])
-    assert str(home/'.claude/CLAUDE.md') in by_path(result)
+    # Claude already loads that block: it is reported, not refreshed out there and not doubled in here.
+    assert any('outside the home folder' in row['reason'] for row in result['skipped'])
     helpers.apply(result,installer.atomic,lambda path,root:None,root)
-    assert outside.read_text()==BLOCK and (home/'.claude/CLAUDE.md').read_text().count(helpers.BEGIN)==1
+    assert outside.read_text()==BLOCK and (home/'.claude/CLAUDE.md').read_text()=='@../../outside.md\n'
 
 
 def test_first_block_goes_once_into_the_file_both_assistants_share(owner):

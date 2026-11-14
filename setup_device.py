@@ -57,9 +57,10 @@ def new_vault(target):
 
 
 def remotes(vault):
-    """Git remotes of the notes folder; none when it is not a repository of its own."""
-    if not (Path(vault)/'.git').exists() or not shutil.which('git'):return []
-    return run(['git','-C',vault,'remote'],capture=True).stdout.split()
+    """Git remotes of the notes folder: none when it is not a repository of its own, None when that cannot be told."""
+    if not (Path(vault)/'.git').exists():return []
+    result=run(['git','-C',vault,'remote'],capture=True) if shutil.which('git') else None
+    return result.stdout.split() if result is not None and result.returncode==0 else None
 
 
 def own_the_notes(vault,device_id):
@@ -92,13 +93,15 @@ def wait_running(device,version,seconds=240):
     return False
 
 
-def start_service(device,version,root):
+def start_service(device,version,root,registered=False):
     """Register and start the background service, then wait until it answers on this version."""
-    for action in ('install','start'):
-        result=brain(device,'service',action,capture=True)
-        if result.returncode:
-            reason=((result.stderr or '').strip().splitlines() or [''])[-1][:400]
-            raise SystemExit('The background service could not '+action+(': '+reason if reason else '.')+'\nThe device is installed but not running. Fix that cause and run this command again.')
+    # A registration that already exists is only started; registering over it would be refused.
+    if not (registered and brain(device,'service','start',capture=True).returncode==0):
+        for action in ('install','start'):
+            result=brain(device,'service',action,capture=True)
+            if result.returncode:
+                reason=((result.stderr or '').strip().splitlines() or [''])[-1][:400]
+                raise SystemExit('The background service could not '+action+(': '+reason if reason else '.')+'\nThe device is installed but not running. Fix that cause and run this command again.')
     if not wait_running(device,version):
         raise SystemExit('The service did not report running within four minutes. Check with: "'+device['python']+'" "'+str(root/'app/brain_cli.py')+'" health')
 
@@ -142,8 +145,8 @@ def main():
         say('New device.\n  Runtime: '+str(root)+'\n  Notes:   '+str(vault)+(' (new, from the blank starter)' if created else ' (existing folder, used as it is)')
             +'\n  Role:    '+role+'\n  Assistants: '+(', '.join(selected) or 'none found'))
         if ask('Continue?','yes',args.yes).lower() not in ('y','yes'):raise SystemExit('Nothing was changed.')
-        if args.local_only and remotes(vault):
-            raise SystemExit('--local-only was given, but these notes have a Git remote ('+', '.join(remotes(vault))+'). Remove the remote or drop --local-only. Nothing was installed.')
+        if args.local_only and remotes(vault)!=[]:
+            raise SystemExit('--local-only was given, but these notes have a Git remote or it could not be checked ('+', '.join(remotes(vault) or ['Git did not answer'])+'). Remove the remote or drop --local-only. Nothing was installed.')
         if created:new_vault(vault)
         command=[sys.executable,'-I','-B',REPO/'install.py','--root',root,'--vault',vault,'--role',role,'--uv',Path(uv).resolve()]
         if args.timezone:command+=['--timezone',args.timezone]
@@ -161,8 +164,8 @@ def main():
         if not args.no_service:start_service(device,version,root)
     elif not args.check:
         vault=Path(device['vault'])
-        if args.local_only and remotes(vault):
-            raise SystemExit('--local-only was given, but these notes have a Git remote ('+', '.join(remotes(vault))+'). Remove the remote or drop --local-only. Nothing was changed.')
+        if args.local_only and remotes(vault)!=[]:
+            raise SystemExit('--local-only was given, but these notes have a Git remote or it could not be checked ('+', '.join(remotes(vault) or ['Git did not answer'])+'). Remove the remote or drop --local-only. Nothing was changed.')
         if device.get('version')!=version:
             release=root/'releases'/('v'+version)
             if REPO!=release:raise SystemExit('To update this device the release must be at exactly '+str(release)+'. Clone the tag there and run its setup_device.py.')
@@ -185,7 +188,7 @@ def main():
                     if row.get('reason')!='shared file already planned':say('Left alone: '+str(row.get('path'))+': '+str(row.get('reason'))[:300])
         device['root']=str(root)
         # A first run that stopped before the service was up is finished here.
-        if not args.no_service and not wait_running(device,version,seconds=15):start_service(device,version,root)
+        if not args.no_service and not wait_running(device,version,seconds=15):start_service(device,version,root,registered=True)
     device['root']=str(root)
 
     command=[device['python'],'-I','-B',REPO/'check_setup.py','--root',root,'--clients',','.join(selected),'--expect-version',version,'--release',REPO]

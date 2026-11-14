@@ -257,13 +257,13 @@ def block_file(path,home,imports=False,shared=()):
     Claude Code also loads files named as @path, so a block kept in a shared rules file is
     refreshed there and never duplicated. With no block yet, a loaded file that another
     selected assistant also writes (shared) receives the one block."""
-    first=_real(path,home);texts={};loaded=[];queue=[(first,0)]
+    first=_real(path,home);texts={};loaded=[];outside=set();queue=[(first,0)]
     while queue:
         current,depth=queue.pop(0)
         if current in loaded:continue
         loaded.append(current)
-        try:data=read(current)
-        except ValueError:
+        try:data=read(current) if current not in outside else (current.read_bytes() if current.is_file() and current.stat().st_size<=MAX_CONFIG else None)
+        except (ValueError,OSError):
             if depth:continue  # An imported path that is not a plain file is not ours to manage.
             raise
         if data is None:continue
@@ -277,9 +277,15 @@ def block_file(path,home,imports=False,shared=()):
                 target=Path(home)/name[2:] if name.startswith('~/') else Path(name)
                 if not target.is_absolute():target=current.parent/target
                 try:queue.append((_real(target,home),depth+1))
-                except (ValueError,OSError):pass  # An import outside the home folder is not ours to manage.
+                except ValueError:
+                    # Outside the home folder: read to see what the assistant loads, never written.
+                    try:beyond=target.resolve()
+                    except OSError:continue
+                    outside.add(beyond);queue.append((beyond,depth+1))
+                except OSError:pass
     holders=[item for item,text in texts.items() if BEGIN in text]
     if len(holders)>1:raise ValueError('The managed protocol block is loaded from more than one file; keep one: '+', '.join(map(str,holders)))
+    if holders and holders[0] in outside:raise ValueError('The managed protocol block is loaded from outside the home folder and is not refreshed there: '+str(holders[0]))
     wanted={_path(item) for item in shared}
     return holders[0] if holders else next((item for item in loaded if _path(item) in wanted),first)
 

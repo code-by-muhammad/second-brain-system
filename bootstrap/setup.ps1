@@ -8,8 +8,8 @@ $Commit = if ($env:SECOND_BRAIN_COMMIT) { $env:SECOND_BRAIN_COMMIT } else { '__C
 $Root = if ($env:SECOND_BRAIN_ROOT) { $env:SECOND_BRAIN_ROOT } else { 'C:\Second-Brain-System' }
 $Source = 'https://github.com/code-by-muhammad/second-brain-system.git'
 
-if ($Commit -eq '__COMMIT__') {
-  throw 'This copy of setup.ps1 is the source file. Use the setup.ps1 attached to the release.'
+if ($Commit -notmatch '^[0-9a-f]{40,64}$') {
+  throw 'This copy of setup.ps1 is the source file and names no release commit. Use the setup.ps1 attached to the release.'
 }
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
   throw "Missing: git. Run 'winget install --id Git.Git -e' and open a new PowerShell window."
@@ -28,9 +28,16 @@ $Head = (git -C $Dest rev-parse HEAD).Trim()
 if ($Head -ne $Commit) {
   throw "Release check failed: expected commit $Commit, found $Head in $Dest. Nothing was installed. Keep that folder for review."
 }
-# A release folder kept from an earlier run must still be exactly that commit before any of it runs.
-$Changed = git -C $Dest -c core.fsmonitor=false status --porcelain
-if ($LASTEXITCODE -ne 0 -or $Changed) {
+# A release folder kept from an earlier run must still be exactly that commit before any of it runs:
+# no extra or changed file by Git's own view, and every tracked file's bytes equal to its committed blob
+# (hashed here, so a flag in the folder's index cannot hide a change).
+$Extra = git -C $Dest -c core.fsmonitor=false status --porcelain
+$Failed = $LASTEXITCODE -ne 0
+$Want = @(git -C $Dest ls-tree -r HEAD | ForEach-Object { ($_ -split '\s+')[2] })
+$Failed = $Failed -or $LASTEXITCODE -ne 0
+$Have = @(git -C $Dest ls-tree -r --name-only HEAD | git -C $Dest hash-object --no-filters --stdin-paths)
+$Failed = $Failed -or $LASTEXITCODE -ne 0
+if ($Failed -or $Extra -or $Want.Count -eq 0 -or (($Want -join ' ') -ne ($Have -join ' '))) {
   throw "Release check failed: files in $Dest differ from commit $Commit. Nothing was run. Keep that folder for review, or move it away and run this again."
 }
 Set-Location -LiteralPath $Dest

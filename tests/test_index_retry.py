@@ -103,13 +103,17 @@ def _coverage(status,**vectors):
             'vectors':{'invalid':0,'zero_chunk_entities':0,'stale_search_sources':0,'chunks':10,**vectors}}
 
 
-def _moving_runner(seen,monkeypatch):
-    """Each child run changes the observed row counts once, as a real embedding pass does."""
+def _moving_runner(seen,monkeypatch,embedding=True,observed=True):
+    """Each child run changes row counts, as a real pass does; embedding says whether vectors are among them."""
     monkeypatch.setattr(bootstrap.index,'inventory',lambda check:({'01-Projects/Source.md':{}},'synthetic-manifest'))
-    counts=iter(range(1,1000))
-    monkeypatch.setattr(bootstrap,'_counts',lambda deadline=None:{'entity':next(counts)})
+    counts=iter(range(1,10000))
+    def rows(deadline=None):
+        value=next(counts)
+        return {'entity':value,'search_vector_embeddings_rowids':value if embedding else 5}
+    monkeypatch.setattr(bootstrap,'_counts',rows)
     def run(command,log,overall,tick,cleanup):
-        seen.append(command[4:]);tick();tick()
+        seen.append(command[4:])
+        if observed:tick();tick()
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(bootstrap,'_run_reindex',run)
 
@@ -126,8 +130,9 @@ def test_retry_repeats_while_a_large_note_is_still_being_embedded(brain,monkeypa
 def test_one_large_note_stays_one_defect_while_its_chunks_grow(brain,monkeypatch):
     """256 chunks per run: the defect count does not move, the chunk count does."""
     ready()
-    seen=[];reports=iter([_coverage('needs review',invalid=1,chunks=256*number) for number in range(1,7)]+[_coverage('verified',chunks=1700)])
-    _moving_runner(seen,monkeypatch)
+    seen=[];reports=iter([_coverage('needs review',invalid=1) for number in range(6)]+[_coverage('verified')])
+    # The child may finish between two samples: progress is measured, not only observed.
+    _moving_runner(seen,monkeypatch,observed=False)
     monkeypatch.setattr(bootstrap.index,'status',lambda deadline=None:next(reports))
     result=bootstrap.main(overall_seconds=20,stall_seconds=5)
     assert len(seen)==7 and result['status']=='verified'
@@ -136,10 +141,10 @@ def test_one_large_note_stays_one_defect_while_its_chunks_grow(brain,monkeypatch
 def test_retry_stops_when_more_passes_do_not_help(brain,monkeypatch):
     ready()
     seen=[]
-    _moving_runner(seen,monkeypatch)
+    _moving_runner(seen,monkeypatch,embedding=False)
     monkeypatch.setattr(bootstrap.index,'status',lambda deadline=None:_coverage('needs review',invalid=4))
     result=bootstrap.main(overall_seconds=20,stall_seconds=5)
-    assert seen==[[],[],[]] and result['status']=='needs review'
+    assert seen==[[],[]] and result['status']=='needs review'  # Two passes without measured gain end the run.
 
 
 def test_search_rows_lost_to_a_lock_are_rebuilt_once_then_embedded(brain,monkeypatch):

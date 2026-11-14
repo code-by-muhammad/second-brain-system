@@ -12,7 +12,7 @@ A chat without terminal access cannot do this.
 
 | Path | Status |
 |---|---|
-| Fresh install, Mac (Apple Silicon and Intel), Windows x64, Ubuntu 24.04 | {{FRESH_STATUS}} |
+| Fresh install, Mac, Windows x64, Ubuntu 24.04 | {{FRESH_STATUS}} |
 | Update an existing Mac on macOS 27 | {{MAC_UPDATE_STATUS}} |
 | Update an existing Windows device | The updater code path is unchanged since v0.2.3. No v0.2.6 device record yet. |
 | Notes kept on one device, no GitHub | Supported. Sync shows "off" and the check passes. |
@@ -92,7 +92,7 @@ Options, added after `setup.sh` or `setup.ps1`:
 
 A runtime folder other than the default: set `SECOND_BRAIN_ROOT` before the command. Default: `~/.local/share/second-brain` (Windows `C:\Second-Brain-System`).
 
-Running the same command again is safe. On a device that is already set up it adds whatever is missing, starts the service if it is not running, and runs the check.
+Running the same command again is safe. On a device that is already set up it adds whatever is missing, tries to start the service if it is not running, and runs the check.
 
 ## 4. The device is done when this passes
 
@@ -124,7 +124,7 @@ What each piece is, if you need to look:
 | Instruction block (between the two `SECOND-BRAIN` marker lines) | `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, or the shared rules file those load |
 | Skill | `~/.claude/skills/second-brain/`, `~/.codex/skills/second-brain/`, or the shared copy those link to |
 
-If your assistant files are links to one shared rules or skills folder, the setup follows the links and keeps one copy. It never adds a second block.
+If your assistant files are links to one shared rules or skills folder inside your home folder, the setup follows the links and keeps one copy. It does not add a second block. A shared file outside your home folder is never written. Setup tells you it was left alone, and the check shows whether it is current.
 
 ## 5. Updating a device that already runs Second Brain
 

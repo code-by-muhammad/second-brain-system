@@ -163,10 +163,10 @@
   "source_sha256": {
     "app/brain_cli.py": "f87fdb0bf522ca30a22ec952d3ab9b639a85f0d5f0ac9fbc725be945389e1c2d",
     "app/brain_client.py": "dc890bdf9122992003a699a51be5fc3b32d98edd040b3a44f5aa358487a3119c",
-    "app/brain_git.py": "4c257a2601d1ed3dc8ab95dd2ae7a2a7280fb3ec81892c6e4c20cf4d4bd2156e",
+    "app/brain_git.py": "7f15b6af765d3205a21858473ebdefdb7aa0f0226a98fde8feabd62a868ac543",
     "app/brain_hooks.py": "cc1623457ebe2c33cbee6b208a18374d4fda3242c75239d53764f37a23882437",
     "app/brain_index.py": "78fe1d8ac9869fa5a3f0e384871f49ce1e9e0aa20a6fbf69a86f8f0be6523eaf",
-    "app/brain_index_bootstrap.py": "4f80c8bb6f922bcc0ea1968ee7b73f8ddab1b11286b0e422b31e2bb363a41416",
+    "app/brain_index_bootstrap.py": "cf7de80b9c8217e0930caa4f4890564d60e47655ffe0e382e4cdde7ea3fb4e25",
     "app/brain_linux_identity.py": "9a1d506b72b18e7c6c918f799f20e758605884ff220b67280af6265b017e2437",
     "app/brain_linux_registration.py": "176ecadb4ef01081cc6354b93bf9dc7475c731394c01b5df6e73536719a2c043",
     "app/brain_mac_inventory.py": "9f417fcf625abc407e3e7e9c079a10b0c07dd10f1180bbdc8f961bf6cfcd5fe5",
@@ -185,7 +185,7 @@
     "check_dependency_audit.py": "413bdcdf23bcf8afcfe6d96e4ed13a7336898bf5ea2c448fc2ea08d0332dfd62",
     "install.py": "daa87cfeb593925d2bc2eaeb5fc2bbce386f252fe3daae14814cf00dea173030",
     "pyproject.toml": "3aa7ccfc1eb586f34175231b53ea09c77472517f484f81cd20de1464961cf72e",
-    "setup_runtime.py": "63b59d7a160c7eb914f7a3296ba50e5336b6a600c81345de309703c5844e7b66",
+    "setup_runtime.py": "b64ba7f189680b857f6512979c2ddc433a2d044f72350e7560996626dd88cdf5",
     "tests/test_security_profile.py": "f12a8faa872e75bc3522e2efd37db32102f5d91a355076718ef129a574a3c988",
     "update.py": "b193e3b5a29adbf6e00462c5ff8f8c4c6f81c5a73a11dd0119bb4e73e5936fc9",
     "uv.lock": "debf2f07cf11708889f22fa83215177b18238d1667899f47f374a0119626a2e3"

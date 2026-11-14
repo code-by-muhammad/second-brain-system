@@ -16,7 +16,7 @@ OVERALL_SECONDS=28800
 STALL_SECONDS=1800
 LOG_LIMIT=64*1024*1024
 FOLLOW_UP_STALL=300
-MAX_PASSES=64
+MAX_PASSES=160  # More than the largest verifiable note needs: 32,768 chunks at 256 per pass.
 
 
 class IndexStalled(RuntimeError): pass
@@ -213,9 +213,12 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
             # orphan cleanup that is quadratic in chunk count and changes no row. So: repeat while
             # coverage improves, rebuild lost search rows once, and let coverage decide the result.
             best=None;misses=0;repaired=False;passes=0
+            def embedded(value):return int((value or {}).get('search_vector_embeddings_rowids') or 0)
             with log_path.open('ab') as log:
                 while True:
                     passes+=1;check()
+                    try:had=embedded(_counts(deadline))
+                    except (sqlite3.Error,OSError):had=0
                     changed=time.monotonic();observed=None;moved=False
                     limit=stall_seconds if passes==1 else min(stall_seconds,FOLLOW_UP_STALL)
                     try:result=_run_reindex(command+arguments,log,deadline-time.monotonic(),tick,cleanup_wait)
@@ -229,12 +232,13 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
                     if result.returncode or coverage.get('status')=='verified' or passes>=MAX_PASSES:break
                     vectors=coverage.get('vectors') or {};scope=coverage.get('coverage') or {}
                     defects=sum(int(value or 0) for value in (vectors.get('invalid'),scope.get('missing'),scope.get('stale')))
-                    # A very large note stays one defect while each pass embeds 256 more of its chunks.
-                    reached=(defects,-int(vectors.get('chunks') or 0))
-                    if best is None or reached<best:best=reached;misses=0
-                    else:misses+=1
+                    # Measured progress: more embedded vectors than before this pass (a very large note
+                    # stays one defect while each pass embeds 256 more of its chunks), or fewer defects than ever.
+                    gained=embedded(counts)>had or (best is not None and defects<best)
+                    best=defects if best is None else min(best,defects)
+                    misses=0 if gained else misses+1
                     lost=vectors.get('zero_chunk_entities') or vectors.get('stale_search_sources')
-                    if arguments==['--full','--search'] or (moved and misses<2):arguments=[]
+                    if arguments==['--full','--search'] or ((moved or gained) and misses<2):arguments=[]
                     elif lost and not repaired:repaired=True;misses=0;arguments=['--full','--search']
                     else:break
                     progress['stage']='indexing local notes'
