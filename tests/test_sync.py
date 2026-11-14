@@ -40,3 +40,16 @@ def test_user_staging_is_preserved(brain,tmp_path):
     a,b=pair(tmp_path); (a/'01-Projects/User.md').write_text('User staged note.\n'); git(a,'add','.')
     assert brain_git.sync(a).startswith('paused: existing staged')
     assert 'User.md' in git(a,'diff','--cached','--name-only')
+
+
+def test_notes_without_a_remote_are_off_not_a_fault(brain,tmp_path):
+    """A single-device brain: a plain folder, or a local repository with no origin."""
+    vault,_=brain
+    assert brain_git.sync(vault).startswith('off: ')
+    local=tmp_path/'local';local.mkdir()
+    subprocess.run(['git','init','-q','-b','main',str(local)],check=True)
+    for key,value in (('user.name','Synthetic'),('user.email','synthetic@example.invalid')):
+        subprocess.run(['git','-C',str(local),'config',key,value],check=True)
+    (local/'01-Projects').mkdir();(local/'01-Projects/Note.md').write_text('Synthetic note.\n',encoding='utf-8')
+    assert brain_git.sync(local).startswith('off: ')
+    assert subprocess.run(['git','-C',str(local),'log','--oneline'],capture_output=True,text=True).stdout.count('\n')==1

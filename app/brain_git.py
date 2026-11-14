@@ -469,6 +469,8 @@ def _ordinary_blob(vault,relative,entry):
 
 def sync(vault=None):
     vault=Path(vault or s.VAULT)
+    # Notes without a Git remote are a supported single-device brain, not a fault.
+    local_only='off: notes stay on this device (no Git remote named origin)'
     def git(*args,check=True,input=None):
         try:
             p=_run_git(['git','--literal-pathspecs','-C',str(vault),*args],input=input,
@@ -529,7 +531,10 @@ def sync(vault=None):
         with FileLock(str(s.STATE/'writer.lock'),timeout=30):
             _require_no_hold(vault)
             cfg.write_admission()
-            _require_no_grafts(git,vault)
+            try:_require_no_grafts(git,vault)
+            except GitSyncError:
+                if not (vault/'.git').exists():return local_only  # Not a Git repository at all.
+                raise
             if staged_paths(): return 'paused: existing staged changes preserved'
             if pause:=casing_pause(check_windows=False): return pause
             candidates=git('ls-files','--modified','--others','--exclude-standard','-z').stdout.split('\0')
@@ -585,6 +590,8 @@ def sync(vault=None):
             if git('status','--porcelain','--untracked-files=all').stdout.strip():
                 return 'paused: other local changes or source deletions require review'
 
+        origin=git('config','--get','remote.origin.url',check=False)
+        if origin.returncode or not origin.stdout.strip():return local_only
         git('fetch','origin')
         with FileLock(str(s.STATE/'writer.lock'),timeout=30):
             _require_no_hold(vault)
