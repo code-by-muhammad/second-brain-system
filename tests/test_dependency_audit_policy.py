@@ -108,25 +108,28 @@ def test_real_policy_graph_matches_independent_nondev_lock_traversal(system,syst
 def real_report(profile_name='security-exceptions.json'):
     policy=json.loads((audit.ROOT/profile_name).read_bytes())
     report={'dependencies':[{'name':name,'version':version,'vulns':[]} for name,version in policy['expected_audit_versions'].items()]}
-    for package in report['dependencies']:
-        if package['name'] in ('fastmcp','fastmcp-slim'):package['vulns']=[{'id':'GHSA-vqqp-x5qm-5qp4'}]
     return report,policy
 
 
 @pytest.mark.parametrize('system,system_name,os_name,machine,profile_name',PROFILES)
-def test_real_policy_source_bindings_and_both_advisory_entries(system,system_name,os_name,machine,profile_name):
+def test_real_policy_source_bindings_and_no_advisory_exception(system,system_name,os_name,machine,profile_name):
     report,policy=real_report(profile_name)
-    assert {(item['package'],item['version'],item['id'],item['review_by']) for item in policy['exceptions']}=={
-        (name,'4.0.0b1','GHSA-vqqp-x5qm-5qp4','2026-12-12') for name in ('fastmcp','fastmcp-slim')}
+    # FastMCP 4.1.2 fixed GHSA-vqqp-x5qm-5qp4; the product ships a later patch and carries no exception.
+    assert policy['exceptions']==[] and policy['expected_audit_versions']['fastmcp']==policy['expected_audit_versions']['fastmcp-slim']=='4.1.8'
     # Bind all local modules, including lazy server imports and future additions.
     expected={path.relative_to(audit.ROOT).as_posix() for path in (audit.ROOT/'app').glob('*.py')}
     expected|={'install.py','update.py','setup_runtime.py','pyproject.toml','uv.lock',
                'check_dependency_audit.py','tests/test_security_profile.py'}
     assert set(policy['source_sha256'])==expected
-    result=audit.assess(report,policy,audit.ROOT,today=date(2026,10,29),expected_platform=system,expected_machine=machine)
-    assert len(result['exceptions_applied'])==2 and not result['unresolved']
-    assert audit.assess(report,policy,audit.ROOT,today=date(2026,12,12),expected_platform=system,expected_machine=machine)['status']=='passed with scoped exception'
-    with pytest.raises(ValueError,match='expired'):audit.assess(report,policy,audit.ROOT,today=date(2026,12,13),expected_platform=system,expected_machine=machine)
+    # With no exception to apply the gate no longer reads these; keep them true so a future exception starts from reviewed bytes.
+    assert all(hashlib.sha256((audit.ROOT/name).read_bytes()).hexdigest()==value for name,value in policy['source_sha256'].items())
+    result=audit.assess(report,policy,audit.ROOT,today=date(2026,12,13),expected_platform=system,expected_machine=machine)
+    assert result['status']=='passed; no findings' and not result['exceptions_applied']
+    # The retired advisory, or any other, is no longer excused.
+    for package in report['dependencies']:
+        if package['name'] in ('fastmcp','fastmcp-slim'):package['vulns']=[{'id':'GHSA-vqqp-x5qm-5qp4'}]
+    result=audit.assess(report,policy,audit.ROOT,today=date(2026,11,14),expected_platform=system,expected_machine=machine)
+    assert result['status']=='needs review' and len(result['unresolved'])==2
 
 
 @pytest.mark.parametrize('mode,code',[('good',0),('unresolved',1),('invalid',2)])
