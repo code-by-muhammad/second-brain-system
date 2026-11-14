@@ -157,6 +157,77 @@ jobs:
             reports/pip-audit-version.txt
           if-no-files-found: error
           retention-days: 30
+  fresh-setup:
+    name: One-command fresh setup (${{ matrix.os }})
+    # Runs the bootstrap script against this exact commit on a disposable machine: download,
+    # release check, install, service start, assistant wiring and the acceptance check.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      SECOND_BRAIN_REF: ${{ github.head_ref || github.ref_name }}
+      SECOND_BRAIN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.9.16'
+          enable-cache: false
+      - name: Set up a new device with one command, then run it again (Mac, Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          export SECOND_BRAIN_ROOT="$RUNNER_TEMP/second-brain-runtime"
+          # The Mac prerequisite from the setup guide.
+          if [ "$RUNNER_OS" = macOS ]; then brew list python@3.12 >/dev/null 2>&1 || brew install python@3.12; fi
+          # This Linux runner has no desktop login session, and the unchanged Linux service code
+          # refuses its user manager. Install and assistant wiring are still exercised there.
+          service=""; if [ "$RUNNER_OS" = Linux ]; then service="--no-service"; fi
+          sh bootstrap/setup.sh --yes --vault "$RUNNER_TEMP/second brain notes" --clients claude-code,codex $service
+          # A finished device must stay finished.
+          sh bootstrap/setup.sh --yes --clients claude-code,codex $service
+          # The first index of the starter notes must verify by itself.
+          if [ -z "$service" ]; then
+            for attempt in $(seq 1 30); do
+              result=$(sh bootstrap/setup.sh --check --clients claude-code,codex) || true
+              if echo "$result" | grep -q "PASS   search index: verified"; then break; fi
+              sleep 10
+            done
+            echo "$result" | grep "search index"
+            echo "$result" | grep -q "PASS   search index: verified"
+          fi
+      - name: Set up a new device with one command, then run it again (Windows PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:SECOND_BRAIN_ROOT = Join-Path $env:RUNNER_TEMP 'second-brain-runtime'
+          $notes = Join-Path $env:RUNNER_TEMP 'second brain notes'
+          powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 --yes --vault $notes --clients 'claude-code,codex'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 --yes --clients 'claude-code,codex'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # The first index of the starter notes must verify by itself.
+          $verified = $false
+          foreach ($attempt in 1..30) {
+            $result = powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 --check --clients 'claude-code,codex'
+            if ($result -match 'PASS   search index: verified') { $verified = $true; break }
+            Start-Sleep -Seconds 10
+          }
+          $result | Select-String 'search index'
+          if (-not $verified) { exit 1 }
+      - name: Show service logs when a step failed (synthetic device only)
+        if: failure()
+        shell: bash
+        run: |
+          root="$RUNNER_TEMP/second-brain-runtime"
+          ls -la "$root" "$root/logs" "$root/state" || true
+          tail -n 60 "$root"/logs/*.log || true
   library-import:
     name: Library and native dependency audit (${{ matrix.os }})
     strategy:

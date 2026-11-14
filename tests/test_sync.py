@@ -40,3 +40,28 @@ def test_user_staging_is_preserved(brain,tmp_path):
     a,b=pair(tmp_path); (a/'01-Projects/User.md').write_text('User staged note.\n'); git(a,'add','.')
     assert brain_git.sync(a).startswith('paused: existing staged')
     assert 'User.md' in git(a,'diff','--cached','--name-only')
+
+
+def test_notes_without_a_remote_are_off_not_a_fault(brain,tmp_path):
+    """A single-device brain: a plain folder, or a local repository with no origin."""
+    vault,_=brain
+    assert brain_git.sync(vault).startswith('off: ')
+    local=tmp_path/'local';local.mkdir()
+    subprocess.run(['git','init','-q','-b','main',str(local)],check=True)
+    (local/'01-Projects').mkdir();(local/'01-Projects/Note.md').write_text('Synthetic note.\n',encoding='utf-8')
+    (local/'unrelated.txt').write_text('Synthetic other file.\n',encoding='utf-8')
+    subprocess.run(['git','-C',str(local),'add','unrelated.txt'],check=True)
+    # Off means untouched: nothing is committed, the owner's staging stays, and no Git identity is needed.
+    assert brain_git.sync(local).startswith('off: ')
+    assert subprocess.run(['git','-C',str(local),'rev-parse','--verify','-q','HEAD'],capture_output=True).returncode!=0
+    assert git(local,'diff','--cached','--name-only').split()==['unrelated.txt']
+
+
+def test_notes_inside_another_repository_are_never_synchronized_into_it(brain,tmp_path):
+    """A notes folder without its own repository must not be published through an enclosing one."""
+    a,_=pair(tmp_path)
+    nested=a/'Second-Brain';(nested/'01-Projects').mkdir(parents=True)
+    (nested/'01-Projects/Private.md').write_text('Synthetic private note.\n',encoding='utf-8')
+    head=git(a,'rev-parse','HEAD')
+    assert brain_git.sync(nested).startswith('off: the notes folder is inside another Git repository')
+    assert git(a,'rev-parse','HEAD')==head and not git(a,'diff','--cached','--name-only')

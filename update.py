@@ -366,7 +366,10 @@ def controller(python,checkout,root,command,action=None,*flags):
     arguments=[*isolated,'-c',code,command]+([action] if action else [])+list(flags)
     try:
         result=support.run(arguments,source_app=Path(__file__).resolve().parent/'app',env=cli_environment(root),capture_output=True,text=True,encoding='utf-8',timeout=900,check=False)
-        if result.returncode:raise RuntimeError('Verified controller refused '+command+' '+str(action or '')+' (exit '+str(result.returncode)+'); inspect private service control receipt.')
+        if result.returncode:
+            # The controller's last error line is the reason an operator needs; it names no credential.
+            reason=((getattr(result,'stderr',None) or '').strip().splitlines() or [''])[-1][:300]
+            raise RuntimeError('Verified controller refused '+command+' '+str(action or '')+' (exit '+str(result.returncode)+')'+(': '+reason if reason else '')+'; inspect private service control receipt.')
         value=json.loads(result.stdout)
         if not isinstance(value,dict):raise ValueError('Invalid controller receipt.')
         return value

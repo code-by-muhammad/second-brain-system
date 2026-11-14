@@ -6,7 +6,7 @@ import argparse, hashlib, json, os, re, secrets, shutil, stat, subprocess, tempf
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
-VERSION='0.2.5'
+VERSION='0.2.6'
 INDEX_IGNORE_TEXT='.git/\n.obsidian/\n.trash/\n'+'/02-Areas/AI-Memory/Wiki/Log-Archives/'+'[0-9a-f]'*64+'.md\n'
 _SETUP_CACHE=None
 _SETUP_SHA256=None
@@ -212,8 +212,9 @@ def setup_helpers():
 
 
 def sealed_client_plan(root,python,home=None,**options):
-    return setup_helpers().plan(root,python,(REPO/'docs/AI-PROTOCOL.md').read_text(encoding='utf-8'),
-                                _codex_toml_plan,home=home,**options)
+    skill=REPO/'skills/second-brain/SKILL.md'  # Part of every verified release; older test releases have none.
+    return setup_helpers().plan(root,python,(REPO/'docs/AI-PROTOCOL.md').read_text(encoding='utf-8'),_codex_toml_plan,
+                                home=home,skill=skill.read_text(encoding='utf-8') if skill.is_file() else None,**options)
 
 
 def client_plan(root,python,home=None):
@@ -272,10 +273,26 @@ def validate(root,vault,python,configure_clients=False):
     if configure_clients: client_plan(root,python)
     return old
 
-def device_settings(old,vault,python,role='capture'):
+def local_timezone(explicit=None):
+    """An exact IANA name: the one given, else the system zone. A zone that cannot be read is refused, not guessed."""
+    from zoneinfo import available_timezones
+    zone=explicit
+    if zone is None:
+        try:
+            import tzlocal
+            zone=tzlocal.get_localzone_name()
+        except Exception:zone=None
+    if not isinstance(zone,str) or zone in ('Factory','localtime') or zone not in available_timezones():
+        raise ValueError('Timezone is unknown; pass --timezone with an IANA name such as Europe/Berlin or Asia/Karachi.')
+    return zone
+
+
+def device_settings(old,vault,python,role='capture',timezone=None):
+    # An installed device keeps its zone; one from before the key existed keeps the zone it has been running with.
+    zone=old.get('timezone') or ('Asia/Karachi' if old else local_timezone(timezone))
     return {**old,'vault':str(vault),'python':str(python),'release_root':str(REPO),
               'role':old.get('role',role),'device_id':old.get('device_id',secrets.token_hex(8)),
-              'port':old.get('port',8765),'timezone':old.get('timezone','Asia/Karachi'),'version':VERSION}
+              'port':old.get('port',8765),'timezone':zone,'version':VERSION}
 
 
 def retrieval_settings(root,vault):
@@ -345,7 +362,7 @@ def _fresh_source():
 
 def _fresh_identity(root,vault,python,args):
     return {'root':str(root),'vault':str(vault),'python':os.path.normcase(str(python)),'release_root':str(REPO),
-            'version':VERSION,'role':args.role,'download_model':args.download_model,
+            'version':VERSION,'role':args.role,'timezone':args.timezone,'download_model':args.download_model,
             'install_service':args.install_service,'configure_clients':args.configure_clients,
             'clients':sorted(set(args.client)) if args.client else None,'include_hooks':args.include_hooks,
             'desktop_config':str(Path(args.desktop_config).expanduser().absolute()) if args.desktop_config else None,
@@ -430,7 +447,7 @@ def _run_fresh(root,python,vault,args,client_value,finish):
         else:
             if path.exists() or any((root/name).exists() for name in ('device.json','app','state/client-access.json','state/access.json','state/config.json','state/.bmignore','state/service-transaction.json')):
                 raise ValueError('Initial setup requires a fresh runtime; preserve existing state and use its recorded recovery flow.')
-            settings=device_settings({},vault,python,args.role)
+            settings=device_settings({},vault,python,args.role,args.timezone)
             token=secrets.token_urlsafe(48)
             value={'format':1,'install_id':secrets.token_hex(16),'identity':_fresh_identity(root,vault,python,args),
                    'stage':'prepared','client_plan':client_value,'writes':{
@@ -491,6 +508,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--vault',required=True); parser.add_argument('--root',default=str(Path.home()/'.local/share/second-brain'))
     parser.add_argument('--role',choices=['capture','maintainer'],default='capture')
+    parser.add_argument('--timezone',help='IANA name for a new device, for example Europe/Berlin. Default: the system timezone. An existing device keeps its own.')
     parser.add_argument('--resume-install',help='Resume only the matching incomplete initial install UUID, using its exact retained Python and options.')
     parser.add_argument('--inspect-install',action='store_true',help='Show only non-secret initial setup identity/options and its recovery UUID.')
     parser.add_argument('--abandon-install',help='Abandon a matching incomplete initial setup only if no runtime artifact was published.')
@@ -501,7 +519,7 @@ def main():
     parser.add_argument('--desktop-config');parser.add_argument('--skip-desktop-refresh',action='store_true')
     parser.add_argument('--client-plan');parser.add_argument('--plan-sha256')
     parser.add_argument('--plan-out',help='With --validate-only, write exactly one private sealed client plan; runtime/client/service files remain unchanged.')
-    parser.add_argument('--refresh-only',action='store_true',help='Refresh client configuration without redeploying or controlling the service.')
+    parser.add_argument('--refresh-only','--clients-only',action='store_true',help='Change client configuration on this same installed release without redeploying or controlling the service. With --configure-clients it adds what is missing for the selected clients.')
     parser.add_argument('--uv',help='Absolute host uv executable; ignored with --reuse-python.')
     parser.add_argument('--download-model',action='store_true'); parser.add_argument('--reuse-python')
     parser.add_argument('--validate-only',action='store_true',help='Check configuration without changing runtime, clients or services.')
@@ -536,7 +554,7 @@ def main():
     client_mode=args.configure_clients or args.refresh_clients
     if args.plan_out and (not args.validate_only or not client_mode):parser.error('--plan-out requires --validate-only and a client mode.')
     if args.client_plan and (not client_mode or not args.plan_sha256):parser.error('--client-plan requires a client mode and its --plan-sha256.')
-    if args.refresh_only and (not args.refresh_clients or args.install_service or args.download_model):parser.error('--refresh-only requires --refresh-clients and cannot deploy models/services.')
+    if args.refresh_only and (not client_mode or args.install_service or args.download_model):parser.error('--refresh-only requires a client mode and cannot deploy models/services.')
     if not args.validate_only or args.plan_out:_qualified_platform()
     helpers=setup_helpers()
     if not args.validate_only or client_mode or args.install_service:helpers.host_context()
@@ -545,7 +563,7 @@ def main():
     existing=validate(root,vault,Path(args.reuse_python or sys.executable),False)
     resumed=_load_fresh(root,vault,Path(os.path.abspath(os.path.expanduser(args.reuse_python))),args) if args.resume_install else None
     if resumed is not None:_fresh_check(root,resumed)
-    if existing and args.configure_clients and resumed is None:
+    if existing and args.configure_clients and resumed is None and not args.refresh_only:
         raise ValueError('Existing runtimes require the verified forward update.py flow. The legacy configure-client preflight is refused before service stop.')
     if existing and args.refresh_clients and not existing.get('device_id'):raise ValueError('Existing runtime has no device identity; review it before an upgrade.')
     if args.refresh_only:

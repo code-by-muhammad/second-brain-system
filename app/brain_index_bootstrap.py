@@ -15,6 +15,8 @@ import brain_index as index
 OVERALL_SECONDS=28800
 STALL_SECONDS=1800
 LOG_LIMIT=64*1024*1024
+FOLLOW_UP_STALL=300
+MAX_PASSES=160  # More than the largest verifiable note needs: 32,768 chunks at 256 per pass.
 
 
 class IndexStalled(RuntimeError): pass
@@ -179,7 +181,7 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
                 return _save({**progress,'status':'needs review','stage':'complete','reason':'no_eligible_markdown',
                               'finished_at':_now(),'elapsed_seconds':time.monotonic()-started},terminal=True)
             binary=cfg.PYTHON.parent/('bm.exe' if os.name=='nt' else 'bm')
-            command=[str(binary),'reindex','-p','brain']+(['--full'] if full else [])
+            command=[str(binary),'reindex','-p','brain'];arguments=['--full'] if full else []
             log_path=cfg.ROOT/'logs/index-bootstrap.log'; log_path.parent.mkdir(parents=True,exist_ok=True)
             previous=log_path.with_name('index-bootstrap.previous.log')
             if any(path.is_symlink() or os.path.isjunction(path) for path in (log_path,previous)):
@@ -187,34 +189,62 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
             if log_path.exists():os.replace(log_path,previous)
             progress.update(stage='indexing local notes',source_manifest_sha256=manifest,last_progress_at=_now())
             _save(progress)
+            limit=stall_seconds;moved=False
             def tick():
-                nonlocal changed,observed,last_saved
+                nonlocal changed,observed,last_saved,moved
                 check()
                 try: current=_counts(deadline)
                 except (sqlite3.Error,OSError): current=None
                 now=time.monotonic()
                 if current is not None and any(value is not None for value in current.values()) and current!=observed:
+                    moved=moved or observed is not None
                     observed=current; changed=now
                     progress.update(counts=current,last_progress_at=_now())
                 progress['elapsed_seconds']=now-started
                 if now-last_saved>=15:
                     _save(progress);last_saved=now
                 if log_path.stat().st_size>LOG_LIMIT: raise index.IndexAttention('private_log_budget_exceeded')
-                if now-changed>=stall_seconds: raise IndexStalled('Local indexing made no observable DB progress within its stall budget.')
+                if now-changed>=limit: raise IndexStalled('Local indexing made no observable DB progress within its stall budget.')
             def cleanup_wait():
                 progress.update(stage='containment cleanup pending',cleanup='bootstrap lock retained until owned processes exit')
                 _save(progress,terminal=True)
+            # One upstream run is not always a finished index. It embeds a very large note 256
+            # chunks at a time, drops search rows that lose a write-lock race, and ends with an
+            # orphan cleanup that is quadratic in chunk count and changes no row. So: repeat while
+            # coverage improves, rebuild lost search rows once, and let coverage decide the result.
+            best=None;misses=0;repaired=False;passes=0;had=None
+            def embedded(value):return int((value or {}).get('search_vector_embeddings_rowids') or 0)
             with log_path.open('ab') as log:
-                check()
-                result=_run_reindex(command,log,deadline-time.monotonic(),tick,cleanup_wait)
-            check()
-            if log_path.stat().st_size>LOG_LIMIT:raise index.IndexAttention('private_log_budget_exceeded')
-            progress.pop('cleanup',None)
-            progress['stage']='verifying current coverage'
-            _save(progress)
-            counts=_counts(deadline);check();coverage=index.status(deadline=deadline);check()
+                while True:
+                    passes+=1;check()
+                    changed=time.monotonic();observed=None;moved=False
+                    limit=stall_seconds if passes==1 else min(stall_seconds,FOLLOW_UP_STALL)
+                    try:result=_run_reindex(command+arguments,log,deadline-time.monotonic(),tick,cleanup_wait)
+                    except IndexStalled:result=subprocess.CompletedProcess(command+arguments,None)
+                    check()
+                    if log_path.stat().st_size>LOG_LIMIT:raise index.IndexAttention('private_log_budget_exceeded')
+                    progress.pop('cleanup',None)
+                    progress.update(stage='verifying current coverage',passes=passes)
+                    _save(progress)
+                    counts=_counts(deadline);check();coverage=index.status(deadline=deadline);check()
+                    if result.returncode or coverage.get('status')=='verified' or passes>=MAX_PASSES:break
+                    vectors=coverage.get('vectors') or {};scope=coverage.get('coverage') or {}
+                    defects=sum(int(value or 0) for value in (vectors.get('invalid'),scope.get('missing'),scope.get('stale')))
+                    # Measured progress: more embedded vectors than after the pass before (a very large note
+                    # stays one defect while each pass embeds 256 more of its chunks), or fewer defects than ever.
+                    gained=(had is not None and embedded(counts)>had) or (best is not None and defects<best)
+                    best=defects if best is None else min(best,defects);had=embedded(counts)
+                    misses=0 if gained else misses+1
+                    lost=vectors.get('zero_chunk_entities') or vectors.get('stale_search_sources')
+                    if arguments==['--full','--search'] or ((moved or gained) and misses<2):arguments=[]
+                    elif lost and not repaired:repaired=True;misses=0;arguments=['--full','--search']
+                    else:break
+                    progress['stage']='indexing local notes'
+            if result.returncode is None and coverage.get('status')!='verified':
+                progress['stage']='indexing local notes'
+                raise IndexStalled('Local indexing made no observable DB progress within its stall budget.')
             stable=coverage.get('coverage',{}).get('manifest_sha256')==manifest and coverage.get('inventory_stable') is True
-            good=result.returncode==0 and coverage.get('status')=='verified' and stable
+            good=result.returncode in (0,None) and coverage.get('status')=='verified' and stable
             outcome='verified' if good else ('needs attention' if result.returncode or coverage.get('status')=='needs attention' else 'needs review')
             return _save({**progress,'status':outcome,'stage':'complete',
                           'counts':counts,'process_exit':result.returncode,'current_index':coverage,

@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -146,6 +147,9 @@ MAX_CONFIG=64*1024*1024
 BEGIN='<!-- BEGIN SECOND-BRAIN -->'
 END='<!-- END SECOND-BRAIN -->'
 CLIENTS=('claude-code','claude-desktop','codex','hooks')
+BASE_PROBE=('import sqlite3,sys,sysconfig;sqlite3.connect(":memory:").enable_load_extension(True);'
+            'sys.exit(0 if sys.platform!="darwin" or sysconfig.get_config_var("PYTHONFRAMEWORK") else 1)')
+MAC_FRAMEWORK_PYTHONS=('/opt/homebrew/bin/python3.12','/usr/local/bin/python3.12')
 
 class ConcurrentWriteError(ValueError):
     """Destination changed while a private replacement was being prepared."""
@@ -199,11 +203,28 @@ def provision(repo,root,uv=None):
     if result.returncode:
         run([str(tool),'python','install','3.12'],source_app=source_app,env=environment,capture_output=True,text=True,encoding='utf-8',check=True,timeout=600)
         result=run(find,source_app=source_app,env=environment,capture_output=True,text=True,encoding='utf-8',check=True,timeout=60)
-    base=Path(result.stdout.strip())
-    if not base.is_absolute() or not base.is_file():raise ValueError('uv did not return an existing absolute Python path.')
-    if any(base.resolve().is_relative_to(Path(folder).resolve()) for folder in (root,repo)):
-        raise ValueError('Refusing a Python base inside the runtime or checkout; select a system/uv-managed Python.')
-    if os.name=='nt' and 'windowsapps' in {part.lower() for part in base.parts}:raise ValueError('Store Python is not qualified; install uv-managed Python 3.12 in the host shell.')
+    def checked(output):
+        base=Path(output.strip())
+        if not base.is_absolute() or not base.is_file():raise ValueError('uv did not return an existing absolute Python path.')
+        if any(base.resolve().is_relative_to(Path(folder).resolve()) for folder in (root,repo)):
+            raise ValueError('Refusing a Python base inside the runtime or checkout; select a system/uv-managed Python.')
+        if os.name=='nt' and 'windowsapps' in {part.lower() for part in base.parts}:raise ValueError('Store Python is not qualified; install uv-managed Python 3.12 in the host shell.')
+        return base
+    base=checked(result.stdout)
+    # The search index loads the sqlite-vec extension, and the Mac service is qualified on framework builds
+    # only. python.org and Xcode Pythons on macOS cannot load SQLite extensions and uv's own build is not a
+    # framework: on a Mac, Homebrew's Python is the one that is both. Elsewhere uv's build replaces a base
+    # that cannot load extensions.
+    def usable(candidate):
+        return run([str(candidate),'-I','-c',BASE_PROBE],source_app=source_app,env=environment,capture_output=True,text=True,encoding='utf-8',timeout=60).returncode==0
+    if not usable(base):
+        if sys.platform=='darwin':
+            base=next((checked(item) for item in MAC_FRAMEWORK_PYTHONS if Path(item).is_file() and usable(item)),None)
+            if base is None:raise ValueError('This Mac has no Python 3.12 that can run both the service and the search index. Install Homebrew Python (brew install python@3.12) and run this again.')
+        else:
+            run([str(tool),'python','install','3.12'],source_app=source_app,env=environment,capture_output=True,text=True,encoding='utf-8',check=True,timeout=600)
+            base=checked(run([str(tool),'python','find','--managed-python','--no-project','--no-python-downloads','3.12'],
+                             source_app=source_app,env=environment,capture_output=True,text=True,encoding='utf-8',check=True,timeout=60).stdout)
     environment_path=Path(repo)/'.venv'
     if environment_path.exists():
         if environment_path.is_symlink() or environment_path.is_junction() or environment_path.resolve().parent!=Path(repo).resolve():raise ValueError('Linked environment cannot be reprovisioned.')
@@ -234,6 +255,59 @@ def read(path):
 
 
 def digest(data):return None if data is None else hashlib.sha256(data).hexdigest()
+
+
+def _linked(path):
+    path=Path(path)
+    return any(part.is_symlink() or (hasattr(part,'is_junction') and part.is_junction()) for part in (path,*path.parents))
+
+
+def _real(path,home):
+    """Instruction and skill files may be links to one shared copy; follow them only inside the home folder."""
+    path=Path(path);real=path.resolve()
+    if not real.is_relative_to(Path(home).resolve()):
+        raise ValueError('Instruction file leaves the home folder; preserve it and select a regular file there: '+str(path))
+    # An ordinary path keeps its spelling; a link or a path with ".." is replaced by where it really is.
+    return real if _linked(path) or '..' in path.parts else path
+
+
+def block_file(path,home,imports=False,shared=()):
+    """The one file this assistant loads the managed block from, or the file to add it to.
+
+    Claude Code also loads files named as @path, so a block kept in a shared rules file is
+    refreshed there and never duplicated. With no block yet, a loaded file that another
+    selected assistant also writes (shared) receives the one block."""
+    first=_real(path,home);texts={};loaded=[];outside=set();queue=[(first,0)]
+    while queue:
+        current,depth=queue.pop(0)
+        if current in loaded:continue
+        loaded.append(current)
+        try:data=read(current) if current not in outside else (current.read_bytes() if current.is_file() and current.stat().st_size<=MAX_CONFIG else None)
+        except (ValueError,OSError):
+            if depth:continue  # An imported path that is not a plain file is not ours to manage.
+            raise
+        if data is None:continue
+        texts[current]=data.decode('utf-8-sig',errors='replace')
+        if not imports or depth>=5:continue
+        fenced=False
+        for line in texts[current].splitlines():
+            if line.lstrip().startswith('```'):fenced=not fenced
+            if fenced:continue  # Claude Code does not import from inside a code block.
+            for name in re.findall(r'(?:^|\s)@([^\s`]+)',line):
+                target=Path(home)/name[2:] if name.startswith('~/') else Path(name)
+                if not target.is_absolute():target=current.parent/target
+                try:queue.append((_real(target,home),depth+1))
+                except ValueError:
+                    # Outside the home folder: read to see what the assistant loads, never written.
+                    try:beyond=target.resolve()
+                    except OSError:continue
+                    outside.add(beyond);queue.append((beyond,depth+1))
+                except OSError:pass
+    holders=[item for item,text in texts.items() if BEGIN in text]
+    if len(holders)>1:raise ValueError('The managed protocol block is loaded from more than one file; keep one: '+', '.join(map(str,holders)))
+    if holders and holders[0] in outside:raise ValueError('The managed protocol block is loaded from outside the home folder and is not refreshed there: '+str(holders[0]))
+    wanted={_path(item) for item in shared}
+    return holders[0] if holders else next((item for item in loaded if _path(item) in wanted),first)
 
 
 def json_object(data):
@@ -315,25 +389,41 @@ def desktop_path(home,explicit=None,skip=False):
     return None
 
 
-def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,desktop=None,skip_desktop=False):
+def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,desktop=None,skip_desktop=False,skill=None):
     root=Path(root).resolve();home=Path(home or Path.home());python=Path(python)
     selected=set(CLIENTS if selected is None else selected)
     if not selected<=set(CLIENTS):raise ValueError('Unrecognized client selection.')
     specs={'command':str(python),'args':[str(root/'app/brain_client.py')]}
-    targets=[]
-    if 'claude-code' in selected:targets.append(('claude-code',home/'.claude.json','json'))
+    targets=[];records=[];skipped=[];claimed=set()
+    def shared(client,path,kind,locate):
+        # An instruction or skill file that cannot be managed safely (it leaves the home folder, or
+        # the block is loaded twice) is left alone and reported. It never stops the rest of the
+        # plan or an update; check_setup.py then shows what that assistant still lacks.
+        try:located=locate()
+        except ValueError as error:skipped.append({'client':client,'path':str(path),'reason':str(error)});return None
+        targets.append((client,located,kind));return located
+    codex_block=shared('codex',home/'.codex/AGENTS.md','protocol',lambda:block_file(home/'.codex/AGENTS.md',home)) if 'codex' in selected else None
+    codex_rows=targets[:];targets.clear()  # Claude Code is planned first; a file both share is then written once.
+    if 'claude-code' in selected:
+        targets.append(('claude-code',home/'.claude.json','json'))
+        shared('claude-code',home/'.claude/CLAUDE.md','protocol',lambda:block_file(home/'.claude/CLAUDE.md',home,True,[codex_block] if codex_block else ()))
+        if skill is not None:shared('claude-code',home/'.claude/skills/second-brain/SKILL.md','skill',lambda:_real(home/'.claude/skills/second-brain/SKILL.md',home))
     if 'claude-desktop' in selected:
         path=desktop_path(home,desktop,skip_desktop)
         if path is not None:targets.append(('claude-desktop',path,'json'))
-    if 'codex' in selected:targets.extend([('codex',home/'.codex/config.toml','toml'),('codex',home/'.codex/AGENTS.md','protocol')])
+    if 'codex' in selected:
+        targets.extend([('codex',home/'.codex/config.toml','toml'),*codex_rows])
+        if skill is not None:shared('codex',home/'.codex/skills/second-brain/SKILL.md','skill',lambda:_real(home/'.codex/skills/second-brain/SKILL.md',home))
     if 'hooks' in selected:targets.append(('hooks',home/'.claude/settings.json','hooks'))
-    records=[];skipped=[]
     for client,path,kind in targets:
+        # One shared rules or skill file can serve several assistants; write it once.
+        if _path(path) in claimed:skipped.append({'client':client,'path':str(path),'reason':'shared file already planned'});continue
+        claimed.add(_path(path))
         before=read(path)
         if refresh and before is None:skipped.append({'client':client,'path':str(path),'reason':'absent; refresh creates no client file'});continue
         # Declined clients are never opened. Malformed unrelated existing files
         # without an owned entry remain byte-for-byte untouched in refresh mode.
-        if refresh and kind!='protocol':
+        if refresh and kind not in ('protocol','skill'):
             try:
                 if kind=='toml':
                     import tomllib
@@ -374,6 +464,7 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
                 if last<first:raise ValueError('Managed protocol marker order is invalid: '+str(path))
                 after=content[:first]+block+content[last+len(END):]
             else:after=content.rstrip()+'\n\n'+block+'\n'
+        elif kind=='skill':after=skill
         else:
             data=json_object(before);hooks=data.get('hooks',{})
             if not isinstance(hooks,dict):raise ValueError('Invalid hooks object: '+str(path))
@@ -423,8 +514,14 @@ def authorize_plan(value,*,selected=None,desktop=None,skip_desktop=False):
     home=Path.home();selected=set(CLIENTS if selected is None else selected)
     allowed={}
     if not selected<=set(CLIENTS):raise ValueError('Unrecognized client selection.')
-    if 'claude-code' in selected:allowed['claude-code']={_path(home/'.claude.json')}
-    if 'codex' in selected:allowed['codex']={_path(home/'.codex/config.toml'),_path(home/'.codex/AGENTS.md')}
+    def inside(locate):
+        try:return {_path(locate())}
+        except ValueError:return set()  # Not manageable, so never an authorized write target.
+    codex_block=inside(lambda:block_file(home/'.codex/AGENTS.md',home)) if 'codex' in selected else set()
+    if 'claude-code' in selected:
+        allowed['claude-code']=({_path(home/'.claude.json')}|inside(lambda:block_file(home/'.claude/CLAUDE.md',home,True,codex_block))
+                                |inside(lambda:_real(home/'.claude/skills/second-brain/SKILL.md',home)))
+    if 'codex' in selected:allowed['codex']={_path(home/'.codex/config.toml')}|codex_block|inside(lambda:_real(home/'.codex/skills/second-brain/SKILL.md',home))
     if 'hooks' in selected:allowed['hooks']={_path(home/'.claude/settings.json')}
     if 'claude-desktop' in selected:
         target=desktop_path(home,desktop,skip_desktop)

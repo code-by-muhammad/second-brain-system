@@ -148,8 +148,10 @@ def test_uv_uses_one_absolute_find_result_for_sync(tmp_path,monkeypatch):
         return subprocess.CompletedProcess(command,0,str(base)+'\n')
     monkeypatch.setattr(helpers,'run',run)
     helpers.provision(repo,root,str(uv))
-    assert len(calls)==2 and calls[1][-2:]==['--python',str(base)] and not any('install' in command for command in calls)
+    # find, a probe of that base for SQLite extension loading, then sync on the same base.
+    assert len(calls)==3 and calls[2][-2:]==['--python',str(base)] and not any('install' in command for command in calls)
     assert calls[0][1:]==['python','find','--system','--no-project','--no-python-downloads','3.12']
+    assert calls[1][0]==str(base) and 'enable_load_extension' in calls[1][-1]
 
 
 @pytest.mark.parametrize('location',['checkout','runtime'])
@@ -176,12 +178,12 @@ def test_provision_preserves_cached_venv_and_refuses_configured_runtime(tmp_path
     monkeypatch.setattr(helpers,'run',run)
     if configured:
         with pytest.raises(ValueError,match='configured service'):helpers.provision(repo,root,str(uv))
-        assert len(calls)==1 and (environment/'preserve-marker').read_bytes()==b'previous venv'
+        assert len(calls)==2 and (environment/'preserve-marker').read_bytes()==b'previous venv'  # find and the base probe
         assert not list(repo.glob('.venv-quarantined-*'))
     else:
         helpers.provision(repo,root,str(uv))
         saved=list(repo.glob('.venv-quarantined-*'))
-        assert len(calls)==2 and len(saved)==1 and (saved[0]/'preserve-marker').read_bytes()==b'previous venv'
+        assert len(calls)==3 and len(saved)==1 and (saved[0]/'preserve-marker').read_bytes()==b'previous venv'
         assert not environment.exists()
 
 
@@ -198,11 +200,11 @@ def test_forward_updater_parent_must_be_outside_target_venv(tmp_path,monkeypatch
     monkeypatch.setattr(helpers,'run',run)
     if caller=='target':
         with pytest.raises(ValueError,match='outside the target venv'):helpers.provision(repo,root,str(uv))
-        assert len(calls)==1 and (target/'preserve-marker').read_bytes()==b'cached target bytes'
+        assert len(calls)==2 and (target/'preserve-marker').read_bytes()==b'cached target bytes'  # find and the base probe
         assert not list(repo.glob('.venv-quarantined-*'))
     else:
         assert helpers.provision(repo,root,str(uv))==target/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
-        assert len(calls)==2 and len(list(repo.glob('.venv-quarantined-*')))==1
+        assert len(calls)==3 and len(list(repo.glob('.venv-quarantined-*')))==1
 
 
 def test_direct_setup_refuses_existing_device_before_provision(tmp_path,monkeypatch):
@@ -225,7 +227,29 @@ def test_uv_failure_installs_then_finds_before_sync(tmp_path,monkeypatch):
         return subprocess.CompletedProcess(command,1 if len(calls)==1 else 0,str(base)+'\n')
     monkeypatch.setattr(helpers,'run',run)
     helpers.provision(repo,root,str(uv))
-    assert [command[1:3] for command in calls]==[['python','find'],['python','install'],['python','find'],['sync','--locked']]
+    assert [command[1:3] for command in calls]==[['python','find'],['python','install'],['python','find'],['-I','-c'],['sync','--locked']]
+
+
+@pytest.mark.parametrize('platform',['linux','darwin','darwin-none'])
+def test_base_that_cannot_run_the_index_is_replaced(tmp_path,monkeypatch,platform):
+    """Such a base runs the service with a dead index. Elsewhere uv's build replaces it; a Mac needs a framework build."""
+    repo=tmp_path/'checkout';repo.mkdir();root=tmp_path/'runtime';tools=tmp_path/'tools';tools.mkdir()
+    uv=tools/'uv.exe';uv.touch();system=tools/'system-python.exe';system.touch();better=tools/'better-python.exe';better.touch();calls=[]
+    monkeypatch.setattr(helpers,'host_context',lambda:None);monkeypatch.setattr(helpers,'service_python',lambda value:None)
+    monkeypatch.setattr(helpers.sys,'platform',platform.split('-')[0])
+    monkeypatch.setattr(helpers,'MAC_FRAMEWORK_PYTHONS',(str(tools/'absent'),) if platform=='darwin-none' else (str(tools/'absent'),str(better)))
+    def run(command,**kwargs):
+        calls.append(command)
+        if command[0]==str(system):return subprocess.CompletedProcess(command,1,'','AttributeError')
+        return subprocess.CompletedProcess(command,0,str(better if '--managed-python' in command else system)+'\n')
+    monkeypatch.setattr(helpers,'run',run)
+    if platform=='darwin-none':
+        with pytest.raises(ValueError,match='brew install python@3.12'):helpers.provision(repo,root,str(uv))
+        assert not any('sync' in command for command in calls)
+        return
+    helpers.provision(repo,root,str(uv))
+    expected=[['python','find'],['-I','-c'],['python','install'],['python','find'],['sync','--locked']] if platform=='linux' else [['python','find'],['-I','-c'],['-I','-c'],['sync','--locked']]
+    assert [command[1:3] for command in calls]==expected and calls[-1][-2:]==['--python',str(better)]
 
 
 def test_planted_uv_refused(tmp_path):

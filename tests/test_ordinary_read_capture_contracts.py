@@ -119,6 +119,8 @@ def fake_sync_git(monkeypatch, expected_text):
             assert not graft.exists()
             assert not any(p.is_symlink() or p.is_junction() for p in (graft, *graft.parents))
             output = '.git/info/grafts\n'
+        elif args == ['config', '--get', 'remote.origin.url']:
+            output = 'synthetic-remote\n'
         elif args and args[0] == 'diff':
             output = ''
         elif args == ['ls-files', '--stage', '-z']:

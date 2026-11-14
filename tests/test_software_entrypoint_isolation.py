@@ -24,6 +24,7 @@ product=namespace['main'].__globals__
 support=product['setup_helpers']()
 support.host_context=lambda:None
 product['setup_helpers']=lambda:support
+product['local_timezone']=lambda explicit=None:'UTC'  # This bare environment has no timezone packages; the lane is about imports.
 selected = release / ('.venv/Scripts/python.exe' if os.name == 'nt' else '.venv/bin/python')
 real_run = subprocess.run
 def record(value):
@@ -94,7 +95,7 @@ def documented_prefix(route, release, python):
             if line.startswith('"<retained v0.1.7 Python>" '):
                 prefix=line.split(' --root ',1)[0]
                 arguments=shlex.split(prefix)
-                assert arguments==['<retained v0.1.7 Python>','-I','-B','<verified v0.2.5 checkout>/update.py'], 'Unexpected updater entrypoint or flags.'
+                assert arguments==['<retained v0.1.7 Python>','-I','-B','<verified v0.2.6 checkout>/update.py'], 'Unexpected updater entrypoint or flags.'
                 if route=='updater-help':choices.append([str(python),'-I','-B',str(release/'update.py')])
             elif line.startswith(('& $retainedPython ','& $recoveryPython ')):
                 variable,checkout=('$retainedPython','$brainRelease') if line.startswith('& $retainedPython ') else ('$recoveryPython','$originalCheckout')

@@ -68,6 +68,8 @@ def test_failures_are_terminal_without_raw_diagnostics(brain,monkeypatch,failure
 
 def test_stall_uses_monotonic_db_progress(brain,monkeypatch):
     ready()
+    # A second note that was never indexed: coverage cannot verify, so the stall stays a failure.
+    (cfg.VAULT/'01-Projects/Unindexed.md').write_text('Synthetic unindexed note.',encoding='utf-8')
     clock=[100.]
     monkeypatch.setattr(bootstrap.time,'monotonic',lambda:clock[0])
     def run(command,log,overall,tick,cleanup):
@@ -79,6 +81,84 @@ def test_stall_uses_monotonic_db_progress(brain,monkeypatch):
     result=bootstrap.main(overall_seconds=20,stall_seconds=5)
     assert result['status']=='needs attention' and result['error_type']=='IndexStalled'
     assert result['elapsed_seconds']==6
+
+
+def test_stall_after_complete_work_is_verified_by_coverage(brain,monkeypatch):
+    """Upstream ends a run with a slow orphan cleanup that changes no row; coverage decides."""
+    ready()
+    clock=[100.]
+    monkeypatch.setattr(bootstrap.time,'monotonic',lambda:clock[0])
+    def run(command,log,overall,tick,cleanup):
+        tick()
+        clock[0]+=6
+        tick()
+        pytest.fail('A stalled index must be cancelled.')
+    monkeypatch.setattr(bootstrap,'_run_reindex',run)
+    result=bootstrap.main(overall_seconds=20,stall_seconds=5)
+    assert result['status']=='verified' and result['process_exit'] is None and 'error_type' not in result
+
+
+def _coverage(status,**vectors):
+    return {'status':status,'inventory_stable':True,'coverage':{'manifest_sha256':'synthetic-manifest','missing':0,'stale':0},
+            'vectors':{'invalid':0,'zero_chunk_entities':0,'stale_search_sources':0,'chunks':10,**vectors}}
+
+
+def _moving_runner(seen,monkeypatch,embedding=True,observed=True):
+    """Each child run changes row counts, as a real pass does; embedding says whether vectors are among them."""
+    monkeypatch.setattr(bootstrap.index,'inventory',lambda check:({'01-Projects/Source.md':{}},'synthetic-manifest'))
+    counts=iter(range(1,10000))
+    def rows(deadline=None):
+        value=next(counts)
+        return {'entity':value,'search_vector_embeddings_rowids':value if embedding else 5}
+    monkeypatch.setattr(bootstrap,'_counts',rows)
+    def run(command,log,overall,tick,cleanup):
+        seen.append(command[4:])
+        if observed is True or (observed=='first' and len(seen)==1):tick();tick()
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(bootstrap,'_run_reindex',run)
+
+
+def test_retry_repeats_while_a_large_note_is_still_being_embedded(brain,monkeypatch):
+    ready()
+    seen=[];reports=iter([_coverage('needs review',invalid=5),_coverage('needs review',invalid=2),_coverage('verified')])
+    _moving_runner(seen,monkeypatch)
+    monkeypatch.setattr(bootstrap.index,'status',lambda deadline=None:next(reports))
+    result=bootstrap.main(retry=True,full=True,overall_seconds=20,stall_seconds=5)
+    assert seen==[['--full'],[],[]] and result['passes']==3 and result['status']=='verified'
+
+
+def test_one_large_note_stays_one_defect_while_its_chunks_grow(brain,monkeypatch):
+    """256 chunks per run: the defect count does not move, the chunk count does."""
+    ready()
+    seen=[];reports=iter([_coverage('needs review',invalid=1) for number in range(6)]+[_coverage('verified')])
+    # After the first pass a child may finish between two samples: progress is measured, not only observed.
+    _moving_runner(seen,monkeypatch,observed='first')
+    monkeypatch.setattr(bootstrap.index,'status',lambda deadline=None:next(reports))
+    result=bootstrap.main(overall_seconds=20,stall_seconds=5)
+    assert len(seen)==7 and result['status']=='verified'
+
+
+def test_retry_stops_when_more_passes_do_not_help(brain,monkeypatch):
+    ready()
+    seen=[]
+    _moving_runner(seen,monkeypatch,embedding=False)
+    monkeypatch.setattr(bootstrap.index,'status',lambda deadline=None:_coverage('needs review',invalid=4))
+    result=bootstrap.main(overall_seconds=20,stall_seconds=5)
+    assert seen==[[],[]] and result['status']=='needs review'  # Two passes without measured gain end the run.
+
+
+def test_search_rows_lost_to_a_lock_are_rebuilt_once_then_embedded(brain,monkeypatch):
+    ready()
+    seen=[];lost=_coverage('needs review',invalid=2,zero_chunk_entities=1,stale_search_sources=1)
+    reports=iter([lost,_coverage('needs review',invalid=1,zero_chunk_entities=1),_coverage('verified')])
+    def run(command,log,overall,tick,cleanup):
+        seen.append(command[4:])
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(bootstrap,'_run_reindex',run)
+    monkeypatch.setattr(bootstrap.index,'inventory',lambda check:({'01-Projects/Source.md':{}},'synthetic-manifest'))
+    monkeypatch.setattr(bootstrap.index,'status',lambda deadline=None:next(reports))
+    result=bootstrap.main(overall_seconds=20,stall_seconds=5)
+    assert seen==[[],['--full','--search'],[]] and result['status']=='verified'
 
 
 def test_missing_vector_tables_do_not_hide_entity_progress(brain,monkeypatch):
