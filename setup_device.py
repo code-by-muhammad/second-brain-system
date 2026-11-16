@@ -165,11 +165,15 @@ def again(name):
     return shlex.join(parts)
 
 
-def select_wiki(device,name):
-    """Record the first usable program of that assistant. Returns nothing, or the reason none was recorded."""
+def select_wiki(device,name,keep_existing=False):
+    """Record the first usable program of that assistant. Returns nothing, or the reason none was recorded.
+
+    keep_existing: the choice was not asked for by name, so a record that appeared in the meantime stays."""
     reason=name+' was not found as a program on this device. Install it, check that "'+name+' --version" answers in a new terminal, and run this again.'
     for program in wiki_programs(name):
-        result=brain(device,'wiki','configure-model','--executable',program,capture=True)
+        result=brain(device,'wiki','configure-model','--executable',program,*(['--keep-existing'] if keep_existing else []),capture=True)
+        if result.returncode==0 and '"status": "kept' in (result.stdout or ''):
+            say('A wiki assistant was recorded in the meantime; it was left as it is.');return None
         if result.returncode==0:
             say('Wiki assistant selected: '+program+'. No page is built until you run: brain_cli.py wiki run');return None
         reason=program+': '+((result.stderr or '').strip().splitlines() or [''])[-1][:300]
@@ -192,7 +196,7 @@ def offer_wiki(device,assume):
         return ('No wiki assistant is selected: neither claude nor codex was found as a program'
                 +(' (Windows needs claude.exe or codex.exe, not a .cmd or .ps1 launcher)' if os.name=='nt' else '')
                 +'. Wiki pages are optional. To build them, install one, check that its --version answers in a new terminal, and run this again with --wiki claude or --wiki codex:\n  '+again('claude')+'\n  '+again('codex'))
-    reason=select_wiki(device,found[0])
+    reason=select_wiki(device,found[0],keep_existing=True)
     return 'The wiki assistant was not selected. '+reason+'\nAfter fixing that, run:\n  '+again(found[0]) if reason else ''
 
 

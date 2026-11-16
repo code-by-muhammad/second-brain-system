@@ -2460,10 +2460,13 @@ def _model_choice(provider,model=None,effort=None):
         level=effort
     return chosen,level
 
-def configure_model(executable,model=None,effort=None):
+def configure_model(executable,model=None,effort=None,keep_existing=False):
     cfg.require_maintainer()
     with FileLock(str(cfg.STATE/'wiki-worker.lock'),timeout=1):
         cfg.write_admission()
+        # A choice nobody asked for by name never replaces one that is there, however it got there meanwhile.
+        if keep_existing and os.path.lexists(cfg.STATE/'wiki-model.json'):
+            return {'status':'kept; a wiki assistant is already recorded and nothing was changed'}
         identity=_native_model_identity(executable)
         identity['model'],identity['effort']=_model_choice(identity['provider'],model,effort)
         # Only an explicit choice is stored; a device without one follows the defaults of the release it runs.

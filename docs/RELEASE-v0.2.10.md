@@ -22,7 +22,8 @@ Recording an assistant calls no model and sends nothing. Pages are still built o
 
 ## Boundaries to review
 
-- **A recorded choice is never replaced** by the plain command, including one whose program has gone; the check warns and `--wiki` changes it. This keeps an owner's model and effort choice.
+- **A recorded choice is never replaced** by the plain command, including one whose program has gone; the check warns and `--wiki` changes it. This keeps an owner's model and effort choice. The automatic recording goes through `wiki configure-model --keep-existing`, which looks again under the wiki lock, so a choice recorded while setup was waiting for an answer also stays.
+- **Only setup repeats the remedy at its end,** and only when it could not settle the assistant. A `--check` run, a record the runtime refuses and a stopped earlier run show the remedy in the `wiki assistant` line alone.
 - **The exit status is unchanged.** A maintainer without an assistant ends with status 0 and a WARN line, because wiki pages are optional. Only an assistant that was asked for with `--wiki` and could not be recorded fails the run, as before.
 - **A maintainer that does not want wiki pages** and has both programs, or neither, keeps the WARN line. There is no switch to silence it.
 - **The check does not start the assistant.** It cannot tell whether the program is signed in or the model is available to that account; that shows at `wiki run`.

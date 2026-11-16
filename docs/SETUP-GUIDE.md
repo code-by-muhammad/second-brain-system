@@ -115,7 +115,7 @@ MANUAL claude-code: fresh chat: ...
 
 - [ ] No line says FAIL.
 - [ ] Every WARN line is understood. "search index: needs review" right after a new install only means the first index is still running. Run the check again after a few minutes.
-- [ ] Maintainer only: the `wiki assistant` line is PASS and names the program. WARN means no wiki pages are built on this device; the line and the end of the command's output say what to run (section 7). Leave it only if you do not want wiki pages.
+- [ ] Maintainer only: the `wiki assistant` line is PASS and names the program. WARN means no wiki pages are built on this device, and the line itself says what to run (section 7). When setup could not settle the assistant by itself, it also repeats that at the end of its output; a run with `--check` does not. Leave it only if you do not want wiki pages.
 - [ ] MANUAL, each assistant: open a new chat and ask it to call `brain_context`, search for a note you know, read it, and save one test capture. All four must work.
 - [ ] MANUAL, restart: restart the computer, log in, wait a minute, then run the command again with `--check`. The service must be running without help.
 

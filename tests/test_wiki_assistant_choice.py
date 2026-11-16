@@ -445,6 +445,9 @@ def test_only_an_explicit_choice_is_stored_and_an_invalid_stored_one_calls_no_mo
     identity=w.configure_model(str(tool),'claude-sonnet-5-5','medium')['executable']
     assert json.loads((cfg.STATE/'wiki-model.json').read_text())=={'format':1,'executable':str(tool),'model':'claude-sonnet-5-5','effort':'medium'}
     assert (w._model_executable()['model'],w._model_executable()['effort'])==('claude-sonnet-5-5','medium')
+    # A choice that was not asked for by name leaves a record that is already there exactly as it is.
+    kept=(cfg.STATE/'wiki-model.json').read_bytes()
+    assert w.configure_model(str(tool),keep_existing=True)['status'].startswith('kept') and (cfg.STATE/'wiki-model.json').read_bytes()==kept
     with pytest.raises(ValueError,match='Effort'):w.configure_model(str(tool),effort='none')
     assert json.loads((cfg.STATE/'wiki-model.json').read_text())['effort']=='medium'  # A refused choice changes nothing.
     (cfg.STATE/'wiki-model.json').write_text(json.dumps({'format':1,'executable':str(tool),'model':'x y'}),encoding='utf-8')
@@ -521,6 +524,8 @@ def test_maintainer_without_a_wiki_assistant_gets_the_only_one_installed_and_is_
     setup=setup_module_under_test();suffix='.exe' if os.name=='nt' else '';calls=[]
     class Done:returncode=0;stderr='';stdout=''
     monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:calls.append(arguments) or Done())
+    # How this run's command ends once --wiki codex is added, in the quoting of the shell the guide uses here.
+    tail="'--yes' '--wiki' 'codex'" if os.name=='nt' else '--yes --wiki codex'
     both=tmp_path/'both';one=tmp_path/'one';none=tmp_path/'none'
     for folder,names in ((both,('claude','codex')),(one,('codex',)),(none,())):
         folder.mkdir()
@@ -530,7 +535,7 @@ def test_maintainer_without_a_wiki_assistant_gets_the_only_one_installed_and_is_
     # One assistant: recorded without a question, and the run says which and that nothing is built yet.
     monkeypatch.setenv('PATH',str(one))
     assert setup.offer_wiki({},True)==''
-    assert calls==[('wiki','configure-model','--executable',only)]
+    assert calls==[('wiki','configure-model','--executable',only,'--keep-existing')]
     said=capsys.readouterr().out
     assert 'codex is the only assistant program found' in said and 'Wiki assistant selected: '+only in said and 'No page is built' in said
     # Two assistants and nobody to ask: nothing is recorded and the exact next command is named.
@@ -544,18 +549,23 @@ def test_maintainer_without_a_wiki_assistant_gets_the_only_one_installed_and_is_
     # Two assistants and a person at the terminal: the answer decides; anything else selects nothing.
     monkeypatch.setattr(setup.sys.stdin,'isatty',lambda:True,raising=False)
     monkeypatch.setattr('builtins.input',lambda prompt:' Claude ')
-    assert setup.offer_wiki({},False)=='' and calls[0][-1].endswith('claude'+suffix) and len(calls)==1
+    assert setup.offer_wiki({},False)=='' and calls[0][-2].endswith('claude'+suffix) and calls[0][-1]=='--keep-existing' and len(calls)==1
     calls.clear();monkeypatch.setattr('builtins.input',lambda prompt:'')
     assert 'both installed' in setup.offer_wiki({},False) and calls==[]
     # None, with only a launcher present: named as missing, nothing recorded.
     monkeypatch.setenv('PATH',str(none))
-    assert 'neither claude nor codex was found' in setup.offer_wiki({},True) and calls==[] and setup.offer_wiki({},True).rstrip().endswith('--yes --wiki codex')
+    assert 'neither claude nor codex was found' in setup.offer_wiki({},True) and calls==[] and setup.offer_wiki({},True).rstrip().endswith(tail)
     # The only assistant is refused by the runtime: its reason is passed on.
+    # A choice recorded by someone else while the question was open is kept, and the run says so.
+    class Kept:returncode=0;stderr='';stdout='{\n  "status": "kept; a wiki assistant is already recorded and nothing was changed"\n}'
+    monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Kept())
+    monkeypatch.setenv('PATH',str(one));capsys.readouterr()
+    assert setup.offer_wiki({},True)=='' and 'left as it is' in capsys.readouterr().out
     class Refused:returncode=1;stderr='ValueError: Model executable must be outside runtime';stdout=''
     monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Refused())
     monkeypatch.setenv('PATH',str(one))
     said=setup.offer_wiki({},True)
-    assert 'was not selected' in said and 'must be outside runtime' in said and said.rstrip().endswith('--yes --wiki codex')
+    assert 'was not selected' in said and 'must be outside runtime' in said and said.rstrip().endswith(tail)
 
 
 def test_check_names_the_wiki_assistant_of_a_maintainer_and_warns_when_none_is_recorded_or_a_run_stopped(tmp_path):
