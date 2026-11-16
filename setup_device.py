@@ -91,8 +91,11 @@ def make_maintainer(device,root,vault,service):
     def owned_by_another():
         if not control.exists():return False
         # The same reading as the running service (brain_settings): one exact line, or the note is not this device's.
-        try:text=control.read_bytes().decode('utf-8').replace('\r\n','\n').replace('\r','\n')
+        try:
+            with control.open('rb') as stream:raw=stream.read(2_000_001)
+            text=raw.decode('utf-8').replace('\r\n','\n').replace('\r','\n')
         except (OSError,UnicodeError):return True
+        if len(raw)>2_000_000:return True  # The service refuses a note of that size.
         owner=re.search(r'(?m)^maintainer_device_id: ([a-z0-9-]+)$',text)
         return owner is None or owner.group(1)!=device['device_id']
     refusal='These notes already name another device as maintainer in '+CONTROL+'. Only one device may be; nothing was changed.'

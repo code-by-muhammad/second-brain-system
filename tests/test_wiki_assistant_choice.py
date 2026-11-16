@@ -415,6 +415,8 @@ def test_role_change_reads_the_owner_as_the_service_does_and_skips_the_stop_of_a
     (vault/setup.CONTROL).parent.mkdir(parents=True);(vault/setup.CONTROL).write_text('---\nmaintainer_device_id: abc123  \n---\n',encoding='utf-8')
     with pytest.raises(SystemExit,match='another device'):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
     assert calls==[] and json.loads((root/'device.json').read_text())['role']=='capture'
+    (vault/setup.CONTROL).write_text('---\nmaintainer_device_id: abc123\n---\n'+'x'*2_000_000,encoding='utf-8')  # Too large for the service.
+    with pytest.raises(SystemExit,match='another device'):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
     (vault/setup.CONTROL).unlink()
     setup.make_maintainer({**device,'root':str(root)},root,vault,True)  # No service state files: nothing to stop.
     assert calls==[] and json.loads((root/'device.json').read_text())['role']=='maintainer'
