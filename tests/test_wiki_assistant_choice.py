@@ -111,7 +111,7 @@ def setup_module_under_test():
 def test_installed_capture_device_becomes_maintainer_only_when_the_notes_have_none(tmp_path,monkeypatch):
     setup=setup_module_under_test()
     root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir();(root/'state/service-pids.json').write_text('{}')
-    device={'device_id':'abc123','role':'capture','version':'0.2.8','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
+    device={'device_id':'abc123','role':'capture','version':'0.2.9','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8')
     calls=[]
     class Done:returncode=0;stderr='';stdout=''
@@ -248,7 +248,7 @@ def test_finished_batch_cleanup_also_removes_the_saved_claude_reply(brain):
 def test_role_change_keeps_a_record_that_was_already_written_and_refuses_beside_a_running_service(tmp_path,monkeypatch):
     setup=setup_module_under_test()
     root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir();(root/'state/service-pids.json').write_text('{}')
-    device={'device_id':'abc123','role':'capture','version':'0.2.8','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
+    device={'device_id':'abc123','role':'capture','version':'0.2.9','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8')
     class Done:returncode=0;stderr='';stdout=''
     monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Done())
@@ -278,7 +278,7 @@ def test_codex_skill_link_that_leads_nowhere_does_not_become_a_second_copy(tmp_p
 def test_failed_stop_before_a_role_change_starts_the_service_again_and_says_so(tmp_path,monkeypatch):
     setup=setup_module_under_test()
     root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir();(root/'state/service-pids.json').write_text('{}')
-    device={'device_id':'abc123','role':'capture','version':'0.2.8','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
+    device={'device_id':'abc123','role':'capture','version':'0.2.9','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8');calls=[]
     class Result:
         def __init__(self,code):self.returncode=code;self.stderr='OwnershipError: Stop failed during native end; no empty-runtime receipt.';self.stdout=''
@@ -321,7 +321,7 @@ def test_interrupt_that_arrives_while_the_model_is_being_started_still_ends_it(b
 def test_role_change_refuses_a_linked_ownership_note_and_undoes_a_note_written_just_before_an_interrupt(tmp_path,monkeypatch):
     setup=setup_module_under_test()
     root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir();(root/'state/service-pids.json').write_text('{}')
-    device={'device_id':'abc123','role':'capture','version':'0.2.8','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
+    device={'device_id':'abc123','role':'capture','version':'0.2.9','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8')
     class Done:returncode=0;stderr='';stdout=''
     monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Done())
@@ -381,12 +381,12 @@ def test_setup_reports_why_an_existing_registration_did_not_start_and_registers_
     def refused(device,*arguments,capture=False):
         calls.append(arguments[1]);return Result(1,'OwnershipError: Startup readiness failed (OwnershipError: no heartbeat)')
     monkeypatch.setattr(setup,'brain',refused)
-    with pytest.raises(SystemExit,match='could not start: OwnershipError: Startup readiness failed'):setup.start_service({},'0.2.8',Path('/r'),registered=True)
+    with pytest.raises(SystemExit,match='could not start: OwnershipError: Startup readiness failed'):setup.start_service({},'0.2.9',Path('/r'),registered=True)
     assert calls==['start']
     calls.clear();answers=iter([Result(1,'OwnershipError: The owned Mac registration is not installed.'),Result(0),Result(0)])
     monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:calls.append(arguments[1]) or next(answers))
     monkeypatch.setattr(setup,'wait_running',lambda *args,**kwargs:True)
-    setup.start_service({},'0.2.8',Path('/r'),registered=True)
+    setup.start_service({},'0.2.9',Path('/r'),registered=True)
     assert calls==['start','install','start']
 
 
@@ -403,7 +403,7 @@ def test_windows_link_to_a_program_with_another_name_is_not_offered(tmp_path,mon
 def test_role_change_reads_the_owner_as_the_service_does_and_skips_the_stop_of_an_unregistered_service(tmp_path,monkeypatch):
     setup=setup_module_under_test()
     root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir()
-    device={'device_id':'abc123','role':'capture','version':'0.2.8','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
+    device={'device_id':'abc123','role':'capture','version':'0.2.9','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8');calls=[]
     class Result:
         def __init__(self,code,text=''):self.returncode=code;self.stderr=text;self.stdout=''
@@ -454,3 +454,24 @@ def test_only_an_explicit_choice_is_stored_and_an_invalid_stored_one_calls_no_mo
         with pytest.raises(ValueError,match='Invalid model configuration'):w._model_executable()
     (cfg.STATE/'wiki-model.json').write_text(json.dumps({'format':1,'executable':str(tool),'other':1}),encoding='utf-8')
     with pytest.raises(ValueError,match='Invalid model configuration'):w._model_executable()
+
+
+def test_supervisor_sets_an_oversized_log_aside_before_its_writer_starts(brain,monkeypatch):
+    import brain_supervisor as supervisor
+    logs=cfg.ROOT/'logs';logs.mkdir(parents=True,exist_ok=True)
+    big=logs/'service-maintenance.log';big.write_bytes(b'x'*(supervisor.LOG_LIMIT+1))
+    small=logs/'service-server.log';small.write_bytes(b'kept\n')
+    assert supervisor._fresh_log('service-maintenance.log')==big and not big.exists()
+    previous=logs/'service-maintenance.log.previous'
+    assert previous.stat().st_size==supervisor.LOG_LIMIT+1 and previous not in set(logs.glob('service-*.log'))
+    assert supervisor._fresh_log('service-server.log')==small and small.read_bytes()==b'kept\n'
+    # A second oversized log replaces the one kept before: two files at most, never a growing series.
+    big.write_bytes(b'y'*(supervisor.LOG_LIMIT+2));supervisor._fresh_log('service-maintenance.log')
+    assert previous.stat().st_size==supervisor.LOG_LIMIT+2 and sorted(path.name for path in logs.iterdir() if 'maintenance' in path.name)==['service-maintenance.log.previous']
+
+
+def test_maintenance_pass_is_started_with_only_its_error_output_in_the_log():
+    """What the pass prints is its saved status again; on a large vault that filled the log within a day."""
+    source=(SOURCE/'app/brain_supervisor.py').read_text(encoding='utf-8')
+    line=next(row for row in source.splitlines() if "app/brain_maintenance.py" in row and 'Popen' in row)
+    assert 'stdout=subprocess.DEVNULL' in line and 'stderr=log' in line

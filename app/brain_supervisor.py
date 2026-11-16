@@ -24,6 +24,20 @@ def _bootstrap_admitted():
     except Timeout:
         return False
 
+LOG_LIMIT=5_000_000
+
+def _fresh_log(name):
+    """The log a worker is about to be started with. Only this supervisor starts the workers, and it calls this
+    when the one that wrote the log is not running, so an oversized log can be set aside without a live writer.
+    One previous file is kept; the name no longer matches the service-*.log pattern that maintenance measures."""
+    path=cfg.ROOT/'logs'/name
+    try:
+        if not path.is_symlink() and path.is_file() and path.stat().st_size>LOG_LIMIT:
+            import os
+            os.replace(path,path.with_name(name+'.previous'))
+    except OSError:pass  # A log that cannot be set aside is appended to as before; maintenance reports its size.
+    return path
+
 def _publish_owned(owned):
     # Publish only this process's live handles, never adopt cached registry PIDs.
     import os
@@ -54,12 +68,12 @@ def main(owned=None):
                         identity=processes.listener_identity()
                         listening=identity is not None
                         if not listening and (child is None or child.poll() is not None):
-                            with (cfg.ROOT/'logs/service-server.log').open('ab') as log:
+                            with _fresh_log('service-server.log').open('ab') as log:
                                 child=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_server.py')],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
                                 owned['server']=child
                                 _publish_owned(owned)
                         if listening and (bootstrap is None or bootstrap.poll() is not None) and _bootstrap_admitted():
-                            with (cfg.ROOT/'logs/service-bootstrap.log').open('ab') as log:
+                            with _fresh_log('service-bootstrap.log').open('ab') as log:
                                 bootstrap=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_index_bootstrap.py')],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
                                 owned['bootstrap']=bootstrap
                                 _publish_owned(owned)
@@ -69,8 +83,11 @@ def main(owned=None):
                             maintenance=None
                             _publish_owned(owned)
                         if listening and maintenance is None and time.monotonic()-owned.get('_maintenance_finished',0)>900:
-                            with (cfg.ROOT/'logs/service-maintenance.log').open('ab') as log:
-                                maintenance=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_maintenance.py')],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
+                            with _fresh_log('service-maintenance.log').open('ab') as log:
+                                # The pass saves its whole result to maintenance-status.json. What it prints is that
+                                # same result again, tens of kilobytes on a large vault every fifteen minutes, so
+                                # only its error output is kept in the log.
+                                maintenance=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_maintenance.py')],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=log,env=cfg.environment(),**cfg.child_options())
                                 owned['maintenance']=maintenance
                                 _publish_owned(owned)
                         service.write_heartbeat('ready' if listening else 'starting')
