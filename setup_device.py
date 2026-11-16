@@ -100,7 +100,10 @@ def make_maintainer(device,root,vault,service):
     if service:
         result=brain(device,'service','stop','--wait-seconds','300',capture=True)
         if result.returncode:
-            raise SystemExit('The service could not be stopped: '+((result.stderr or '').strip().splitlines() or [''])[-1][:300]+'\nNothing was changed.')
+            # A stop that fails late may already have ended the service, so it is started again before giving up.
+            back=brain(device,'service','start',capture=True).returncode==0
+            raise SystemExit('The service could not be stopped cleanly: '+((result.stderr or '').strip().splitlines() or [''])[-1][:300]+'\nThe role was not changed. '
+                             +('The service was started again.' if back else 'The service may be stopped. Start it with: "'+device['python']+'" "'+str(root/'app/brain_cli.py')+'" service start'))
     created=False
     try:
         # Another device may have claimed the notes while the service was stopping.

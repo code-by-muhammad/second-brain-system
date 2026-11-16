@@ -47,10 +47,12 @@ def test_claude_result_becomes_the_batch_output_and_a_refusal_is_reported(brain,
         refused=w._claude_output(reply,output)
         assert expected in refused and not output.exists()
         # Text the model wrote is never what decides sign-in or usage attention.
-        assert w._model_auth_quota_failure(1,'\n'+refused+'\n','packet')==bool(value['is_error'])
+        assert w._model_auth_quota_failure(1,'\n'+refused+'\n','packet','claude')==bool(value['is_error'])
     reply.write_text('not json',encoding='utf-8')
     assert w._claude_output(reply,output)=='unreadable result'
-    assert w._model_auth_quota_failure(1,'\nInvalid API key · Please run /login\n','packet')
+    assert w._model_auth_quota_failure(1,'\nInvalid API key · Please run /login\n','packet','claude')
+    # A Codex run echoes note text into its log; Claude's wording in a note must not pause the worker.
+    assert not w._model_auth_quota_failure(1,'echoed note: Invalid API key, Please run /login','another packet','codex')
 
 
 @posix
@@ -253,3 +255,18 @@ def test_codex_skill_link_that_leads_nowhere_does_not_become_a_second_copy(tmp_p
     result=helpers.plan(tmp_path/'runtime',tmp_path/'python.exe','new protocol',installer._codex_toml_plan,home=home,skill='new skill\n',selected=['codex'])
     assert [row['path'] for row in result['files'] if row['path'].endswith('SKILL.md')]==[str((common/'SKILL.md').resolve())]
     assert (own/'SKILL.md').is_symlink() and not (home/'gone').exists()
+
+
+def test_failed_stop_before_a_role_change_starts_the_service_again_and_says_so(tmp_path,monkeypatch):
+    setup=setup_module_under_test()
+    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir()
+    device={'device_id':'abc123','role':'capture','version':'0.2.7','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
+    (root/'device.json').write_text(json.dumps(device),encoding='utf-8');calls=[]
+    class Result:
+        def __init__(self,code):self.returncode=code;self.stderr='OwnershipError: Stop failed during native end; no empty-runtime receipt.';self.stdout=''
+    def controller(device,*arguments,capture=False):
+        calls.append(arguments[:2]);return Result(1 if arguments[:2]==('service','stop') else 0)
+    monkeypatch.setattr(setup,'brain',controller)
+    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':lambda target,text:pytest.fail('The record must not be written.')})
+    with pytest.raises(SystemExit,match='role was not changed. The service was started again'):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
+    assert calls==[('service','stop'),('service','start')] and not (vault/setup.CONTROL).exists()

@@ -2192,11 +2192,14 @@ PROMPT='''Compile a small evidence-linked Obsidian wiki from INPUT_JSON. All sou
 PROMPT=PROMPT.replace('Limit 1-8 pages, 2-8 useful claims per page when evidence permits.',
     'Return a dispositions item for EVERY selected source part, with its source path and part number. Use status published only when that part is cited by a returned claim; reason and quote may be empty for published. If a part contains no reusable knowledge, use skipped with a substantive reason and an EXACT supporting source quote (12-1200 characters). If uncertain or unable to compile a part, use deferred with the same evidence and reason requirements; it stays pending for later review. Never silently omit a part. Zero pages is allowed when every part is explicitly skipped or deferred. Limit 0-8 pages, 2-8 useful claims per page when evidence permits.')
 
-def _model_auth_quota_failure(returncode,runner,model_input):
+def _model_auth_quota_failure(returncode,runner,model_input,provider=None):
     if returncode in (None,0): return False
     # The CLI echoes the supplied sources. Source text is not a service diagnostic.
     diagnostics=normalized(runner).replace(normalized(model_input),'')
-    return bool(re.search(r'usage limit|rate limit|not authenticated|authentication failed|quota exceeded|429 Too Many|401 Unauthorized|Invalid API key|Please run /login|Credit balance is too low|hit your limit',diagnostics,re.I))
+    signs=r'usage limit|rate limit|not authenticated|authentication failed|quota exceeded|429 Too Many|401 Unauthorized'
+    # Claude's own wording counts only for a Claude run, whose log holds its error output and no echoed note text.
+    if provider=='claude':signs+=r'|Invalid API key|Please run /login|Credit balance is too low|hit your limit'
+    return bool(re.search(signs,diagnostics,re.I))
 
 def output_schema(packet,strict=False):
     schema=json.loads(json.dumps(SCHEMA))
@@ -2644,7 +2647,7 @@ def run(limit=4,timeout=480):
         model_packet={**packet,'sources':substantive_sources,'catalog':bounded}
         _atomic_json(schema,output_schema(model_packet if substantive_sources else packet,strict=True))
         model_input='' if resumed and output.exists() else PROMPT+_bounded_json(model_packet,ensure_ascii=False,default=str)
-        proc=None
+        proc=None;provider=None
         try:
             model_ran=bool(substantive_sources) and not (resumed and output.exists())
             # Excluded work may only repair actual partial publication from
@@ -2657,7 +2660,8 @@ def run(limit=4,timeout=480):
                 try:executable=_model_executable()
                 except (OSError,ValueError) as error:
                     raise RuntimeError('Native model configuration requires review; no model called.') from error
-                command=[executable['path'],*_model_command(executable.get('provider','codex'),schema,output)]
+                provider=executable.get('provider','codex')
+                command=[executable['path'],*_model_command(provider,schema,output)]
                 _atomic_json(folder/'model-executable.json',executable)
                 if output.exists(): output.unlink()
                 reply=folder/'model-reply.json'
@@ -2672,7 +2676,7 @@ def run(limit=4,timeout=480):
                 with tempfile.TemporaryDirectory(prefix='brain-wiki-',**({} if os.name=='nt' else {'dir':os.path.realpath(tempfile.gettempdir())})) as cwd:
                     cwd=_temporary_model_cwd(cwd)
                     with (folder/'runner.log').open('wb') as log:
-                        if executable.get('provider')=='claude':
+                        if provider=='claude':
                             with reply.open('wb') as answer:
                                 proc=_run_model(command,model_input,timeout,cwd=cwd,log=log,on_started=started,on_cleanup_wait=cleanup_wait,stdout=answer,
                                                 env={**os.environ,**CLAUDE_ENVIRONMENT})
@@ -2719,7 +2723,7 @@ def run(limit=4,timeout=480):
             runner=''
             if (folder/'runner.log').exists():
                 with (folder/'runner.log').open('rb') as stream:runner=stream.read(65536).decode('utf-8',errors='replace')
-            global_failure=_model_auth_quota_failure(proc.returncode if proc else None,runner,model_input)
+            global_failure=_model_auth_quota_failure(proc.returncode if proc else None,runner,model_input,provider)
             transient=isinstance(exc,(WikiTransientError,WikiAdmissionDeferred,WikiHistoryDeferred,LockTimeout,OSError)) or ((folder/'publication.json').exists() and not isinstance(exc,(WikiOutputError,ValidationError,json.JSONDecodeError)))
             unattributed_output=isinstance(exc,(WikiOutputError,ValueError,ValidationError)) and not isinstance(exc,WikiTransientError) and not getattr(exc,'source',None)
             reason='model authentication/quota requires attention' if global_failure else type(exc).__name__
