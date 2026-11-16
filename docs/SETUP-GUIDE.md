@@ -1,4 +1,4 @@
-# Second Brain setup guide (v0.2.7)
+# Second Brain setup guide (v0.2.8)
 
 One guide for a new device and for a device that already runs Second Brain. One command does the setup. This guide tells you what to prepare, what the command asks, and how to read its result.
 
@@ -20,7 +20,7 @@ A chat without terminal access cannot do this.
 
 Release identity. The command in section 3 checks the commit for you. These values let you check by hand:
 
-- Tag `v0.2.7`, commit `{{COMMIT}}`
+- Tag `v0.2.8`, commit `{{COMMIT}}`
 - `release-manifest.json` SHA256 `{{MANIFEST_SHA256}}`
 - Software repository: `https://github.com/code-by-muhammad/second-brain-system` (public, no account needed)
 
@@ -54,13 +54,13 @@ You do not need a GitHub account. Sync is an optional extra (section 6).
 Mac and Linux:
 
 ```text
-curl -fsSLO https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.7/setup.sh && echo "{{SETUP_SH_SHA256}}  setup.sh" | shasum -a 256 -c - && sh setup.sh
+curl -fsSLO https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.8/setup.sh && echo "{{SETUP_SH_SHA256}}  setup.sh" | shasum -a 256 -c - && sh setup.sh
 ```
 
 Windows PowerShell:
 
 ```text
-iwr https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.7/setup.ps1 -OutFile setup.ps1; if ((Get-FileHash setup.ps1 -Algorithm SHA256).Hash -ne '{{SETUP_PS1_SHA256}}') { throw 'setup.ps1 does not match this guide' }; powershell -ExecutionPolicy Bypass -File .\setup.ps1
+iwr https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.8/setup.ps1 -OutFile setup.ps1; if ((Get-FileHash setup.ps1 -Algorithm SHA256).Hash -ne '{{SETUP_PS1_SHA256}}') { throw 'setup.ps1 does not match this guide' }; powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
 The first part downloads a small script and checks it against the hash in this guide. The script then downloads the exact release, checks its commit, and starts the setup. A release folder kept from an earlier run must match that fresh download exactly. If any check fails, nothing runs.
@@ -103,7 +103,7 @@ Running the same command again is safe. On a device that is already set up it ad
 The command ends with a list like this:
 
 ```text
-PASS   service health: status running, version 0.2.7
+PASS   service health: status running, version 0.2.8
 PASS   Claude Code connection: points at this runtime
 PASS   Claude Code instructions: one block matching this release
 PASS   Claude Code skill: ...
@@ -193,6 +193,7 @@ Who writes the pages. The assistant program you choose, Claude (`claude`) or Cod
 - [ ] Each run sends a few of your notes to that assistant's provider under your own account, and it counts against your plan's usage. This is the only part of Second Brain that sends note text to a model provider on its own. (The optional sync in section 6 sends notes to your own repository, and what your assistant reads through the brain tools in a chat is part of that chat.) Decide first whether you want that.
 - [ ] Choose the assistant: run the one command with `--wiki claude` or `--wiki codex`. It records the program's path and calls nothing.
 - [ ] Windows needs the real program file (`claude.exe` or `codex.exe`), not a `.cmd` or `.ps1` launcher. If the choice is refused for that reason, install the assistant's native Windows version.
+- [ ] Model: Claude builds with `claude-opus-5-5` and Codex with `gpt-6.1-sol`, both at reasoning effort `high`, on every device, whatever that account's own default is. These are large models, so a run uses a noticeable part of a plan's usage. To use another: `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" wiki configure-model --executable "<path the setup printed>" --model <name> --effort <level>`. A model your account cannot use makes the run fail with the assistant's own message and publishes nothing.
 - [ ] Build: `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" wiki run`. In PowerShell put `& ` in front of a command that starts with a quote. One run handles a few notes. Run it again for more. `wiki status` shows what is waiting.
 - [ ] The assistant gets the note text on standard input, with none of your assistant settings, no hooks and no MCP servers. Claude runs with no tools at all and with file attachments switched off. Codex cannot be started with no tools: it runs in its read-only sandbox with every tool it lets us switch off switched off, and a few remain. If you want the model to have no tools at all, choose Claude. One exception with Claude: settings that an administrator manages for the whole computer (a company policy) still apply, including any hooks in them, and such a hook sees the note text. Second Brain cannot switch those off. On a company-managed computer, ask the administrator first or use Codex. Its answer is checked against the notes before any page is written.
 - [ ] "model authentication/quota requires attention": sign in to that assistant, or wait for your usage to reset, then run `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" wiki retry` and `wiki run` again.

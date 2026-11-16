@@ -26,6 +26,8 @@ def main():
     parser.add_argument('--overall-seconds',type=int,default=28800)
     parser.add_argument('--stall-seconds',type=int,default=1800)
     parser.add_argument('--hold-id')
+    parser.add_argument('--model',help='wiki configure-model: model name instead of the release default.')
+    parser.add_argument('--effort',help='wiki configure-model: reasoning effort instead of the release default.')
     parser.add_argument('--executable',help='Absolute path of the claude or codex program for maintainer wiki configure-model; no model call.')
     parser.add_argument('--snapshot')
     parser.add_argument('--since',type=int)
@@ -60,7 +62,7 @@ def main():
             result=wiki.reset_retries()
         elif args.action=='configure-model':
             if not args.executable:parser.error('wiki configure-model requires --executable.')
-            result=wiki.configure_model(args.executable)
+            result=wiki.configure_model(args.executable,args.model,args.effort)
         else: parser.error('wiki action: status, run, prepare, lint, retry, migrate, relink, configure-model')
     elif args.command=='git':
         import brain_git

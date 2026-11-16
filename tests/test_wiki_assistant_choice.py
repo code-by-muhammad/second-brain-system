@@ -29,11 +29,11 @@ def test_assistant_is_the_selected_program_name_and_nothing_else():
 def test_both_commands_take_the_prompt_on_standard_input_with_no_tools_and_no_user_settings(tmp_path):
     schema=tmp_path/'schema.json';schema.write_text('{"type":"object"}',encoding='utf-8');output=tmp_path/'output.json'
     claude=w._model_command('claude',schema,output)
-    assert claude[:3]==['-p','--output-format','json'] and claude[claude.index('--json-schema')+1]=='{"type":"object"}'
+    assert claude[:7]==['-p','--model','claude-opus-5-5','--effort','high','--output-format','json'] and claude[claude.index('--json-schema')+1]=='{"type":"object"}'
     assert claude[claude.index('--tools')+1]=='' and claude[claude.index('--setting-sources')+1]==''
     assert {'--strict-mcp-config','--disable-slash-commands','--no-session-persistence'}<=set(claude)
     codex=w._model_command('codex',schema,output)
-    assert codex[0]=='exec' and codex[-1]=='-' and codex[codex.index('-o')+1]==str(output) and {'features.shell_tool=false','features.hooks=false','features.view_image=false','features.computer_use=false','features.code_mode=false','features.code_mode_host=false','features.sleep_tool=false','features.goals=false','hide_agent_reasoning=true'}<=set(codex)
+    assert codex[:5]==['exec','-m','gpt-6.1-sol','-c','model_reasoning_effort="high"'] and codex[-1]=='-' and codex[codex.index('-o')+1]==str(output) and {'features.shell_tool=false','features.hooks=false','features.view_image=false','features.computer_use=false','features.code_mode=false','features.code_mode_host=false','features.sleep_tool=false','features.goals=false','hide_agent_reasoning=true'}<=set(codex)
 
 
 def test_claude_result_becomes_the_batch_output_and_a_refusal_is_reported(brain,tmp_path):
@@ -111,7 +111,7 @@ def setup_module_under_test():
 def test_installed_capture_device_becomes_maintainer_only_when_the_notes_have_none(tmp_path,monkeypatch):
     setup=setup_module_under_test()
     root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir();(root/'state/service-pids.json').write_text('{}')
-    device={'device_id':'abc123','role':'capture','version':'0.2.7','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
+    device={'device_id':'abc123','role':'capture','version':'0.2.8','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8')
     calls=[]
     class Done:returncode=0;stderr='';stdout=''
@@ -248,7 +248,7 @@ def test_finished_batch_cleanup_also_removes_the_saved_claude_reply(brain):
 def test_role_change_keeps_a_record_that_was_already_written_and_refuses_beside_a_running_service(tmp_path,monkeypatch):
     setup=setup_module_under_test()
     root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir();(root/'state/service-pids.json').write_text('{}')
-    device={'device_id':'abc123','role':'capture','version':'0.2.7','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
+    device={'device_id':'abc123','role':'capture','version':'0.2.8','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8')
     class Done:returncode=0;stderr='';stdout=''
     monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Done())
@@ -278,7 +278,7 @@ def test_codex_skill_link_that_leads_nowhere_does_not_become_a_second_copy(tmp_p
 def test_failed_stop_before_a_role_change_starts_the_service_again_and_says_so(tmp_path,monkeypatch):
     setup=setup_module_under_test()
     root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir();(root/'state/service-pids.json').write_text('{}')
-    device={'device_id':'abc123','role':'capture','version':'0.2.7','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
+    device={'device_id':'abc123','role':'capture','version':'0.2.8','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8');calls=[]
     class Result:
         def __init__(self,code):self.returncode=code;self.stderr='OwnershipError: Stop failed during native end; no empty-runtime receipt.';self.stdout=''
@@ -321,7 +321,7 @@ def test_interrupt_that_arrives_while_the_model_is_being_started_still_ends_it(b
 def test_role_change_refuses_a_linked_ownership_note_and_undoes_a_note_written_just_before_an_interrupt(tmp_path,monkeypatch):
     setup=setup_module_under_test()
     root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir();(root/'state/service-pids.json').write_text('{}')
-    device={'device_id':'abc123','role':'capture','version':'0.2.7','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
+    device={'device_id':'abc123','role':'capture','version':'0.2.8','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8')
     class Done:returncode=0;stderr='';stdout=''
     monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Done())
@@ -381,12 +381,12 @@ def test_setup_reports_why_an_existing_registration_did_not_start_and_registers_
     def refused(device,*arguments,capture=False):
         calls.append(arguments[1]);return Result(1,'OwnershipError: Startup readiness failed (OwnershipError: no heartbeat)')
     monkeypatch.setattr(setup,'brain',refused)
-    with pytest.raises(SystemExit,match='could not start: OwnershipError: Startup readiness failed'):setup.start_service({},'0.2.7',Path('/r'),registered=True)
+    with pytest.raises(SystemExit,match='could not start: OwnershipError: Startup readiness failed'):setup.start_service({},'0.2.8',Path('/r'),registered=True)
     assert calls==['start']
     calls.clear();answers=iter([Result(1,'OwnershipError: The owned Mac registration is not installed.'),Result(0),Result(0)])
     monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:calls.append(arguments[1]) or next(answers))
     monkeypatch.setattr(setup,'wait_running',lambda *args,**kwargs:True)
-    setup.start_service({},'0.2.7',Path('/r'),registered=True)
+    setup.start_service({},'0.2.8',Path('/r'),registered=True)
     assert calls==['start','install','start']
 
 
@@ -403,7 +403,7 @@ def test_windows_link_to_a_program_with_another_name_is_not_offered(tmp_path,mon
 def test_role_change_reads_the_owner_as_the_service_does_and_skips_the_stop_of_an_unregistered_service(tmp_path,monkeypatch):
     setup=setup_module_under_test()
     root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir()
-    device={'device_id':'abc123','role':'capture','version':'0.2.7','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
+    device={'device_id':'abc123','role':'capture','version':'0.2.8','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8');calls=[]
     class Result:
         def __init__(self,code,text=''):self.returncode=code;self.stderr=text;self.stdout=''
@@ -420,3 +420,34 @@ def test_role_change_reads_the_owner_as_the_service_does_and_skips_the_stop_of_a
     (vault/setup.CONTROL).unlink()
     setup.make_maintainer({**device,'root':str(root)},root,vault,True)  # No service state files: nothing to stop.
     assert calls==[] and json.loads((root/'device.json').read_text())['role']=='maintainer'
+
+
+def test_each_assistant_has_one_fixed_model_and_effort_unless_the_owner_selects_another(brain,tmp_path):
+    assert w._model_choice('claude')==('claude-opus-5-5','high') and w._model_choice('codex')==('gpt-6.1-sol','high')
+    schema=tmp_path/'schema.json';schema.write_text('{}',encoding='utf-8')
+    claude=w._model_command('claude',schema,tmp_path/'o.json','claude-sonnet-5-5','medium')
+    assert claude[claude.index('--model')+1]=='claude-sonnet-5-5' and claude[claude.index('--effort')+1]=='medium'
+    codex=w._model_command('codex',schema,tmp_path/'o.json',None,'low')
+    assert codex[codex.index('-m')+1]=='gpt-6.1-sol' and 'model_reasoning_effort="low"' in codex
+    # A name or level that could carry anything else onto the command line is refused.
+    for model in ('','x'*81,'opus --dangerously-skip-permissions','a"b','-m'):
+        with pytest.raises(ValueError,match='Model name'):w._model_choice('claude',model)
+    for provider,effort in (('claude','none'),('codex','max'),('codex','high" -c x="'),('claude','HIGH')):
+        with pytest.raises(ValueError,match='Effort'):w._model_choice(provider,effort=effort)
+
+
+@posix
+def test_only_an_explicit_choice_is_stored_and_an_invalid_stored_one_calls_no_model(brain,tmp_path):
+    tool=program(tmp_path/'tools','claude')
+    identity=w.configure_model(str(tool))['executable']
+    assert (identity['model'],identity['effort'])==('claude-opus-5-5','high')
+    assert json.loads((cfg.STATE/'wiki-model.json').read_text())=={'format':1,'executable':str(tool)}
+    identity=w.configure_model(str(tool),'claude-sonnet-5-5','medium')['executable']
+    assert json.loads((cfg.STATE/'wiki-model.json').read_text())=={'format':1,'executable':str(tool),'model':'claude-sonnet-5-5','effort':'medium'}
+    assert (w._model_executable()['model'],w._model_executable()['effort'])==('claude-sonnet-5-5','medium')
+    with pytest.raises(ValueError,match='Effort'):w.configure_model(str(tool),effort='none')
+    assert json.loads((cfg.STATE/'wiki-model.json').read_text())['effort']=='medium'  # A refused choice changes nothing.
+    (cfg.STATE/'wiki-model.json').write_text(json.dumps({'format':1,'executable':str(tool),'model':'x y'}),encoding='utf-8')
+    with pytest.raises(ValueError,match='Model name'):w._model_executable()
+    (cfg.STATE/'wiki-model.json').write_text(json.dumps({'format':1,'executable':str(tool),'other':1}),encoding='utf-8')
+    with pytest.raises(ValueError,match='Invalid model configuration'):w._model_executable()

@@ -2442,12 +2442,33 @@ def _native_model_identity(executable):
         raise ValueError('Model executable changed during identity checking.')
     return {'path':str(path),'sha256':checksum.hexdigest(),'bytes':size,'provider':_model_provider(selected)}
 
-def configure_model(executable):
+# The model and reasoning effort each assistant builds the wiki with, unless the owner selects another with
+# wiki configure-model. Fixed here so that every device builds from the same notes with the same model,
+# whatever that account's or that program's own default happens to be.
+MODEL_DEFAULTS={'claude':('claude-opus-5-5','high'),'codex':('gpt-6.1-sol','high')}
+MODEL_EFFORTS={'claude':('low','medium','high','xhigh','max'),'codex':('none','minimal','low','medium','high','xhigh')}
+
+def _model_choice(provider,model=None,effort=None):
+    """The model name and effort for one assistant: the given ones when valid, else the defaults."""
+    chosen,level=MODEL_DEFAULTS[provider]
+    if model is not None:
+        if not isinstance(model,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,79}',model):
+            raise ValueError('Model name must be 1-80 letters, digits, dots, colons, brackets, underscores or hyphens.')
+        chosen=model
+    if effort is not None:
+        if effort not in MODEL_EFFORTS[provider]:raise ValueError('Effort for '+provider+' must be one of: '+', '.join(MODEL_EFFORTS[provider])+'.')
+        level=effort
+    return chosen,level
+
+def configure_model(executable,model=None,effort=None):
     cfg.require_maintainer()
     with FileLock(str(cfg.STATE/'wiki-worker.lock'),timeout=1):
         cfg.write_admission()
         identity=_native_model_identity(executable)
-        _atomic_json(cfg.STATE/'wiki-model.json',{'format':1,'executable':identity['path'] if os.name=='nt' else executable})
+        identity['model'],identity['effort']=_model_choice(identity['provider'],model,effort)
+        # Only an explicit choice is stored; a device without one follows the defaults of the release it runs.
+        chosen={name:value for name,value in (('model',model),('effort',effort)) if value is not None}
+        _atomic_json(cfg.STATE/'wiki-model.json',{'format':1,'executable':identity['path'] if os.name=='nt' else executable,**chosen})
     return {'status':'configured; native CLI/authentication and compiler acceptance remain pending','executable':identity}
 
 def _model_executable():
@@ -2458,9 +2479,12 @@ def _model_executable():
     with path.open('rb') as stream:raw=stream.read(16385)
     if len(raw)>16384:raise ValueError('Model configuration exceeds its bound.')
     value=json.loads(raw)
-    if not isinstance(value,dict) or set(value)!={'format','executable'} or type(value['format']) is not int or value['format']!=1:
+    if (not isinstance(value,dict) or not {'format','executable'}<=set(value)<={'format','executable','model','effort'}
+            or type(value['format']) is not int or value['format']!=1):
         raise ValueError('Invalid model configuration; no model called.')
-    return _native_model_identity(value['executable'])
+    identity=_native_model_identity(value['executable'])
+    identity['model'],identity['effort']=_model_choice(identity['provider'],value.get('model'),value.get('effort'))
+    return identity
 
 def _temporary_model_cwd(value):
     path=Path(value)
@@ -2561,17 +2585,18 @@ CODEX_FEATURES_OFF=('shell_tool','unified_exec','apps','plugins','hooks','view_i
                     'browser_use_external','browser_use_full_cdp_access','computer_use','multi_agent','skill_search','tool_suggest',
                     'code_mode','code_mode_only','code_mode_host','sleep_tool','goals','multi_agent_v2')
 
-def _model_command(provider,schema,output):
+def _model_command(provider,schema,output,model=None,effort=None):
     """Both programs get the prompt on standard input, no tools, no user settings and no MCP servers."""
+    model,effort=_model_choice(provider,model,effort)
     if provider=='claude':
-        return ['-p','--output-format','json','--json-schema',schema.read_text(encoding='utf-8'),'--tools','','--strict-mcp-config',
+        return ['-p','--model',model,'--effort',effort,'--output-format','json','--json-schema',schema.read_text(encoding='utf-8'),'--tools','','--strict-mcp-config',
                 '--setting-sources','','--settings','{"disableAllHooks":true}','--disable-slash-commands','--no-session-persistence','--system-prompt',CLAUDE_SYSTEM]
     # Codex has no switch for an empty tool list. Every feature known to hand the model a tool, a file, an image,
     # a browser, a code runner or another agent is switched off by name, and its reasoning is kept out of the log
     # that is read for diagnostics. What the model still sees depends on the Codex version; the read-only sandbox
     # with approvals set to never is what bounds it.
     off=[item for name in CODEX_FEATURES_OFF for item in ('-c','features.'+name+'=false')]
-    return ['exec','--ignore-user-config','--ignore-rules','--skip-git-repo-check','--ephemeral',
+    return ['exec','-m',model,'-c','model_reasoning_effort="'+effort+'"','--ignore-user-config','--ignore-rules','--skip-git-repo-check','--ephemeral',
             '--sandbox','read-only','-c','approval_policy="never"',*off,'-c','hide_agent_reasoning=true',
             '-c','web_search="disabled"','--output-schema',str(schema),'-o',str(output),'-']
 
@@ -2692,7 +2717,7 @@ def run(limit=4,timeout=480):
                 except (OSError,ValueError) as error:
                     raise RuntimeError('Native model configuration requires review; no model called.') from error
                 provider=executable.get('provider','codex')
-                command=[executable['path'],*_model_command(provider,schema,output)]
+                command=[executable['path'],*_model_command(provider,schema,output,executable.get('model'),executable.get('effort'))]
                 _atomic_json(folder/'model-executable.json',executable)
                 if output.exists(): output.unlink()
                 reply=folder/'model-reply.json'
