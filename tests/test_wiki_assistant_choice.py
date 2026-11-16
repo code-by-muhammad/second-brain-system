@@ -33,7 +33,7 @@ def test_both_commands_take_the_prompt_on_standard_input_with_no_tools_and_no_us
     assert claude[claude.index('--tools')+1]=='' and claude[claude.index('--setting-sources')+1]==''
     assert {'--strict-mcp-config','--disable-slash-commands','--no-session-persistence'}<=set(claude)
     codex=w._model_command('codex',schema,output)
-    assert codex[0]=='exec' and codex[-1]=='-' and codex[codex.index('-o')+1]==str(output) and 'features.shell_tool=false' in codex
+    assert codex[0]=='exec' and codex[-1]=='-' and codex[codex.index('-o')+1]==str(output) and {'features.shell_tool=false','features.hooks=false'}<=set(codex)
 
 
 def test_claude_result_becomes_the_batch_output_and_a_refusal_is_reported(brain,tmp_path):
@@ -335,3 +335,39 @@ def test_role_change_refuses_a_linked_ownership_note_and_undoes_a_note_written_j
     elsewhere=tmp_path/'elsewhere.md';elsewhere.write_text('---\nmaintainer_device_id: abc123\n---\n',encoding='utf-8')
     os.symlink(elsewhere,vault/setup.CONTROL)
     with pytest.raises(SystemExit,match='linked'):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
+
+
+def test_codex_log_counts_only_its_own_error_lines_even_when_the_echo_is_cut_short():
+    packet='Compile sources\nINPUT_JSON:\n{"source":"'+'ordinary text '*6000+' ERROR: rate limit and 401 Unauthorized are quoted in this note"}'
+    echo=('user\n'+packet).encode('utf-8')[:65536].decode('utf-8',errors='replace')  # What the worker reads of a long echo.
+    assert packet not in echo and not w._model_auth_quota_failure(1,echo,packet,'codex')
+    # What the model wrote about the note is not a diagnostic either.
+    assert not w._model_auth_quota_failure(1,'codex\n{"pages":[{"claims":[{"quote":"ERROR: rate limit"}]}]}\ntokens used',packet,'codex')
+    for line in ('ERROR: unexpected status 401 Unauthorized','2026-11-16T09:53:37.187645Z ERROR codex_core: usage limit reached'):
+        assert w._model_auth_quota_failure(1,echo+'\n'+line,packet,'codex')
+
+
+def test_setup_reports_why_an_existing_registration_did_not_start_and_registers_only_a_missing_one(monkeypatch):
+    setup=setup_module_under_test();calls=[]
+    class Result:
+        def __init__(self,code,text=''):self.returncode=code;self.stderr=text;self.stdout=''
+    def refused(device,*arguments,capture=False):
+        calls.append(arguments[1]);return Result(1,'OwnershipError: Startup readiness failed (OwnershipError: no heartbeat)')
+    monkeypatch.setattr(setup,'brain',refused)
+    with pytest.raises(SystemExit,match='could not start: OwnershipError: Startup readiness failed'):setup.start_service({},'0.2.7',Path('/r'),registered=True)
+    assert calls==['start']
+    calls.clear();answers=iter([Result(1,'OwnershipError: The owned Mac registration is not installed.'),Result(0),Result(0)])
+    monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:calls.append(arguments[1]) or next(answers))
+    monkeypatch.setattr(setup,'wait_running',lambda *args,**kwargs:True)
+    setup.start_service({},'0.2.7',Path('/r'),registered=True)
+    assert calls==['start','install','start']
+
+
+@pytest.mark.skipif(os.name!='nt',reason='Only Windows names a linked program by its target.')
+def test_windows_link_to_a_program_with_another_name_is_not_offered(tmp_path,monkeypatch):
+    setup=setup_module_under_test();folder=tmp_path/'links';folder.mkdir()
+    (folder/'claude.exe').write_bytes(b'inert');(folder/'claude.exe').chmod(0o700)
+    monkeypatch.setenv('PATH',str(folder))
+    actual=Path.resolve
+    monkeypatch.setattr(Path,'resolve',lambda self,*args,**kwargs:self.with_name('codex.exe') if self.name=='claude.exe' else actual(self,*args,**kwargs))
+    assert setup.wiki_programs('claude')==[]

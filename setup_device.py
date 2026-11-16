@@ -137,6 +137,8 @@ def wiki_programs(name):
         # A relative PATH entry means the current folder, where a tool may have been planted.
         if not Path(folder).is_absolute() or not candidate.is_file() or not os.access(candidate,os.X_OK):continue
         program=str(candidate.resolve() if os.name=='nt' else candidate)
+        # A link whose target carries another name would select another assistant than the one asked for.
+        if Path(program).name.lower()!=candidate.name.lower():continue
         if program not in found:found.append(program)
     return found
 
@@ -158,8 +160,12 @@ def wait_running(device,version,seconds=240):
 
 def start_service(device,version,root,registered=False):
     """Register and start the background service, then wait until it answers on this version."""
-    # A registration that already exists is only started; registering over it would be refused.
-    if not (registered and brain(device,'service','start',capture=True).returncode==0):
+    # A registration that already exists is only started; registering over it would be refused and would
+    # hide why the start failed. Only a missing registration is created here.
+    first=brain(device,'service','start',capture=True) if registered else None
+    if first is not None and first.returncode and 'not installed' not in (first.stderr or ''):
+        raise SystemExit('The background service could not start: '+((first.stderr or '').strip().splitlines() or [''])[-1][:400]+'\nFix that cause and run this command again.')
+    if first is None or first.returncode:
         for action in ('install','start'):
             result=brain(device,'service',action,capture=True)
             if result.returncode:

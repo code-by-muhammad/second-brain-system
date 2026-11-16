@@ -2194,8 +2194,13 @@ PROMPT=PROMPT.replace('Limit 1-8 pages, 2-8 useful claims per page when evidence
 
 def _model_auth_quota_failure(returncode,runner,model_input,provider=None):
     if returncode in (None,0): return False
-    # The CLI echoes the supplied sources. Source text is not a service diagnostic.
-    diagnostics=normalized(runner).replace(normalized(model_input),'')
+    # The log of a Codex run mixes the echoed sources, the model's own text and the program's diagnostics, and
+    # only its first part is read. So only a line that begins with an error mark and is not part of the supplied
+    # input counts; that also holds when the echo was cut short. A Claude run's log holds no echo and no model text.
+    given=normalized(model_input);diagnostics=normalized(runner)
+    if provider!='claude':
+        diagnostics='\n'.join(line for line in diagnostics.splitlines()
+                              if re.match(r'(?:\S+\s+)?(?:ERROR|Error|error)\b',line) and line.rstrip('\ufffd') not in given)
     signs=r'usage limit|rate limit|not authenticated|authentication failed|quota exceeded|429 Too Many|401 Unauthorized'
     # Claude's own wording counts only for a Claude run, whose log holds its error output and no echoed note text.
     if provider=='claude':signs+=r'|Invalid API key|Please run /login|Credit balance is too low|hit your limit'
@@ -2550,7 +2555,7 @@ def _model_command(provider,schema,output):
                 '--setting-sources','','--settings','{"disableAllHooks":true}','--disable-slash-commands','--no-session-persistence','--system-prompt',CLAUDE_SYSTEM]
     return ['exec','--ignore-user-config','--ignore-rules','--skip-git-repo-check','--ephemeral',
             '--sandbox','read-only','-c','approval_policy="never"','-c','features.shell_tool=false',
-            '-c','features.apps=false','-c','features.plugins=false','-c','web_search="disabled"','--output-schema',str(schema),'-o',str(output),'-']
+            '-c','features.apps=false','-c','features.plugins=false','-c','features.hooks=false','-c','web_search="disabled"','--output-schema',str(schema),'-o',str(output),'-']
 
 def _claude_output(reply,output):
     """Claude prints one result object; its structured_output becomes the batch output. Returns the error text, if any."""
