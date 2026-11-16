@@ -231,6 +231,9 @@ def start_service(device,version,root,registered=False):
 
 
 def main():
+    # A path may hold characters the console's own encoding lacks; printing it must never end the run.
+    for stream in (sys.stdout,sys.stderr):
+        if hasattr(stream,'reconfigure'):stream.reconfigure(encoding='utf-8',errors='backslashreplace')
     windows=os.name=='nt';home=Path.home()
     parser=argparse.ArgumentParser(description=__doc__,formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--root',default='C:/Second-Brain-System' if windows else str(home/'.local/share/second-brain'),help='Runtime folder.')

@@ -658,3 +658,29 @@ def test_setup_offers_a_wiki_assistant_only_to_a_maintainer_that_has_none_and_re
     assert 'Still open' not in go()[1] and offered==[]
     (root/'state/wiki-model.json').unlink();device('capture')
     assert 'Still open' not in go()[1] and offered==[]
+
+
+def test_setup_and_check_print_a_path_the_console_encoding_lacks_instead_of_stopping(tmp_path,monkeypatch):
+    """A redirected Windows console is often cp1252; an assistant under a user folder with other letters must still be shown."""
+    import io
+    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'app').mkdir(parents=True);(root/'state').mkdir();vault.mkdir()
+    path='/Users/\u674e/tools/codex'
+    (root/'device.json').write_text(json.dumps({'device_id':'abc123','version':'0.2.10','role':'maintainer','python':sys.executable,'vault':str(vault)}),encoding='utf-8')
+    (root/'state/wiki-model.json').write_text('{}',encoding='utf-8')
+    (root/'app/brain_cli.py').write_text('import json,sys\nsys.stdout.reconfigure(encoding="utf-8")\nprint(json.dumps({"status":"selected","executable":{"path":'+json.dumps(path)+',"model":"m","effort":"high"},"worker":{}} if sys.argv[1]=="wiki" else {}))\n',encoding='utf-8')
+    def narrow():
+        raw=io.BytesIO();monkeypatch.setattr(sys,'stdout',io.TextIOWrapper(raw,encoding='cp1252'));return raw
+    spec=importlib.util.spec_from_file_location('check_setup_narrow',SOURCE/'check_setup.py');check=importlib.util.module_from_spec(spec);spec.loader.exec_module(check)
+    raw=narrow();monkeypatch.setattr(sys,'argv',['check_setup.py','--root',str(root),'--home',str(tmp_path/'home'),'--no-service'])
+    assert check.main()==0
+    sys.stdout.flush();assert 'PASS   wiki assistant: '+path+', model m, effort high' in raw.getvalue().decode('utf-8')
+    setup=setup_module_under_test()
+    class Done:returncode=0;stderr='';stdout=''
+    monkeypatch.setattr(setup.runpy,'run_path',lambda found:{'verify':lambda repo:{'version':'0.2.10'}})
+    monkeypatch.setattr(setup,'run',lambda command,capture=False:Done())
+    monkeypatch.setattr(setup,'wait_running',lambda *args,**kwargs:True)
+    monkeypatch.setattr(setup,'offer_wiki',lambda device,assume:'No wiki assistant is selected: '+path)
+    (root/'state/wiki-model.json').unlink()
+    raw=narrow();monkeypatch.setattr(sys,'argv',['setup_device.py','--root',str(root),'--clients','','--yes'])
+    with pytest.raises(SystemExit) as stop:setup.main()
+    sys.stdout.flush();assert stop.value.code==0 and raw.getvalue().decode('utf-8').rstrip().endswith('Still open: No wiki assistant is selected: '+path)
