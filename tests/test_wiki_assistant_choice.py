@@ -33,7 +33,7 @@ def test_both_commands_take_the_prompt_on_standard_input_with_no_tools_and_no_us
     assert claude[claude.index('--tools')+1]=='' and claude[claude.index('--setting-sources')+1]==''
     assert {'--strict-mcp-config','--disable-slash-commands','--no-session-persistence'}<=set(claude)
     codex=w._model_command('codex',schema,output)
-    assert codex[0]=='exec' and codex[-1]=='-' and codex[codex.index('-o')+1]==str(output) and {'features.shell_tool=false','features.hooks=false','features.view_image=false','features.computer_use=false','features.code_mode=false','hide_agent_reasoning=true'}<=set(codex)
+    assert codex[0]=='exec' and codex[-1]=='-' and codex[codex.index('-o')+1]==str(output) and {'features.shell_tool=false','features.hooks=false','features.view_image=false','features.computer_use=false','features.code_mode=false','features.code_mode_host=false','features.sleep_tool=false','features.goals=false','hide_agent_reasoning=true'}<=set(codex)
 
 
 def test_claude_result_becomes_the_batch_output_and_a_refusal_is_reported(brain,tmp_path):

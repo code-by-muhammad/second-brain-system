@@ -2559,15 +2559,17 @@ CLAUDE_SYSTEM='You compile the supplied packet into the requested structured out
 
 CODEX_FEATURES_OFF=('shell_tool','unified_exec','apps','plugins','hooks','view_image','image_generation','browser_use',
                     'browser_use_external','browser_use_full_cdp_access','computer_use','multi_agent','skill_search','tool_suggest',
-                    'code_mode','code_mode_only')
+                    'code_mode','code_mode_only','code_mode_host','sleep_tool','goals','multi_agent_v2')
 
 def _model_command(provider,schema,output):
     """Both programs get the prompt on standard input, no tools, no user settings and no MCP servers."""
     if provider=='claude':
         return ['-p','--output-format','json','--json-schema',schema.read_text(encoding='utf-8'),'--tools','','--strict-mcp-config',
                 '--setting-sources','','--settings','{"disableAllHooks":true}','--disable-slash-commands','--no-session-persistence','--system-prompt',CLAUDE_SYSTEM]
-    # Every Codex feature that hands the model a tool, a file, an image, a browser or another agent is switched
-    # off by name, and its reasoning is kept out of the log that is read for diagnostics.
+    # Codex has no switch for an empty tool list. Every feature known to hand the model a tool, a file, an image,
+    # a browser, a code runner or another agent is switched off by name, and its reasoning is kept out of the log
+    # that is read for diagnostics. What the model still sees depends on the Codex version; the read-only sandbox
+    # with approvals set to never is what bounds it.
     off=[item for name in CODEX_FEATURES_OFF for item in ('-c','features.'+name+'=false')]
     return ['exec','--ignore-user-config','--ignore-rules','--skip-git-repo-check','--ephemeral',
             '--sandbox','read-only','-c','approval_policy="never"',*off,'-c','hide_agent_reasoning=true',
