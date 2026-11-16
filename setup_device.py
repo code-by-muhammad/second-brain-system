@@ -11,7 +11,7 @@ the read-only acceptance check. --yes accepts every default. Nothing is sent any
 import sys
 if __name__=='__main__' and not sys.flags.isolated:
     raise SystemExit('Run this with Python -I from the verified release folder.')
-import argparse, json, os, runpy, shutil, subprocess, time
+import argparse, json, os, re, runpy, shutil, subprocess, time
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
@@ -90,18 +90,25 @@ def make_maintainer(device,root,vault,service):
     control=control_path(vault);existed=control.exists()
     def owned_by_another():
         if not control.exists():return False
-        owner=[line.split(':',1)[1].strip() for line in control.read_text(encoding='utf-8-sig').splitlines() if line.startswith('maintainer_device_id:')]
-        return owner!=[device['device_id']]
+        # The same reading as the running service (brain_settings): one exact line, or the note is not this device's.
+        try:text=control.read_bytes().decode('utf-8').replace('\r\n','\n').replace('\r','\n')
+        except (OSError,UnicodeError):return True
+        owner=re.search(r'(?m)^maintainer_device_id: ([a-z0-9-]+)$',text)
+        return owner is None or owner.group(1)!=device['device_id']
     refusal='These notes already name another device as maintainer in '+CONTROL+'. Only one device may be; nothing was changed.'
     if owned_by_another():raise SystemExit(refusal)
     if (root/'state/service-transaction.json').exists():raise SystemExit('An update is in progress on this device; nothing was changed.')
     record=json.loads((root/'device.json').read_text(encoding='utf-8-sig'))
     if record.get('device_id')!=device['device_id'] or record.get('role')!='capture':raise SystemExit('The device record is not a capture device; nothing was changed.')
     write=runpy.run_path(str(REPO/'install.py'))['atomic']
-    if not service and any((root/'state'/name).exists() for name in ('service-heartbeat.json','service-pids.json','service-control-status.json')):
+    # The service's own state files are the evidence that it was ever registered or run on this device.
+    known=any((root/'state'/name).exists() for name in ('service-heartbeat.json','service-pids.json','service-control-status.json'))
+    if not service and known:
         # A server that is running, or still starting, keeps the old role until it is restarted. Without the
         # service step the change is made only on a device whose service has never run.
         raise SystemExit('This device has a background service. Run this without --no-service so it can be stopped and started around the change; nothing was changed.')
+    # A device whose service was never registered has nothing to stop; the start step after this registers it.
+    service=service and known
     try:
         if service:
             result=brain(device,'service','stop','--wait-seconds','300',capture=True)

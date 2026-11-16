@@ -110,7 +110,7 @@ def setup_module_under_test():
 
 def test_installed_capture_device_becomes_maintainer_only_when_the_notes_have_none(tmp_path,monkeypatch):
     setup=setup_module_under_test()
-    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir()
+    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir();(root/'state/service-pids.json').write_text('{}')
     device={'device_id':'abc123','role':'capture','version':'0.2.7','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8')
     calls=[]
@@ -247,7 +247,7 @@ def test_finished_batch_cleanup_also_removes_the_saved_claude_reply(brain):
 
 def test_role_change_keeps_a_record_that_was_already_written_and_refuses_beside_a_running_service(tmp_path,monkeypatch):
     setup=setup_module_under_test()
-    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir()
+    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir();(root/'state/service-pids.json').write_text('{}')
     device={'device_id':'abc123','role':'capture','version':'0.2.7','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8')
     class Done:returncode=0;stderr='';stdout=''
@@ -277,7 +277,7 @@ def test_codex_skill_link_that_leads_nowhere_does_not_become_a_second_copy(tmp_p
 
 def test_failed_stop_before_a_role_change_starts_the_service_again_and_says_so(tmp_path,monkeypatch):
     setup=setup_module_under_test()
-    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir()
+    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir();(root/'state/service-pids.json').write_text('{}')
     device={'device_id':'abc123','role':'capture','version':'0.2.7','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8');calls=[]
     class Result:
@@ -320,7 +320,7 @@ def test_interrupt_that_arrives_while_the_model_is_being_started_still_ends_it(b
 @posix
 def test_role_change_refuses_a_linked_ownership_note_and_undoes_a_note_written_just_before_an_interrupt(tmp_path,monkeypatch):
     setup=setup_module_under_test()
-    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir()
+    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir();(root/'state/service-pids.json').write_text('{}')
     device={'device_id':'abc123','role':'capture','version':'0.2.7','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8')
     class Done:returncode=0;stderr='';stdout=''
@@ -398,3 +398,23 @@ def test_windows_link_to_a_program_with_another_name_is_not_offered(tmp_path,mon
     actual=Path.resolve
     monkeypatch.setattr(Path,'resolve',lambda self,*args,**kwargs:self.with_name('codex.exe') if self.name=='claude.exe' else actual(self,*args,**kwargs))
     assert setup.wiki_programs('claude')==[]
+
+
+def test_role_change_reads_the_owner_as_the_service_does_and_skips_the_stop_of_an_unregistered_service(tmp_path,monkeypatch):
+    setup=setup_module_under_test()
+    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir()
+    device={'device_id':'abc123','role':'capture','version':'0.2.7','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
+    (root/'device.json').write_text(json.dumps(device),encoding='utf-8');calls=[]
+    class Result:
+        def __init__(self,code,text=''):self.returncode=code;self.stderr=text;self.stdout=''
+    def controller(device,*arguments,capture=False):
+        calls.append(arguments[:2]);return Result(1,'OwnershipError: Mac native definition is missing or incomplete; no activation change attempted.')
+    monkeypatch.setattr(setup,'brain',controller)
+    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':writer(lambda target,text:Path(target).write_text(text,encoding='utf-8'))})
+    # A line the service would not accept as this device's is not accepted here either.
+    (vault/setup.CONTROL).parent.mkdir(parents=True);(vault/setup.CONTROL).write_text('---\nmaintainer_device_id: abc123  \n---\n',encoding='utf-8')
+    with pytest.raises(SystemExit,match='another device'):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
+    assert calls==[] and json.loads((root/'device.json').read_text())['role']=='capture'
+    (vault/setup.CONTROL).unlink()
+    setup.make_maintainer({**device,'root':str(root)},root,vault,True)  # No service state files: nothing to stop.
+    assert calls==[] and json.loads((root/'device.json').read_text())['role']=='maintainer'
