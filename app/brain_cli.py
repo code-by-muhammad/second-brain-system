@@ -26,7 +26,7 @@ def main():
     parser.add_argument('--overall-seconds',type=int,default=28800)
     parser.add_argument('--stall-seconds',type=int,default=1800)
     parser.add_argument('--hold-id')
-    parser.add_argument('--executable',help='Explicit native codex.exe for maintainer wiki configure-model; no model call.')
+    parser.add_argument('--executable',help='Absolute path of the claude or codex program for maintainer wiki configure-model; no model call.')
     parser.add_argument('--snapshot')
     parser.add_argument('--since',type=int)
     parser.add_argument('--allow-legacy',action='store_true')

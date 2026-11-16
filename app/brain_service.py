@@ -848,7 +848,8 @@ def start(*,explicit=False,hold_id=None,since=None,allow_legacy=False,deadline=N
             _atomic(_state()/'service-control-status.json',{'status':'start failed','phase':'native start','hold_id':hold_id})
             raise
     try:
-        args=(attempt,since,allow_legacy,deadline or time.monotonic()+60)
+        # The supervisor reports readiness on a 20-second cycle and a first start from a new environment is slow.
+        args=(attempt,since,allow_legacy,deadline or time.monotonic()+180)
         identity,heartbeat=(_wait_started(*args,linux_attempt,linux_since) if linux_attempt is not None else _wait_started(*args))
         result={'status':'started','identity':identity,'heartbeat_verified':heartbeat=='verified','transaction':hold_id,'started_at_filetime':attempt}
         with _control():
@@ -874,7 +875,7 @@ def start(*,explicit=False,hold_id=None,since=None,allow_legacy=False,deadline=N
                 if status.get('started_at_filetime')==attempt:
                     _atomic(status_path,{'status':'start failed','phase':'owned readiness','error_type':type(error).__name__,'hold_id':hold_id,'started_at_filetime':attempt})
         except Exception:pass  # A concurrent controller retains ownership/evidence.
-        raise processes.OwnershipError('Startup readiness failed; inspect service-control-status.json and retry the recorded transaction stop before recovery.') from error
+        raise processes.OwnershipError('Startup readiness failed ('+type(error).__name__+': '+str(error)[:200]+'); inspect service-control-status.json and retry the recorded transaction stop before recovery.') from error
 
 
 def stop(*,hold_id=None,wait_seconds=30):

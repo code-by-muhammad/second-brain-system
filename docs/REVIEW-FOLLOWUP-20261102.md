@@ -4,6 +4,8 @@
 
 ## Native compiler selection
 
+Since v0.2.7 the selected program may be `claude` or `codex`, and the maintainer may be a Mac or Linux device; see [the v0.2.7 notes](RELEASE-v0.2.7.md). The Windows rules below apply to `claude.exe` as they do to `codex.exe`, with one change: a program inside the current folder is still refused, except when that folder is the user's home folder or one above it.
+
 Only the designated Windows maintainer performs this step. Capture-only devices do not configure a compiler. Inspect the absolute path of an official installed **native `codex.exe`**, its version and `exec --help`. Do not choose `codex.cmd`, `codex.ps1`, a guessed npm vendor layout, or a tool in the runtime, vault, checkout/current directory or Python folder.
 
 ```powershell

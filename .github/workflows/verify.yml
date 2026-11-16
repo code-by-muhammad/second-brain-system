@@ -189,7 +189,10 @@ jobs:
           # This Linux runner has no desktop login session, and the unchanged Linux service code
           # refuses its user manager. Install and assistant wiring are still exercised there.
           service=""; if [ "$RUNNER_OS" = Linux ]; then service="--no-service"; fi
-          sh bootstrap/setup.sh --yes --vault "$RUNNER_TEMP/second brain notes" --clients claude-code,codex $service
+          sh bootstrap/setup.sh --yes --vault "$RUNNER_TEMP/second brain notes" --role capture --clients claude-code,codex $service
+          # A single device that was installed as capture becomes the maintainer, with the service stopped and started around it.
+          sh bootstrap/setup.sh --yes --role maintainer --clients claude-code,codex $service | tee "$RUNNER_TEMP/role.txt"
+          grep -q "role maintainer" "$RUNNER_TEMP/role.txt"
           # A finished device must stay finished.
           sh bootstrap/setup.sh --yes --clients claude-code,codex $service
           # The first index of the starter notes must verify by itself.
@@ -208,8 +211,13 @@ jobs:
         run: |
           $env:SECOND_BRAIN_ROOT = Join-Path $env:RUNNER_TEMP 'second-brain-runtime'
           $notes = Join-Path $env:RUNNER_TEMP 'second brain notes'
-          powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 --yes --vault $notes --clients 'claude-code,codex'
+          powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 --yes --vault $notes --role capture --clients 'claude-code,codex'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # A single device that was installed as capture becomes the maintainer, with the service stopped and started around it.
+          $role = powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 --yes --role maintainer --clients 'claude-code,codex'
+          if ($LASTEXITCODE -ne 0) { $role; exit $LASTEXITCODE }
+          $role
+          if (-not ($role -match 'role maintainer')) { exit 1 }
           powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 --yes --clients 'claude-code,codex'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # The first index of the starter notes must verify by itself.

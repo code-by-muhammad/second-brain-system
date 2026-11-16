@@ -21,6 +21,8 @@ def test_native_selection_is_explicit_and_never_uses_a_shell_shim(brain,tmp_path
     assert json.loads((cfg.STATE/'wiki-model.json').read_text())=={'format':1,'executable':str(tool.resolve())}
     shim=tool.with_suffix('.cmd');shim.write_bytes(b'Never execute this shell shim.')
     with pytest.raises(ValueError,match='codex.exe'):w.configure_model(str(shim))
+    other=tool.with_name('claude.exe');other.write_bytes(b'Synthetic inert identity, never execute.')
+    assert w._native_model_identity(str(other))['provider']=='claude' and identity['provider']=='codex'
     for parent in (cfg.ROOT,cfg.VAULT,Path.cwd()):
         if parent==Path.cwd():continue  # Never create a witness in the real checkout.
         planted=parent/'codex.exe';planted.write_bytes(b'Never execute.')
@@ -37,6 +39,21 @@ def test_contained_transport_preserves_literal_paths_stdin_and_native_cwd(brain,
                                       on_started=lambda:started.append(True),on_cleanup_wait=lambda:None)
     assert result.returncode==0 and started==[True]
     value=json.loads(log.read_text());assert Path(value['cwd'])==cwd and value['input']=='Synthetic input'
+
+@pytest.mark.skipif(os.name!='nt',reason='Actual Windows Job-backed private model transport.')
+def test_contained_transport_keeps_reply_apart_from_diagnostics_and_passes_empty_and_json_arguments(brain,tmp_path):
+    """Claude is given an empty tool list and a JSON schema as arguments, and answers on standard output."""
+    cwd=w._temporary_model_cwd(tmp_path)
+    script=tmp_path/'synthetic_model.py'
+    script.write_text('import json,sys\nprint(json.dumps({"arguments":sys.argv[1:],"input":sys.stdin.read()}))\nprint("diagnostics",file=sys.stderr)\n',encoding='utf-8')
+    schema='{"type":"object","properties":{"a b":{"type":"string"}},"required":["a b"]}'
+    with (tmp_path/'runner.log').open('wb') as log,(tmp_path/'reply.json').open('wb') as reply:
+        result=actual_model_transport([sys.executable,'-I','-B',str(script),'--tools','','--json-schema',schema,'--setting-sources',''],'Synthetic input',10,
+                                      cwd=str(cwd),log=log,on_started=lambda:None,on_cleanup_wait=lambda:None,stdout=reply)
+    assert result.returncode==0
+    value=json.loads((tmp_path/'reply.json').read_text(encoding='utf-8'))
+    assert value=={'arguments':['--tools','','--json-schema',schema,'--setting-sources',''],'input':'Synthetic input'}
+    assert (tmp_path/'runner.log').read_text(encoding='utf-8').strip()=='diagnostics'
 
 @pytest.mark.skipif(os.name!='nt',reason='Windows executable PATH policy.')
 def test_git_resolver_ignores_cwd_runtime_vault_and_relative_entries(brain,tmp_path,monkeypatch):
@@ -63,7 +80,8 @@ def test_fresh_worker_canonicalizes_short_temp_alias_before_model_boundary(brain
     original_tempfile=w.tempfile
     @contextmanager
     def fresh(*args,**kwargs):
-        assert kwargs=={'prefix':'brain-wiki-'}
+        # Off Windows the system temporary folder is named by its real path (macOS reaches it through a link).
+        assert kwargs=={'prefix':'brain-wiki-'} if os.name=='nt' else (set(kwargs)=={'prefix','dir'} and kwargs['prefix']=='brain-wiki-')
         events.append('created')
         try:yield alias
         finally:

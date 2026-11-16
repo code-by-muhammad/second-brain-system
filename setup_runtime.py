@@ -389,6 +389,12 @@ def desktop_path(home,explicit=None,skip=False):
     return None
 
 
+def codex_skill(home):
+    """Codex also reads ~/.agents/skills. A copy that is already there is the one to keep current; no second one is made."""
+    own=home/'.codex/skills/second-brain/SKILL.md';common=home/'.agents/skills/second-brain/SKILL.md'
+    return common if common.is_file() and not own.exists() else own
+
+
 def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,desktop=None,skip_desktop=False,skill=None):
     root=Path(root).resolve();home=Path(home or Path.home());python=Path(python)
     selected=set(CLIENTS if selected is None else selected)
@@ -413,7 +419,7 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
         if path is not None:targets.append(('claude-desktop',path,'json'))
     if 'codex' in selected:
         targets.extend([('codex',home/'.codex/config.toml','toml'),*codex_rows])
-        if skill is not None:shared('codex',home/'.codex/skills/second-brain/SKILL.md','skill',lambda:_real(home/'.codex/skills/second-brain/SKILL.md',home))
+        if skill is not None:shared('codex',codex_skill(home),'skill',lambda:_real(codex_skill(home),home))
     if 'hooks' in selected:targets.append(('hooks',home/'.claude/settings.json','hooks'))
     for client,path,kind in targets:
         # One shared rules or skill file can serve several assistants; write it once.
@@ -521,7 +527,7 @@ def authorize_plan(value,*,selected=None,desktop=None,skip_desktop=False):
     if 'claude-code' in selected:
         allowed['claude-code']=({_path(home/'.claude.json')}|inside(lambda:block_file(home/'.claude/CLAUDE.md',home,True,codex_block))
                                 |inside(lambda:_real(home/'.claude/skills/second-brain/SKILL.md',home)))
-    if 'codex' in selected:allowed['codex']={_path(home/'.codex/config.toml')}|codex_block|inside(lambda:_real(home/'.codex/skills/second-brain/SKILL.md',home))
+    if 'codex' in selected:allowed['codex']={_path(home/'.codex/config.toml')}|codex_block|inside(lambda:_real(codex_skill(home),home))
     if 'hooks' in selected:allowed['hooks']={_path(home/'.claude/settings.json')}
     if 'claude-desktop' in selected:
         target=desktop_path(home,desktop,skip_desktop)

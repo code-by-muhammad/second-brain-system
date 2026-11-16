@@ -11,7 +11,7 @@ the read-only acceptance check. --yes accepts every default. Nothing is sent any
 import sys
 if __name__=='__main__' and not sys.flags.isolated:
     raise SystemExit('Run this with Python -I from the verified release folder.')
-import argparse, json, os, runpy, shutil, subprocess, time
+import argparse, json, os, re, runpy, shutil, subprocess, time
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
@@ -63,19 +63,94 @@ def remotes(vault):
     return result.stdout.split() if result is not None and result.returncode==0 else None
 
 
-def own_the_notes(vault,device_id):
-    """Name this device as the one maintainer. Never through a link, never over an existing owner."""
+def control_path(vault):
+    """Where the notes name their maintainer. A link anywhere on the way is refused, as the running service refuses it."""
     control=vault
     for part in CONTROL.split('/'):
         control=control/part
         if control.is_symlink() or (hasattr(control,'is_junction') and control.is_junction()):
-            raise SystemExit('A linked folder on the way to '+CONTROL+' is refused. Make it a plain folder inside the notes and run this again.')
+            raise SystemExit('A linked folder or file on the way to '+CONTROL+' is refused. Make it a plain one inside the notes and run this again.')
+    return control
+
+
+def own_the_notes(vault,device_id):
+    """Name this device as the one maintainer. Never through a link, never over an existing owner."""
+    control=control_path(vault)
     control.parent.mkdir(parents=True,exist_ok=True)
-    try:
-        with control.open('x',encoding='utf-8',newline='\n') as output:
-            output.write('---\nmaintainer_device_id: '+device_id+'\n---\n\n# Shared writer ownership\n\nThis device links saved milestones into daily notes. Additional devices are installed with the capture role.\n')
-    except FileExistsError:
+    text='---\nmaintainer_device_id: '+device_id+'\n---\n\n# Shared writer ownership\n\nThis device links saved milestones into daily notes. Additional devices are installed with the capture role.\n'
+    # The whole note appears at once or not at all, and never over a file that is already there.
+    try:runpy.run_path(str(REPO/'install.py'))['atomic'](control,text,expected_sha256=None)
+    except ValueError as error:
+        if type(error).__name__!='ConcurrentWriteError':raise
         raise SystemExit(CONTROL+' appeared while this was running. Another device may own these notes; check it before starting the service.') from None
+
+
+def make_maintainer(device,root,vault,service):
+    """Turn an installed capture device into the one maintainer of notes that have none yet."""
+    control=control_path(vault);existed=control.exists()
+    def owned_by_another():
+        if not control.exists():return False
+        # The same reading as the running service (brain_settings): one exact line, or the note is not this device's.
+        try:
+            with control.open('rb') as stream:raw=stream.read(2_000_001)
+            text=raw.decode('utf-8').replace('\r\n','\n').replace('\r','\n')
+        except (OSError,UnicodeError):return True
+        if len(raw)>2_000_000:return True  # The service refuses a note of that size.
+        owner=re.search(r'(?m)^maintainer_device_id: ([a-z0-9-]+)$',text)
+        return owner is None or owner.group(1)!=device['device_id']
+    refusal='These notes already name another device as maintainer in '+CONTROL+'. Only one device may be; nothing was changed.'
+    if owned_by_another():raise SystemExit(refusal)
+    if (root/'state/service-transaction.json').exists():raise SystemExit('An update is in progress on this device; nothing was changed.')
+    record=json.loads((root/'device.json').read_text(encoding='utf-8-sig'))
+    if record.get('device_id')!=device['device_id'] or record.get('role')!='capture':raise SystemExit('The device record is not a capture device; nothing was changed.')
+    write=runpy.run_path(str(REPO/'install.py'))['atomic']
+    # The service's own state files are the evidence that it was ever registered or run on this device.
+    known=any((root/'state'/name).exists() for name in ('service-heartbeat.json','service-pids.json','service-control-status.json'))
+    if not service and known:
+        # A server that is running, or still starting, keeps the old role until it is restarted. Without the
+        # service step the change is made only on a device whose service has never run.
+        raise SystemExit('This device has a background service. Run this without --no-service so it can be stopped and started around the change; nothing was changed.')
+    # A device whose service was never registered has nothing to stop; the start step after this registers it.
+    service=service and known
+    try:
+        if service:
+            result=brain(device,'service','stop','--wait-seconds','300',capture=True)
+            if result.returncode:
+                raise SystemExit('The service could not be stopped cleanly: '+((result.stderr or '').strip().splitlines() or [''])[-1][:300]+'\nThe role was not changed.')
+        # Another device may have claimed the notes while the service was stopping.
+        if owned_by_another():raise SystemExit(refusal)
+        if not control.exists():own_the_notes(vault,device['device_id'])
+        write(root/'device.json',json.dumps({**record,'role':'maintainer'},indent=2)+'\n')
+    except BaseException:
+        # Leave one consistent device. If the record was already replaced the change is complete and stays;
+        # otherwise the ownership note made here is withdrawn. Either way the service comes back up, also
+        # after a stop that failed late or was interrupted and may already have ended it.
+        try:
+            try:switched=json.loads((root/'device.json').read_text(encoding='utf-8-sig')).get('role')=='maintainer'
+            except (OSError,ValueError):switched=False
+            # Only a note that was not there before and names this device is withdrawn; one that another
+            # device has put there since stays.
+            if not existed and not switched and not owned_by_another():control.unlink(missing_ok=True)
+        finally:
+            if service:
+                say('The service was started again.' if brain(device,'service','start',capture=True).returncode==0
+                    else 'The service is stopped. Start it with: "'+device['python']+'" "'+str(root/'app/brain_cli.py')+'" service start')
+        raise
+    say('This device is now the maintainer of these notes.')
+
+
+def wiki_programs(name):
+    """Programs called claude or codex on PATH, in order. Windows needs the real .exe: launchers are passed over and a link is named by its target."""
+    found=[]
+    for folder in os.environ.get('PATH','').split(os.pathsep):
+        candidate=Path(folder)/(name+('.exe' if os.name=='nt' else ''))
+        # A relative PATH entry means the current folder, where a tool may have been planted.
+        if not Path(folder).is_absolute() or not candidate.is_file() or not os.access(candidate,os.X_OK):continue
+        program=str(candidate.resolve() if os.name=='nt' else candidate)
+        # A link whose target carries another name would select another assistant than the one asked for.
+        if Path(program).name.lower()!=candidate.name.lower():continue
+        if program not in found:found.append(program)
+    return found
 
 
 def brain(device,*arguments,capture=False):
@@ -95,8 +170,12 @@ def wait_running(device,version,seconds=240):
 
 def start_service(device,version,root,registered=False):
     """Register and start the background service, then wait until it answers on this version."""
-    # A registration that already exists is only started; registering over it would be refused.
-    if not (registered and brain(device,'service','start',capture=True).returncode==0):
+    # A registration that already exists is only started; registering over it would be refused and would
+    # hide why the start failed. Only a missing registration is created here.
+    first=brain(device,'service','start',capture=True) if registered else None
+    if first is not None and first.returncode and 'not installed' not in (first.stderr or ''):
+        raise SystemExit('The background service could not start: '+((first.stderr or '').strip().splitlines() or [''])[-1][:400]+'\nFix that cause and run this command again.')
+    if first is None or first.returncode:
         for action in ('install','start'):
             result=brain(device,'service',action,capture=True)
             if result.returncode:
@@ -111,8 +190,9 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__,formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--root',default='C:/Second-Brain-System' if windows else str(home/'.local/share/second-brain'),help='Runtime folder.')
     parser.add_argument('--vault',help='Notes folder. A folder that does not exist is created from the blank starter.')
-    parser.add_argument('--role',choices=['capture','maintainer'],help='Default: maintainer for the first device of a brain, capture for an additional one.')
+    parser.add_argument('--role',choices=['capture','maintainer'],help='Default: maintainer for the first device of a brain, capture for an additional one. On an installed capture device, maintainer makes it the maintainer if the notes have none.')
     parser.add_argument('--clients',help='Comma-separated: '+', '.join(CLIENTS)+'. Default: the assistants found on this device.')
+    parser.add_argument('--wiki',choices=['claude','codex'],help='Maintainer only: select which assistant program builds the wiki pages. Nothing is built by this.')
     parser.add_argument('--no-hooks',action='store_true',help='Leave out the Claude Code session hooks.')
     parser.add_argument('--timezone',help='IANA name such as Europe/Berlin. Default: the system timezone.')
     parser.add_argument('--no-service',action='store_true',help='Install without registering or starting the background service.')
@@ -187,9 +267,25 @@ def main():
                 for row in json.loads(result.stdout).get('client_result',{}).get('skipped',[]):
                     if row.get('reason')!='shared file already planned':say('Left alone: '+str(row.get('path'))+': '+str(row.get('reason'))[:300])
         device['root']=str(root)
+        if not args.role and device.get('role')=='capture' and (vault/CONTROL).is_file() and 'maintainer_device_id: '+str(device.get('device_id'))+'\n' in (vault/CONTROL).read_text(encoding='utf-8-sig',errors='replace'):
+            # A role change that was cut off after its first step: the notes name this device, the device does not know yet.
+            say('These notes name this device as their maintainer, but it is still set up as capture. Run this again with --role maintainer to finish that.')
+        if args.role and args.role!=device.get('role'):
+            if args.role!='maintainer':raise SystemExit('A maintainer cannot be turned into a capture device here; nothing was changed.')
+            make_maintainer(device,root,vault,not args.no_service)
+            device['role']='maintainer'
         # A first run that stopped before the service was up is finished here.
         if not args.no_service and not wait_running(device,version,seconds=15):start_service(device,version,root,registered=True)
-    device['root']=str(root)
+    device['root']=str(root);unselected=False
+    if args.wiki and not args.check:
+        reason=args.wiki+' was not found as a program on this device. Install it, check that "'+args.wiki+' --version" answers in a new terminal, and run this again.'
+        for program in wiki_programs(args.wiki):
+            result=brain(device,'wiki','configure-model','--executable',program,capture=True)
+            if result.returncode==0:
+                say('Wiki assistant selected: '+program+'. No page is built until you run: brain_cli.py wiki run');break
+            reason=program+': '+((result.stderr or '').strip().splitlines() or [''])[-1][:300]
+        else:
+            say('The wiki assistant was not selected. '+reason);unselected=True
 
     command=[device['python'],'-I','-B',REPO/'check_setup.py','--root',root,'--clients',','.join(selected),'--expect-version',version,'--release',REPO]
     if args.no_hooks:command.append('--no-hooks')
@@ -198,7 +294,8 @@ def main():
     say('\nAcceptance check:')
     failed=run(command).returncode
     say('\nNext: open a NEW chat in your assistant and ask it to call brain_context. After a restart of this computer, run this again with --check.')
-    raise SystemExit(failed)
+    # A requested wiki assistant that could not be selected is a failure of this run, whatever the check says.
+    raise SystemExit(failed or int(unselected))
 
 
 if __name__=='__main__':main()
