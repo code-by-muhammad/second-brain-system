@@ -190,10 +190,10 @@ What the wiki is. Topic pages that are compiled from your notes and saved milest
 
 Who writes the pages. The assistant program you choose, Claude (`claude`) or Codex (`codex`), whichever you have. It must be installed and signed in on the maintainer device.
 
-- [ ] Each run sends a few of your notes to that assistant's provider under your own account, and it counts against your plan's usage. This is the one part of Second Brain that sends note text off the device. Decide first whether you want that.
+- [ ] Each run sends a few of your notes to that assistant's provider under your own account, and it counts against your plan's usage. Apart from the optional sync to your own repository (section 6), this is the only part of Second Brain that sends note text off the device. Decide first whether you want that.
 - [ ] Choose the assistant: run the one command with `--wiki claude` or `--wiki codex`. It records the program's path and calls nothing.
 - [ ] Windows needs the real program file (`claude.exe` or `codex.exe`), not a `.cmd` or `.ps1` launcher. If the choice is refused for that reason, install the assistant's native Windows version.
-- [ ] Build: `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" wiki run`. One run handles a few notes. Run it again for more. `wiki status` shows what is waiting.
+- [ ] Build: `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" wiki run`. In PowerShell put `& ` in front of a command that starts with a quote. One run handles a few notes. Run it again for more. `wiki status` shows what is waiting.
 - [ ] The assistant gets the note text on standard input, with no tools, no access to your files, none of your assistant settings and no MCP servers. Its answer is checked against the notes before any page is written.
 - [ ] "model authentication/quota requires attention": sign in to that assistant, or wait for your usage to reset, then run `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" wiki retry` and `wiki run` again.
 

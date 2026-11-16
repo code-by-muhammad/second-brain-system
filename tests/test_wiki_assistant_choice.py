@@ -42,9 +42,12 @@ def test_claude_result_becomes_the_batch_output_and_a_refusal_is_reported(brain,
     assert w._claude_output(reply,output) is None and json.loads(output.read_text(encoding='utf-8'))=={'pages':[]}
     output.unlink()
     for value,expected in (({'is_error':True,'result':'Invalid API key · Please run /login'},'Please run /login'),
-                           ({'is_error':False,'result':'plain text only'},'plain text only'),({'is_error':False},'no structured output')):
+                           ({'is_error':False,'result':'rate limit, 401 Unauthorized'},'no structured output'),({'is_error':False},'no structured output')):
         reply.write_text(json.dumps(value),encoding='utf-8')
-        assert expected in w._claude_output(reply,output) and not output.exists()
+        refused=w._claude_output(reply,output)
+        assert expected in refused and not output.exists()
+        # Text the model wrote is never what decides sign-in or usage attention.
+        assert w._model_auth_quota_failure(1,'\n'+refused+'\n','packet')==bool(value['is_error'])
     reply.write_text('not json',encoding='utf-8')
     assert w._claude_output(reply,output)=='unreadable result'
     assert w._model_auth_quota_failure(1,'\nInvalid API key · Please run /login\n','packet')
@@ -108,11 +111,26 @@ def test_installed_capture_device_becomes_maintainer_only_when_the_notes_have_no
     assert calls==[('service','stop','--wait-seconds','300')]
     assert json.loads((root/'device.json').read_text())=={**device,'role':'maintainer'}
     assert 'maintainer_device_id: abc123' in (vault/setup.CONTROL).read_text()
-    setup.make_maintainer({**device,'root':str(root)},root,vault,False)  # Its own ownership is accepted again.
     (vault/setup.CONTROL).write_text('---\nmaintainer_device_id: other99\n---\n',encoding='utf-8')
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8')
     with pytest.raises(SystemExit,match='another device'):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
     assert json.loads((root/'device.json').read_text())['role']=='capture'
+    # Another device claims the notes while this one is stopping its service: nothing is taken, the service comes back.
+    (vault/setup.CONTROL).unlink();calls.clear()
+    def racing(device,*arguments,capture=False):
+        calls.append(arguments)
+        if arguments[:2]==('service','stop'):(vault/setup.CONTROL).write_text('---\nmaintainer_device_id: other99\n---\n',encoding='utf-8')
+        return Done()
+    monkeypatch.setattr(setup,'brain',racing)
+    with pytest.raises(SystemExit,match='another device'):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
+    assert json.loads((root/'device.json').read_text())['role']=='capture' and calls[-1]==('service','start')
+    assert 'other99' in (vault/setup.CONTROL).read_text()
+    # The device record cannot be written: the ownership note this run created is withdrawn again.
+    (vault/setup.CONTROL).unlink();monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Done())
+    def refuse(target,text):raise OSError('disk full')
+    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':refuse})
+    with pytest.raises(OSError):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
+    assert not (vault/setup.CONTROL).exists() and json.loads((root/'device.json').read_text())['role']=='capture'
 
 
 def test_codex_skill_already_in_the_common_folder_is_kept_current_and_not_doubled(tmp_path,monkeypatch):
@@ -126,3 +144,32 @@ def test_codex_skill_already_in_the_common_folder_is_kept_current_and_not_double
     assert [row['path'] for row in skills]==[str((common/'SKILL.md').resolve())] and skills[0]['after']=='new skill\n'
     helpers.validate_plan(result,tmp_path/'runtime')
     assert not (home/'.codex/skills').exists()
+
+
+@posix
+def test_program_that_ends_between_checks_is_still_held_to_the_output_bound(brain,tmp_path):
+    script=program(tmp_path/'tools','synthetic-model','#!/bin/sh\nhead -c 6000000 /dev/zero\n')
+    with (tmp_path/'runner.log').open('wb') as log,(tmp_path/'reply.json').open('wb') as reply:
+        with pytest.raises(RuntimeError,match='byte budget'):
+            w._run_model_posix([str(script)],'',10,cwd=tmp_path,log=log,stdout=reply,on_started=lambda:None)
+
+
+@posix
+def test_terminating_the_runner_ends_the_model_it_started(brain,tmp_path):
+    import signal,subprocess,time
+    mark=tmp_path/'model.pid'
+    model=program(tmp_path/'tools','synthetic-model','#!/bin/sh\necho $$ > "'+str(mark)+'"\nsleep 60\n')
+    runner=tmp_path/'runner.py'
+    runner.write_text('import sys\nsys.path.insert(0,sys.argv[1])\nimport brain_wiki as w\n'
+                      'with open(sys.argv[3],"wb") as log:\n    w._run_model_posix([sys.argv[2]],"",60,cwd=sys.argv[4],log=log,stdout=log,on_started=lambda:None)\n',encoding='utf-8')
+    child=subprocess.Popen([sys.executable,str(runner),str(SOURCE/'app'),str(model),str(tmp_path/'runner.log'),str(tmp_path)],env=dict(os.environ))
+    deadline=time.monotonic()+20
+    while not mark.exists() or not mark.read_text().strip():
+        assert time.monotonic()<deadline and child.poll() is None;time.sleep(.1)
+    pid=int(mark.read_text());child.send_signal(signal.SIGTERM);child.wait(timeout=20)
+    deadline=time.monotonic()+5
+    while time.monotonic()<deadline:
+        try:os.kill(pid,0)
+        except ProcessLookupError:break
+        time.sleep(.1)
+    else:pytest.fail('The model outlived its terminated runner.')

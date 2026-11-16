@@ -81,18 +81,32 @@ def own_the_notes(vault,device_id):
 def make_maintainer(device,root,vault,service):
     """Turn an installed capture device into the one maintainer of notes that have none yet."""
     control=vault/CONTROL
-    if control.exists():
+    def owned_by_another():
+        if not control.exists():return False
         owner=[line.split(':',1)[1].strip() for line in control.read_text(encoding='utf-8-sig').splitlines() if line.startswith('maintainer_device_id:')]
-        if owner!=[device['device_id']]:
-            raise SystemExit('These notes already name another device as maintainer in '+CONTROL+'. Only one device may be; nothing was changed.')
+        return owner!=[device['device_id']]
+    refusal='These notes already name another device as maintainer in '+CONTROL+'. Only one device may be; nothing was changed.'
+    if owned_by_another():raise SystemExit(refusal)
     if (root/'state/service-transaction.json').exists():raise SystemExit('An update is in progress on this device; nothing was changed.')
+    record=json.loads((root/'device.json').read_text(encoding='utf-8-sig'))
+    if record.get('device_id')!=device['device_id'] or record.get('role')!='capture':raise SystemExit('The device record is not a capture device; nothing was changed.')
+    write=runpy.run_path(str(REPO/'install.py'))['atomic']
     if service:
         result=brain(device,'service','stop','--wait-seconds','300',capture=True)
         if result.returncode:
             raise SystemExit('The service could not be stopped: '+((result.stderr or '').strip().splitlines() or [''])[-1][:300]+'\nNothing was changed.')
-    if not control.exists():own_the_notes(vault,device['device_id'])
-    record=json.loads((root/'device.json').read_text(encoding='utf-8-sig'));record['role']='maintainer'
-    runpy.run_path(str(REPO/'install.py'))['atomic'](root/'device.json',json.dumps(record,indent=2)+'\n')
+    created=False
+    try:
+        # Another device may have claimed the notes while the service was stopping.
+        if owned_by_another():raise SystemExit(refusal)
+        if not control.exists():own_the_notes(vault,device['device_id']);created=True
+        write(root/'device.json',json.dumps({**record,'role':'maintainer'},indent=2)+'\n')
+    except BaseException:
+        # Leave the device as it was: no ownership note for a device still recorded as capture, and the service back up.
+        if created:control.unlink(missing_ok=True)
+        if service and brain(device,'service','start',capture=True).returncode:
+            say('The service is stopped. Start it with: "'+device['python']+'" "'+str(root/'app/brain_cli.py')+'" service start')
+        raise
     say('This device is now the maintainer of these notes.')
 
 
