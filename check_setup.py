@@ -92,19 +92,6 @@ def skill(name, candidates, release):
     add('PASS', name, str(path))
 
 
-def wiki_program(root):
-    """The recorded wiki assistant program: its path, '' when the record is unusable, None when there is none."""
-    path = root / 'state/wiki-model.json'
-    if not os.path.lexists(path):
-        return None
-    try:
-        with path.open('rb') as stream:
-            value = json.loads(stream.read(16385))
-        return value['executable'] if Path(value['executable']).is_file() else ''
-    except (OSError, ValueError, KeyError, TypeError):
-        return ''
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--root', default=str(Path.home() / '.local/share/second-brain'))
@@ -181,17 +168,31 @@ def main():
 
     if device.get('role') == 'maintainer':
         # Only the maintainer builds wiki pages. A device with no assistant, or with a run that stopped, says so here.
-        chosen = wiki_program(root)
         worker = (health.get('wiki') or {}).get('worker') if isinstance(health.get('wiki'), dict) else None
         worker = worker if isinstance(worker, dict) else {}
-        if chosen is None:
-            add('WARN', 'wiki assistant', 'none selected, so no wiki pages are built (optional); run setup again with --wiki claude or --wiki codex')
-        elif not chosen:
-            add('WARN', 'wiki assistant', 'the recorded program is missing or unreadable; run setup again with --wiki claude or --wiki codex')
-        elif worker.get('attention_required'):
-            add('WARN', 'wiki assistant', f"{chosen}; the last wiki run needs attention ({str(worker.get('reason'))[:100]}): see brain_cli.py wiki status, then wiki retry"[:400])
+        again = 'run setup again with --wiki claude or --wiki codex'
+        if not os.path.lexists(root / 'state/wiki-model.json'):
+            add('WARN', 'wiki assistant', 'none selected, so no wiki pages are built (optional); ' + again)
         else:
-            add('PASS', 'wiki assistant', str(chosen)[:300])
+            # The runtime reads the record exactly as a wiki run would, without starting the program.
+            chosen, reason = {}, 'the runtime gave no answer'
+            try:
+                done = subprocess.run([str(python), str(root / 'app/brain_cli.py'), 'wiki', 'model'], capture_output=True, text=True,
+                                      encoding='utf-8', errors='replace', timeout=300, stdin=subprocess.DEVNULL, check=False,
+                                      env={k: v for k, v in os.environ.items() if not k.startswith(('BRAIN_', 'BASIC_MEMORY_'))})
+                if done.returncode == 0:
+                    chosen = json.loads(done.stdout).get('executable')
+                    chosen = chosen if isinstance(chosen, dict) else {}
+                else:
+                    reason = ((done.stderr or '').strip().splitlines() or [reason])[-1]
+            except (OSError, ValueError, AttributeError, subprocess.TimeoutExpired) as error:
+                reason = type(error).__name__
+            if not chosen.get('path'):
+                add('WARN', 'wiki assistant', ('the recorded choice cannot be used (' + reason[:200] + '); ' + again))
+            elif worker.get('attention_required'):
+                add('WARN', 'wiki assistant', f"{chosen.get('path')}; the last wiki run needs attention ({str(worker.get('reason'))[:100]}): see brain_cli.py wiki status, then wiki retry"[:500])
+            else:
+                add('PASS', 'wiki assistant', f"{chosen.get('path')}, model {chosen.get('model')}, effort {chosen.get('effort')}"[:400])
 
     if 'claude-code' in clients:
         try:

@@ -157,6 +157,14 @@ def brain(device,*arguments,capture=False):
     return run([device['python'],Path(device['root'])/'app/brain_cli.py',*arguments],capture=capture)
 
 
+def again(name):
+    """This run's own command with --wiki added, quoted for the shell the guide uses on this system."""
+    parts=[sys.executable,'-I','-B',str(Path(__file__).resolve()),*sys.argv[1:],'--wiki',name]
+    if os.name=='nt':return '& '+' '.join("'"+part.replace("'","''")+"'" for part in parts)
+    import shlex
+    return shlex.join(parts)
+
+
 def select_wiki(device,name):
     """Record the first usable program of that assistant. Returns nothing, or the reason none was recorded."""
     reason=name+' was not found as a program on this device. Install it, check that "'+name+' --version" answers in a new terminal, and run this again.'
@@ -176,16 +184,16 @@ def offer_wiki(device,assume):
     if len(found)==2:
         answer=ask('Both claude and codex are installed. Which one builds the wiki pages: claude, codex or none','none',assume).strip().lower()
         if answer not in found:
-            return 'No wiki assistant is selected: claude and codex are both installed. Choose one by running this again with --wiki claude or --wiki codex.'
+            return 'No wiki assistant is selected: claude and codex are both installed. Choose one by running this again with --wiki claude or --wiki codex:\n  '+again('claude')+'\n  '+again('codex')
         found=[answer]
     elif found:
         say('Wiki: '+found[0]+' is the only assistant program found on this maintainer, so it is recorded as the one that builds wiki pages.')
     if not found:
         return ('No wiki assistant is selected: neither claude nor codex was found as a program'
                 +(' (Windows needs claude.exe or codex.exe, not a .cmd or .ps1 launcher)' if os.name=='nt' else '')
-                +'. Wiki pages are optional. To build them, install one, check that its --version answers in a new terminal, and run this again.')
+                +'. Wiki pages are optional. To build them, install one, check that its --version answers in a new terminal, and run this again with --wiki claude or --wiki codex:\n  '+again('claude')+'\n  '+again('codex'))
     reason=select_wiki(device,found[0])
-    return 'The wiki assistant was not selected. '+reason if reason else ''
+    return 'The wiki assistant was not selected. '+reason+'\nAfter fixing that, run:\n  '+again(found[0]) if reason else ''
 
 
 def wait_running(device,version,seconds=240):

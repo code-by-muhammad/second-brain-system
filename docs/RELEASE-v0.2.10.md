@@ -14,8 +14,9 @@ The assistant that builds wiki pages was recorded only when the command carried 
    - exactly one of `claude` and `codex` is found as a program: it is recorded, and the run says which and why;
    - both are found: a person at the terminal is asked (claude, codex or none, default none); when nobody can answer (`--yes`, or no terminal) nothing is recorded;
    - neither is found: nothing is recorded.
-   In every case where nothing was recorded the run says so before the check and again as its last line (`Still open: ...`) with the command to run.
-2. **The acceptance check has a `wiki assistant` line on a maintainer.** PASS with the program's path. WARN when none is recorded, when the recorded program is missing or the record is unreadable, or when the last wiki run needs attention (with the reason `health` already shows and the commands to run). A capture device has no such line.
+   In every case where nothing was recorded the run says so before the check and again at its very end (`Still open: ...`), followed by this run's own command with `--wiki claude` or `--wiki codex` added, so the other options of the run are kept.
+2. **The acceptance check has a `wiki assistant` line on a maintainer.** PASS with the program's path, model and effort. WARN when none is recorded, when the runtime refuses the record (with its reason), or when the last wiki run needs attention (with the reason `health` already shows and the commands to run). A capture device has no such line.
+3. **`brain_cli.py wiki model`** reads the record exactly as `wiki run` does, including the identity check of the program file, and starts nothing. The check uses it, so a record that a run would refuse is never shown as PASS.
 
 Recording an assistant calls no model and sends nothing. Pages are still built only by `wiki run`, which the owner starts. The programs are found exactly as with `--wiki`: real programs in absolute `PATH` folders, `.exe` on Windows.
 
@@ -24,7 +25,7 @@ Recording an assistant calls no model and sends nothing. Pages are still built o
 - **A recorded choice is never replaced** by the plain command, including one whose program has gone; the check warns and `--wiki` changes it. This keeps an owner's model and effort choice.
 - **The exit status is unchanged.** A maintainer without an assistant ends with status 0 and a WARN line, because wiki pages are optional. Only an assistant that was asked for with `--wiki` and could not be recorded fails the run, as before.
 - **A maintainer that does not want wiki pages** and has both programs, or neither, keeps the WARN line. There is no switch to silence it.
-- **The check reads the record, not the program.** It confirms the recorded path is a file; the full identity check runs at `wiki run`.
+- **The check does not start the assistant.** It cannot tell whether the program is signed in or the model is available to that account; that shows at `wiki run`.
 - **Automatic recording follows `PATH` order** when one assistant is installed in several places, as `--wiki` does.
 - **An earlier stopped run stays stopped.** A device that ran `wiki run` before an assistant was recorded shows the attention WARN until `wiki retry`.
 
