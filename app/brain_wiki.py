@@ -2482,6 +2482,9 @@ def _model_executable():
     if (not isinstance(value,dict) or not {'format','executable'}<=set(value)<={'format','executable','model','effort'}
             or type(value['format']) is not int or value['format']!=1):
         raise ValueError('Invalid model configuration; no model called.')
+    # A key that is present must hold a text value: a null is a damaged choice, not an absent one.
+    if any(name in value and not isinstance(value[name],str) for name in ('model','effort')):
+        raise ValueError('Invalid model configuration; no model called.')
     identity=_native_model_identity(value['executable'])
     identity['model'],identity['effort']=_model_choice(identity['provider'],value.get('model'),value.get('effort'))
     return identity

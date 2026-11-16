@@ -449,5 +449,8 @@ def test_only_an_explicit_choice_is_stored_and_an_invalid_stored_one_calls_no_mo
     assert json.loads((cfg.STATE/'wiki-model.json').read_text())['effort']=='medium'  # A refused choice changes nothing.
     (cfg.STATE/'wiki-model.json').write_text(json.dumps({'format':1,'executable':str(tool),'model':'x y'}),encoding='utf-8')
     with pytest.raises(ValueError,match='Model name'):w._model_executable()
+    for damaged in ({'model':None},{'effort':None},{'model':7}):
+        (cfg.STATE/'wiki-model.json').write_text(json.dumps({'format':1,'executable':str(tool),**damaged}),encoding='utf-8')
+        with pytest.raises(ValueError,match='Invalid model configuration'):w._model_executable()
     (cfg.STATE/'wiki-model.json').write_text(json.dumps({'format':1,'executable':str(tool),'other':1}),encoding='utf-8')
     with pytest.raises(ValueError,match='Invalid model configuration'):w._model_executable()

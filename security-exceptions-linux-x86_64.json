@@ -176,7 +176,7 @@
     "app/brain_store.py": "f3025605f8c75fd6b34dc4d4250fdf96b70848ede1110eb7a9a6c76c89717539",
     "app/brain_supervisor.py": "68d73fdf794a3fbbf455dc71a1baafe0a42561dbd7c5607ae4d875caa8e98179",
     "app/brain_walk.py": "92d7e35a59a052f1ae920b8249a929477e2c42aa5535a5f81004c09f8f7ad24a",
-    "app/brain_wiki.py": "acfd9d2faa05cf3812d80778df646d261549ceb52de68b569c5c845610d186de",
+    "app/brain_wiki.py": "8e518d593276b54b598498ae75f310b7a1d19bfa51733818a3596c7ca823f54b",
     "app/brain_windows_process.py": "803eb93b9a23fc941f7eed4aa5e53512b91ae38f5694d11f75cf91de30a83758",
     "check_dependency_audit.py": "413bdcdf23bcf8afcfe6d96e4ed13a7336898bf5ea2c448fc2ea08d0332dfd62",
     "install.py": "5178a276df9b2efb64dd0990509002683a3234acd2f892cbea3b78eeb6523c72",
