@@ -94,9 +94,10 @@ def make_maintainer(device,root,vault,service):
     record=json.loads((root/'device.json').read_text(encoding='utf-8-sig'))
     if record.get('device_id')!=device['device_id'] or record.get('role')!='capture':raise SystemExit('The device record is not a capture device; nothing was changed.')
     write=runpy.run_path(str(REPO/'install.py'))['atomic']
-    if not service and wait_running(device,record.get('version'),seconds=0,once=True):
-        # A running server keeps the old role until it is restarted.
-        raise SystemExit('The service is running. Run this without --no-service so it can be stopped and started around the change; nothing was changed.')
+    if not service and any((root/'state'/name).exists() for name in ('service-heartbeat.json','service-pids.json','service-control-status.json')):
+        # A server that is running, or still starting, keeps the old role until it is restarted. Without the
+        # service step the change is made only on a device whose service has never run.
+        raise SystemExit('This device has a background service. Run this without --no-service so it can be stopped and started around the change; nothing was changed.')
     if service:
         result=brain(device,'service','stop','--wait-seconds','300',capture=True)
         if result.returncode:
@@ -116,7 +117,8 @@ def make_maintainer(device,root,vault,service):
         try:
             try:switched=json.loads((root/'device.json').read_text(encoding='utf-8-sig')).get('role')=='maintainer'
             except (OSError,ValueError):switched=False
-            if created and not switched:control.unlink(missing_ok=True)
+            # Only the note this run wrote is withdrawn; one that another device has put there since stays.
+            if created and not switched and not owned_by_another():control.unlink(missing_ok=True)
         finally:
             if service and brain(device,'service','start',capture=True).returncode:
                 say('The service is stopped. Start it with: "'+device['python']+'" "'+str(root/'app/brain_cli.py')+'" service start')
@@ -140,14 +142,13 @@ def brain(device,*arguments,capture=False):
     return run([device['python'],Path(device['root'])/'app/brain_cli.py',*arguments],capture=capture)
 
 
-def wait_running(device,version,seconds=240,once=False):
+def wait_running(device,version,seconds=240):
     deadline=time.monotonic()+seconds
-    while once or time.monotonic()<deadline:
+    while time.monotonic()<deadline:
         result=brain(device,'health',capture=True)
         try:health=json.loads(result.stdout) if result.returncode==0 else {}
         except ValueError:health={}
         if isinstance(health,dict) and health.get('status')=='running' and health.get('version')==version:return True
-        if once:return False
         time.sleep(3)
     return False
 

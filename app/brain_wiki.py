@@ -2470,7 +2470,7 @@ def _run_model(command,model_input,timeout,*,cwd,log,on_started,on_cleanup_wait,
 
 def _run_model_posix(command,model_input,timeout,*,cwd,log,stdout,on_started,env=None):
     """One model program in its own process group. The whole group is ended when the run finishes, fails,
-    passes its deadline or output bound, or this process is asked to terminate."""
+    passes its deadline or output bound, or this process is asked to terminate or loses its terminal."""
     import signal,threading
     def over():return any(os.fstat(stream.fileno()).st_size>5_000_000 for stream in (stdout,log))
     # A termination request is noted and acted on by the loop, so it can never arrive between starting the
@@ -2478,7 +2478,8 @@ def _run_model_posix(command,model_input,timeout,*,cwd,log,stdout,on_started,env
     asked=[]
     def interrupted(number,frame):asked.append(number)
     main=threading.current_thread() is threading.main_thread()
-    previous=signal.signal(signal.SIGTERM,interrupted) if main else None
+    # Ending the worker and closing its terminal both arrive here.
+    previous={number:signal.signal(number,interrupted) for number in (signal.SIGTERM,signal.SIGHUP)} if main else {}
     process=None;failure=None;code=None
     try:
         with tempfile.TemporaryFile() as incoming:
@@ -2510,7 +2511,7 @@ def _run_model_posix(command,model_input,timeout,*,cwd,log,stdout,on_started,env
                     if time.monotonic()>=gone:raise RuntimeError('Model process group did not end; inspect it before another run.')
                     time.sleep(.1)
         finally:
-            if main:signal.signal(signal.SIGTERM,signal.SIG_DFL if previous is None else previous)
+            for number,handler in previous.items():signal.signal(number,signal.SIG_DFL if handler is None else handler)
     # What the group wrote while it was being ended counts too.
     if failure is None and over():failure=RuntimeError('Model output exceeded its byte budget.')
     if failure is not None:raise failure

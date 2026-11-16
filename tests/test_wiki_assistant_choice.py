@@ -133,6 +133,12 @@ def test_installed_capture_device_becomes_maintainer_only_when_the_notes_have_no
     monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':refuse})
     with pytest.raises(OSError):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
     assert not (vault/setup.CONTROL).exists() and json.loads((root/'device.json').read_text())['role']=='capture'
+    # Another device replaces the note while the record write is failing: its note is not removed.
+    def replaced_then_refused(target,text):
+        (vault/setup.CONTROL).write_text('---\nmaintainer_device_id: other99\n---\n',encoding='utf-8');raise OSError('disk full')
+    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':replaced_then_refused})
+    with pytest.raises(OSError):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
+    assert 'other99' in (vault/setup.CONTROL).read_text() and json.loads((root/'device.json').read_text())['role']=='capture'
 
 
 def test_codex_skill_already_in_the_common_folder_is_kept_current_and_not_doubled(tmp_path,monkeypatch):
@@ -157,8 +163,10 @@ def test_program_that_ends_between_checks_is_still_held_to_the_output_bound(brai
 
 
 @posix
-def test_terminating_the_runner_ends_the_model_it_started(brain,tmp_path):
+@pytest.mark.parametrize('name',['SIGTERM','SIGHUP','SIGINT'])
+def test_ending_the_runner_or_closing_its_terminal_ends_the_model_it_started(brain,tmp_path,name):
     import signal,subprocess,time
+    ending=getattr(signal,name)
     mark=tmp_path/'model.pid'
     model=program(tmp_path/'tools','synthetic-model','#!/bin/sh\necho $$ > "'+str(mark)+'"\nsleep 60\n')
     runner=tmp_path/'runner.py'
@@ -168,7 +176,7 @@ def test_terminating_the_runner_ends_the_model_it_started(brain,tmp_path):
     deadline=time.monotonic()+20
     while not mark.exists() or not mark.read_text().strip():
         assert time.monotonic()<deadline and child.poll() is None;time.sleep(.1)
-    pid=int(mark.read_text());child.send_signal(signal.SIGTERM);child.wait(timeout=20)
+    pid=int(mark.read_text());child.send_signal(ending);child.wait(timeout=20)
     deadline=time.monotonic()+5
     while time.monotonic()<deadline:
         try:os.kill(pid,0)
@@ -239,9 +247,8 @@ def test_role_change_keeps_a_record_that_was_already_written_and_refuses_beside_
     assert json.loads((root/'device.json').read_text())['role']=='maintainer' and 'abc123' in (vault/setup.CONTROL).read_text()
     # Without the service step, a server that is running would keep answering as a capture device.
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8');(vault/setup.CONTROL).unlink()
-    class Running:returncode=0;stderr='';stdout=json.dumps({'status':'running','version':'0.2.7'})
-    monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Running())
-    with pytest.raises(SystemExit,match='service is running'):setup.make_maintainer({**device,'root':str(root)},root,vault,False)
+    (root/'state/service-pids.json').write_text('{}',encoding='utf-8')  # The service has run here, whatever it answers now.
+    with pytest.raises(SystemExit,match='has a background service'):setup.make_maintainer({**device,'root':str(root)},root,vault,False)
     assert json.loads((root/'device.json').read_text())['role']=='capture' and not (vault/setup.CONTROL).exists()
 
 
