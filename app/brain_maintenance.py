@@ -339,4 +339,13 @@ def maintenance(sync=True):
         raise
     return status
 
-if __name__=='__main__': print(json.dumps(maintenance('--no-sync' not in sys.argv)))
+def _attention_line(status):
+    """One bounded line for the service log when a pass needs attention. The service keeps only error output of
+    a pass, and the saved status is overwritten by the next pass, so this is the lasting record of the failure."""
+    fields={name:status.get(name) for name in ('at','status','stage','git','error','error_type') if status.get(name) is not None}
+    return json.dumps(fields,ensure_ascii=True)[:2000]
+
+if __name__=='__main__':
+    result=maintenance('--no-sync' not in sys.argv)
+    if result.get('status')=='needs attention':print(_attention_line(result),file=sys.stderr,flush=True)
+    print(json.dumps(result))

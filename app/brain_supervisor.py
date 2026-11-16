@@ -26,16 +26,17 @@ def _bootstrap_admitted():
 
 LOG_LIMIT=5_000_000
 
-def _fresh_log(name):
-    """The log a worker is about to be started with. Only this supervisor starts the workers, and it calls this
-    when the one that wrote the log is not running, so an oversized log can be set aside without a live writer.
-    One previous file is kept; the name no longer matches the service-*.log pattern that maintenance measures."""
-    path=cfg.ROOT/'logs'/name
+def _maintenance_log():
+    """The log the next maintenance pass is started with. An oversized one is set aside first, but only while
+    this process holds the lock every running pass holds, so no pass can be writing to it. Without the lock the
+    log is left exactly as it is. One previous file is kept, under a name the service-*.log size check skips."""
+    path=cfg.ROOT/'logs/service-maintenance.log'
     try:
-        if not path.is_symlink() and path.is_file() and path.stat().st_size>LOG_LIMIT:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size<=LOG_LIMIT:return path
+        with FileLock(str(cfg.STATE/'maintenance.lock'),timeout=0):
             import os
-            os.replace(path,path.with_name(name+'.previous'))
-    except OSError:pass  # A log that cannot be set aside is appended to as before; maintenance reports its size.
+            os.replace(path,path.with_name(path.name+'.previous'))
+    except (OSError,Timeout):pass  # Left as it is; maintenance goes on reporting its size.
     return path
 
 def _publish_owned(owned):
@@ -68,12 +69,12 @@ def main(owned=None):
                         identity=processes.listener_identity()
                         listening=identity is not None
                         if not listening and (child is None or child.poll() is not None):
-                            with _fresh_log('service-server.log').open('ab') as log:
+                            with (cfg.ROOT/'logs/service-server.log').open('ab') as log:
                                 child=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_server.py')],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
                                 owned['server']=child
                                 _publish_owned(owned)
                         if listening and (bootstrap is None or bootstrap.poll() is not None) and _bootstrap_admitted():
-                            with _fresh_log('service-bootstrap.log').open('ab') as log:
+                            with (cfg.ROOT/'logs/service-bootstrap.log').open('ab') as log:
                                 bootstrap=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_index_bootstrap.py')],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
                                 owned['bootstrap']=bootstrap
                                 _publish_owned(owned)
@@ -83,10 +84,11 @@ def main(owned=None):
                             maintenance=None
                             _publish_owned(owned)
                         if listening and maintenance is None and time.monotonic()-owned.get('_maintenance_finished',0)>900:
-                            with _fresh_log('service-maintenance.log').open('ab') as log:
+                            with _maintenance_log().open('ab') as log:
                                 # The pass saves its whole result to maintenance-status.json. What it prints is that
                                 # same result again, tens of kilobytes on a large vault every fifteen minutes, so
-                                # only its error output is kept in the log.
+                                # only its error output is kept in the log. A pass that needs attention writes one
+                                # short line there itself.
                                 maintenance=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_maintenance.py')],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=log,env=cfg.environment(),**cfg.child_options())
                                 owned['maintenance']=maintenance
                                 _publish_owned(owned)
