@@ -186,7 +186,9 @@ def offer_wiki(device,assume):
     Recording calls no model and sends nothing; pages are built only by wiki run. Returns what is still open, or ''."""
     found=[name for name in ('claude','codex') if wiki_programs(name)]
     if len(found)==2:
-        answer=ask('Both claude and codex are installed. Which one builds the wiki pages: claude, codex or none','none',assume).strip().lower()
+        # A closed input is no answer: the optional choice stays open and the run goes on to its check.
+        try:answer=ask('Both claude and codex are installed. Which one builds the wiki pages: claude, codex or none','none',assume).strip().lower()
+        except EOFError:answer='none'
         if answer not in found:
             return 'No wiki assistant is selected: claude and codex are both installed. Choose one by running this again with --wiki claude or --wiki codex:\n  '+again('claude')+'\n  '+again('codex')
         found=[answer]

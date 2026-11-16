@@ -552,6 +552,10 @@ def test_maintainer_without_a_wiki_assistant_gets_the_only_one_installed_and_is_
     assert setup.offer_wiki({},False)=='' and calls[0][-2].endswith('claude'+suffix) and calls[0][-1]=='--keep-existing' and len(calls)==1
     calls.clear();monkeypatch.setattr('builtins.input',lambda prompt:'')
     assert 'both installed' in setup.offer_wiki({},False) and calls==[]
+    # Input that is closed at the question is no answer either; the run goes on.
+    def closed(prompt):raise EOFError
+    monkeypatch.setattr('builtins.input',closed)
+    assert 'both installed' in setup.offer_wiki({},False) and calls==[]
     # None, with only a launcher present: named as missing, nothing recorded.
     monkeypatch.setenv('PATH',str(none))
     assert 'neither claude nor codex was found' in setup.offer_wiki({},True) and calls==[] and setup.offer_wiki({},True).rstrip().endswith(tail)
@@ -577,11 +581,11 @@ def test_check_names_the_wiki_assistant_of_a_maintainer_and_warns_when_none_is_r
     def runtime(model):
         # The model answer is what "wiki model" prints, or the error line it ends with.
         (root/'app/brain_cli.py').write_text('import json,sys\nhealth='+repr(health)+'\nmodel='+repr(model)+'\n'
-            'if sys.argv[1]=="wiki":\n    assert sys.argv[2:]==["model"]\n    if isinstance(model,str):sys.exit("Traceback (most recent call last):\\n  File x\\n"+model)\n    print(json.dumps({"status":"selected","executable":model}))\n'
+            'if sys.argv[1]=="wiki":\n    assert sys.argv[2:]==["model"]\n    if isinstance(model,str):sys.exit("Traceback (most recent call last):\\n  File x\\n"+model)\n    print(json.dumps({"status":"selected","executable":model,"worker":health["wiki"]["worker"]}))\n'
             'else:print(json.dumps(health if sys.argv[1]=="health" else {"status":"verified"}))\n',encoding='utf-8')
     def device(role):(root/'device.json').write_text(json.dumps({'version':'0.2.10','role':role,'python':sys.executable,'vault':str(vault)}),encoding='utf-8')
-    def line():
-        done=subprocess.run([sys.executable,'-I','-B',str(SOURCE/'check_setup.py'),'--root',str(root),'--home',str(tmp_path/'home')],capture_output=True,text=True,timeout=120)
+    def line(*flags):
+        done=subprocess.run([sys.executable,'-I','-B',str(SOURCE/'check_setup.py'),'--root',str(root),'--home',str(tmp_path/'home'),*flags],capture_output=True,text=True,timeout=120)
         assert done.returncode==0,done.stdout+done.stderr
         return [row for row in done.stdout.splitlines() if 'wiki assistant' in row]
     chosen={'path':'/opt/tools/codex','provider':'codex','model':'gpt-6.1-sol','effort':'high'}
@@ -595,6 +599,8 @@ def test_check_names_the_wiki_assistant_of_a_maintainer_and_warns_when_none_is_r
     health['wiki']['worker']={'status':'attention','attention_required':True,'reason':'RuntimeError'}
     runtime(chosen)
     assert line()[0].startswith('WARN') and '/opt/tools/codex' in line()[0] and 'needs attention (RuntimeError)' in line()[0] and 'wiki retry' in line()[0]
+    # The stopped run is saved state, so a device without the service shows the same line.
+    assert line('--no-service')==line()
     # A record the runtime refuses is never a PASS, whatever the file looks like, and its reason is shown.
     health['wiki']['worker']={'status':'idle','attention_required':False}
     runtime('ValueError: Invalid model configuration; no model called.')
@@ -616,9 +622,14 @@ def test_wiki_model_command_reads_the_record_as_a_run_does_and_starts_nothing(br
     brain_cli.main()
     answer=json.loads(capsys.readouterr().out)
     assert answer['status']=='selected' and answer['executable']['path']==str(tool.resolve()) and (answer['executable']['model'],answer['executable']['effort'])==('gpt-6.1-sol','high')
+    assert answer['worker']==w._worker_summary() and answer['worker']['attention_required'] is False
     for damaged in ({'format':2,'executable':str(tool)},{'format':1,'executable':str(tool),'model':None},{'format':1,'executable':str(tmp_path/'gone/codex')}):
         (cfg.STATE/'wiki-model.json').write_text(json.dumps(damaged),encoding='utf-8')
         with pytest.raises(ValueError):brain_cli.main()
+    # A program that can no longer be started is refused here and at selection, not only when a run reaches it.
+    w.configure_model(str(tool));tool.chmod(0o600)
+    with pytest.raises(ValueError,match='not executable'):brain_cli.main()
+    with pytest.raises(ValueError,match='not executable'):w.configure_model(str(tool))
     assert started==[]
 
 

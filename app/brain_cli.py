@@ -66,7 +66,7 @@ def main():
             result=wiki.configure_model(args.executable,args.model,args.effort,args.keep_existing)
         elif args.action=='model':
             # The same reading of the record that a run does, with no program started.
-            result={'status':'selected','executable':wiki._model_executable()}
+            result={'status':'selected','executable':wiki._model_executable(),'worker':wiki._worker_summary()}
         else: parser.error('wiki action: status, run, prepare, lint, retry, migrate, relink, configure-model, model')
     elif args.command=='git':
         import brain_git

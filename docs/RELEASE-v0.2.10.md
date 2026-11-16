@@ -16,7 +16,7 @@ The assistant that builds wiki pages was recorded only when the command carried 
    - neither is found: nothing is recorded.
    In every case where nothing was recorded the run says so before the check and again at its very end (`Still open: ...`), followed by this run's own command with `--wiki claude` or `--wiki codex` added, so the other options of the run are kept.
 2. **The acceptance check has a `wiki assistant` line on a maintainer.** PASS with the program's path, model and effort. WARN when none is recorded, when the runtime refuses the record (with its reason), or when the last wiki run needs attention (with the reason `health` already shows and the commands to run). A capture device has no such line.
-3. **`brain_cli.py wiki model`** reads the record exactly as `wiki run` does, including the identity check of the program file, and starts nothing. The check uses it, so a record that a run would refuse is never shown as PASS.
+3. **`brain_cli.py wiki model`** reads the record exactly as `wiki run` does, including the identity check of the program file, adds the saved state of the last run, and starts nothing. The identity check now also refuses a program file this user cannot execute, at selection and before a run. The check uses it, so a record that a run would refuse is never shown as PASS.
 
 Recording an assistant calls no model and sends nothing. Pages are still built only by `wiki run`, which the owner starts. The programs are found exactly as with `--wiki`: real programs in absolute `PATH` folders, `.exe` on Windows.
 

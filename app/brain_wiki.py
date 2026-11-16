@@ -2422,6 +2422,8 @@ def _native_model_identity(executable):
         raise ValueError('Linked model executable paths are refused.')
     selected=path;path=path.resolve()
     if not path.is_file():raise ValueError('The selected model program does not name a regular file.')
+    # A file that cannot be started would only fail once a run has prepared its batch.
+    if not os.access(path,os.X_OK):raise ValueError('The selected model program is not executable by this user.')
     # A tool that sits in the folder the command is run from may have been planted there. The home folder and
     # the folders above it are not such a place: every program installed for one user lives below them.
     here=Path.cwd().resolve()

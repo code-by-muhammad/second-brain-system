@@ -168,21 +168,20 @@ def main():
 
     if device.get('role') == 'maintainer':
         # Only the maintainer builds wiki pages. A device with no assistant, or with a run that stopped, says so here.
-        worker = (health.get('wiki') or {}).get('worker') if isinstance(health.get('wiki'), dict) else None
-        worker = worker if isinstance(worker, dict) else {}
         again = 'run setup again with --wiki claude or --wiki codex'
         if not os.path.lexists(root / 'state/wiki-model.json'):
             add('WARN', 'wiki assistant', 'none selected, so no wiki pages are built (optional); ' + again)
         else:
             # The runtime reads the record exactly as a wiki run would, without starting the program.
-            chosen, reason = {}, 'the runtime gave no answer'
+            # It also gives the saved state of the last run, so this line is the same with and without the service.
+            chosen, worker, reason = {}, {}, 'the runtime gave no answer'
             try:
                 done = subprocess.run([str(python), str(root / 'app/brain_cli.py'), 'wiki', 'model'], capture_output=True, text=True,
                                       encoding='utf-8', errors='replace', timeout=300, stdin=subprocess.DEVNULL, check=False,
                                       env={k: v for k, v in os.environ.items() if not k.startswith(('BRAIN_', 'BASIC_MEMORY_'))})
                 if done.returncode == 0:
-                    chosen = json.loads(done.stdout).get('executable')
-                    chosen = chosen if isinstance(chosen, dict) else {}
+                    answer = json.loads(done.stdout)
+                    chosen, worker = (answer.get(name) if isinstance(answer.get(name), dict) else {} for name in ('executable', 'worker'))
                 else:
                     reason = ((done.stderr or '').strip().splitlines() or [reason])[-1]
             except (OSError, ValueError, AttributeError, subprocess.TimeoutExpired) as error:
