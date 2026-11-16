@@ -1,4 +1,4 @@
-# Second Brain setup guide (v0.2.9)
+# Second Brain setup guide (v0.2.10)
 
 One guide for a new device and for a device that already runs Second Brain. One command does the setup. This guide tells you what to prepare, what the command asks, and how to read its result.
 
@@ -20,7 +20,7 @@ A chat without terminal access cannot do this.
 
 Release identity. The command in section 3 checks the commit for you. These values let you check by hand:
 
-- Tag `v0.2.9`, commit `{{COMMIT}}`
+- Tag `v0.2.10`, commit `{{COMMIT}}`
 - `release-manifest.json` SHA256 `{{MANIFEST_SHA256}}`
 - Software repository: `https://github.com/code-by-muhammad/second-brain-system` (public, no account needed)
 
@@ -54,13 +54,13 @@ You do not need a GitHub account. Sync is an optional extra (section 6).
 Mac and Linux:
 
 ```text
-curl -fsSLO https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.9/setup.sh && echo "{{SETUP_SH_SHA256}}  setup.sh" | shasum -a 256 -c - && sh setup.sh
+curl -fsSLO https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.10/setup.sh && echo "{{SETUP_SH_SHA256}}  setup.sh" | shasum -a 256 -c - && sh setup.sh
 ```
 
 Windows PowerShell:
 
 ```text
-iwr https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.9/setup.ps1 -OutFile setup.ps1; if ((Get-FileHash setup.ps1 -Algorithm SHA256).Hash -ne '{{SETUP_PS1_SHA256}}') { throw 'setup.ps1 does not match this guide' }; powershell -ExecutionPolicy Bypass -File .\setup.ps1
+iwr https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.10/setup.ps1 -OutFile setup.ps1; if ((Get-FileHash setup.ps1 -Algorithm SHA256).Hash -ne '{{SETUP_PS1_SHA256}}') { throw 'setup.ps1 does not match this guide' }; powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
 The first part downloads a small script and checks it against the hash in this guide. The script then downloads the exact release, checks its commit, and starts the setup. A release folder kept from an earlier run must match that fresh download exactly. If any check fails, nothing runs.
@@ -78,6 +78,7 @@ What it does without asking:
 - [ ] Downloads the local search model (about 130 MB). Search runs on your computer.
 - [ ] Registers a background service that starts at login.
 - [ ] Connects every assistant it finds: the connection, the session hooks, the instruction block and the skill. Claude Code and Codex are found automatically.
+- [ ] On a maintainer with no wiki assistant yet: records the assistant program that builds wiki pages when exactly one of `claude` and `codex` is installed. With both installed it asks you, or, when an assistant runs it, names the command to choose. Recording sends nothing (section 7).
 - [ ] Runs the acceptance check and prints the result.
 
 Options, added after `setup.sh` or `setup.ps1`:
@@ -87,7 +88,7 @@ Options, added after `setup.sh` or `setup.ps1`:
 | `--yes` | Accept every default without asking. For an assistant running it. |
 | `--vault "<folder>"` | The notes folder. |
 | `--role maintainer` or `--role capture` | Set the role yourself. On a device that is already installed as capture, `--role maintainer` makes it the maintainer, provided the notes have no maintainer yet (section 7). |
-| `--wiki claude` or `--wiki codex` | Maintainer only: choose the assistant program that builds the wiki pages (section 7). Nothing is built by this. |
+| `--wiki claude` or `--wiki codex` | Maintainer only: choose the assistant program that builds the wiki pages (section 7). Needed when both are installed, or to change the choice. Nothing is built by this. |
 | `--clients "claude-code,codex"` | Choose the assistants. Keep the quotes on Windows. Add `claude-desktop` for the Claude Desktop chat app, which must be closed while you run this. |
 | `--no-hooks` | Leave out the Claude Code session hooks. |
 | `--timezone Europe/Berlin` | Use this timezone instead of the system one. |
@@ -103,7 +104,7 @@ Running the same command again is safe. On a device that is already set up it ad
 The command ends with a list like this:
 
 ```text
-PASS   service health: status running, version 0.2.9
+PASS   service health: status running, version 0.2.10
 PASS   Claude Code connection: points at this runtime
 PASS   Claude Code instructions: one block matching this release
 PASS   Claude Code skill: ...
@@ -114,6 +115,7 @@ MANUAL claude-code: fresh chat: ...
 
 - [ ] No line says FAIL.
 - [ ] Every WARN line is understood. "search index: needs review" right after a new install only means the first index is still running. Run the check again after a few minutes.
+- [ ] Maintainer only: the `wiki assistant` line is PASS and names the program. WARN means no wiki pages are built on this device, and the line itself says what to run (section 7). When setup could not settle the assistant by itself, it also repeats that at the end of its output; a run with `--check` does not. Leave it only if you do not want wiki pages.
 - [ ] MANUAL, each assistant: open a new chat and ask it to call `brain_context`, search for a note you know, read it, and save one test capture. All four must work.
 - [ ] MANUAL, restart: restart the computer, log in, wait a minute, then run the command again with `--check`. The service must be running without help.
 
@@ -191,7 +193,8 @@ What the wiki is. Topic pages that are compiled from your notes and saved milest
 Who writes the pages. The assistant program you choose, Claude (`claude`) or Codex (`codex`), whichever you have. It must be that assistant's own command-line program, installed and signed in on the maintainer device: `claude --version` or `codex --version` answers in a new ordinary terminal. The Claude desktop app alone is not that program.
 
 - [ ] Each run sends a few of your notes to that assistant's provider under your own account, and it counts against your plan's usage. This is the only part of Second Brain that sends note text to a model provider on its own. (The optional sync in section 6 sends notes to your own repository, and what your assistant reads through the brain tools in a chat is part of that chat.) Decide first whether you want that.
-- [ ] Choose the assistant: run the one command with `--wiki claude` or `--wiki codex`. It records the program's path and calls nothing.
+- [ ] Choose the assistant. The one command does this by itself on a maintainer that has none recorded and exactly one of the two programs installed; it prints `Wiki assistant selected: <path>`. With both installed it asks in the terminal, and when nobody can answer it records nothing and ends with `Still open: No wiki assistant is selected` followed by the command to run. Then, or to change the choice, run the one command with `--wiki claude` or `--wiki codex`. Either way it only records the program's path and calls nothing. A recorded choice is never changed without `--wiki`.
+- [ ] Check it: the acceptance check line `wiki assistant` is PASS with the program's path.
 - [ ] Windows needs the real program file (`claude.exe` or `codex.exe`), not a `.cmd` or `.ps1` launcher. If the choice is refused for that reason, install the assistant's native Windows version.
 - [ ] Model: Claude builds with `claude-opus-5-5` and Codex with `gpt-6.1-sol`, both at reasoning effort `high`, on every device, whatever that account's own default is. These are large models, so a run uses a noticeable part of a plan's usage. To use another: `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" wiki configure-model --executable "<path the setup printed>" --model <name> --effort <level>`. A model your account cannot use makes the run fail with the assistant's own message and publishes nothing.
 - [ ] Build: `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" wiki run`. In PowerShell put `& ` in front of a command that starts with a quote. One run handles a few notes. Run it again for more. `wiki status` shows what is waiting.
@@ -219,6 +222,9 @@ Who writes the pages. The assistant program you choose, Claude (`claude`) or Cod
 | Port 8765 is in use | If Second Brain already holds it, this device is already installed. If another program holds it, stop and ask. |
 | "search index" stays on WARN | Run `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" index retry --full --stall-seconds 300` and wait. It repeats by itself while it makes progress and then says `verified` or what is still wrong. On a very large vault this can take over an hour. Judge the result with `index status`. |
 | "maintenance: needs attention: Operational log rotation is deferred" | A `service-*.log` file in the runtime's `logs` folder is over 5 MB. Before v0.2.9 this was almost always `service-maintenance.log`; since v0.2.9 that file is no longer written or counted, so update and run the command with `--check` again after the next background pass, at most about fifteen minutes later. If the line stays, another log is the large one: keep it and ask the maintainer of this software. |
+| "wiki assistant: none selected" or "Still open: No wiki assistant is selected" | Maintainer only. Both `claude` and `codex` are installed and nobody chose, or neither was found as a program. Run the command with `--wiki claude` or `--wiki codex`. If neither is found, install one first (on Windows the native `.exe`, not a `.cmd` launcher) and check that its `--version` answers in a new ordinary terminal. Wiki pages are optional; everything else works without this. |
+| "wiki assistant: the recorded choice cannot be used (...)" | The text in brackets is the reason; usually the assistant program was moved or removed after it was chosen. Run the command with `--wiki claude` or `--wiki codex`. |
+| "wiki assistant: ...; the last wiki run needs attention" | An earlier `wiki run` stopped, for example because no assistant was chosen yet. Run `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" wiki status` to read why, fix that, then `wiki retry`, and run the command with `--check`. |
 | "notes sync: needs attention" | Read the text after it. Usual causes: no network, the GitHub sign-in expired, or other uncommitted files in the notes folder. |
 | "notes sync: paused" | The text after it says what blocks the sync: a conflict between two devices, files you staged yourself, or other uncommitted files. Nothing is lost. Clear that in the notes folder with Git and the sync resumes. |
 | After a restart the service is not running | Mac: `launchctl list | grep second-brain`. Windows: the task `SecondBrainLocalService`. Linux: `systemctl --user status second-brain.service`. Then run the command with `--check`. |

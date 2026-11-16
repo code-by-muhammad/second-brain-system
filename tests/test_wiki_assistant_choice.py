@@ -445,6 +445,9 @@ def test_only_an_explicit_choice_is_stored_and_an_invalid_stored_one_calls_no_mo
     identity=w.configure_model(str(tool),'claude-sonnet-5-5','medium')['executable']
     assert json.loads((cfg.STATE/'wiki-model.json').read_text())=={'format':1,'executable':str(tool),'model':'claude-sonnet-5-5','effort':'medium'}
     assert (w._model_executable()['model'],w._model_executable()['effort'])==('claude-sonnet-5-5','medium')
+    # A choice that was not asked for by name leaves a record that is already there exactly as it is.
+    kept=(cfg.STATE/'wiki-model.json').read_bytes()
+    assert w.configure_model(str(tool),keep_existing=True)['status'].startswith('kept') and (cfg.STATE/'wiki-model.json').read_bytes()==kept
     with pytest.raises(ValueError,match='Effort'):w.configure_model(str(tool),effort='none')
     assert json.loads((cfg.STATE/'wiki-model.json').read_text())['effort']=='medium'  # A refused choice changes nothing.
     (cfg.STATE/'wiki-model.json').write_text(json.dumps({'format':1,'executable':str(tool),'model':'x y'}),encoding='utf-8')
@@ -515,3 +518,169 @@ def test_pass_that_needs_attention_leaves_one_complete_bounded_line_for_the_log(
     out,err=capfdbinary.readouterr()
     assert json.loads(out)['status']=='needs attention' and 'review' in json.loads(out)
     assert json.loads(err)['error'].startswith('Operational log rotation is deferred') and b'review' not in err
+
+
+def test_maintainer_without_a_wiki_assistant_gets_the_only_one_installed_and_is_told_when_setup_cannot_decide(tmp_path,monkeypatch,capsys):
+    setup=setup_module_under_test();suffix='.exe' if os.name=='nt' else '';calls=[]
+    class Done:returncode=0;stderr='';stdout=''
+    monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:calls.append(arguments) or Done())
+    # How this run's command ends once --wiki codex is added, in the quoting of the shell the guide uses here.
+    tail="'--yes' '--wiki' 'codex'" if os.name=='nt' else '--yes --wiki codex'
+    both=tmp_path/'both';one=tmp_path/'one';none=tmp_path/'none'
+    for folder,names in ((both,('claude','codex')),(one,('codex',)),(none,())):
+        folder.mkdir()
+        for name in names:(folder/(name+suffix)).write_bytes(b'inert');(folder/(name+suffix)).chmod(0o700)
+    (none/'codex.cmd').write_text('launcher')
+    only=str((one/('codex'+suffix)).resolve() if os.name=='nt' else one/('codex'+suffix))
+    # One assistant: recorded without a question, and the run says which and that nothing is built yet.
+    monkeypatch.setenv('PATH',str(one))
+    assert setup.offer_wiki({},True)==''
+    assert calls==[('wiki','configure-model','--executable',only,'--keep-existing')]
+    said=capsys.readouterr().out
+    assert 'codex is the only assistant program found' in said and 'Wiki assistant selected: '+only in said and 'No page is built' in said
+    # Two assistants and nobody to ask: nothing is recorded and the exact next command is named.
+    calls.clear();monkeypatch.setenv('PATH',str(both))
+    monkeypatch.setattr(sys,'argv',['setup_device.py','--root','/r t','--local-only','--yes'])
+    for assume in (True,False):
+        said=setup.offer_wiki({},assume)
+        assert '--wiki claude or --wiki codex' in said and said.count(str(SOURCE/'setup_device.py'))==2
+        if os.name!='nt':assert said.endswith("--root '/r t' --local-only --yes --wiki codex") and ' -I -B ' in said
+    assert calls==[]
+    # Two assistants and a person at the terminal: the answer decides; anything else selects nothing.
+    monkeypatch.setattr(setup.sys.stdin,'isatty',lambda:True,raising=False)
+    monkeypatch.setattr('builtins.input',lambda prompt:' Claude ')
+    assert setup.offer_wiki({},False)=='' and calls[0][-2].endswith('claude'+suffix) and calls[0][-1]=='--keep-existing' and len(calls)==1
+    calls.clear();monkeypatch.setattr('builtins.input',lambda prompt:'')
+    assert 'both installed' in setup.offer_wiki({},False) and calls==[]
+    # Input that is closed at the question is no answer either; the run goes on.
+    def closed(prompt):raise EOFError
+    monkeypatch.setattr('builtins.input',closed)
+    assert 'both installed' in setup.offer_wiki({},False) and calls==[]
+    # None, with only a launcher present: named as missing, nothing recorded.
+    monkeypatch.setenv('PATH',str(none))
+    assert 'neither claude nor codex was found' in setup.offer_wiki({},True) and calls==[] and setup.offer_wiki({},True).rstrip().endswith(tail)
+    # The only assistant is refused by the runtime: its reason is passed on.
+    # A choice recorded by someone else while the question was open is kept, and the run says so.
+    class Kept:returncode=0;stderr='';stdout='{\n  "status": "kept; a wiki assistant is already recorded and nothing was changed"\n}'
+    monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Kept())
+    monkeypatch.setenv('PATH',str(one));capsys.readouterr()
+    assert setup.offer_wiki({},True)=='' and 'left as it is' in capsys.readouterr().out
+    class Refused:returncode=1;stderr='ValueError: Model executable must be outside runtime';stdout=''
+    monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Refused())
+    monkeypatch.setenv('PATH',str(one))
+    said=setup.offer_wiki({},True)
+    assert 'was not selected' in said and 'must be outside runtime' in said and said.rstrip().endswith(tail)
+
+
+def test_check_names_the_wiki_assistant_of_a_maintainer_and_warns_when_none_is_recorded_or_a_run_stopped(tmp_path):
+    """The acceptance check is run as a program against a runtime whose answers are fixed."""
+    import subprocess
+    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'app').mkdir(parents=True);(root/'state').mkdir();vault.mkdir()
+    health={'status':'running','version':'0.2.10','vault_exists':True,'database_exists':True,'maintenance':{'status':'completed','git':'synced'},
+            'wiki':{'worker':{'status':'idle','attention_required':False}}}
+    def runtime(model):
+        # The model answer is what "wiki model" prints, or the error line it ends with.
+        (root/'app/brain_cli.py').write_text('import json,sys\nhealth='+repr(health)+'\nmodel='+repr(model)+'\n'
+            'if sys.argv[1]=="wiki":\n    assert sys.argv[2:]==["model"]\n    if isinstance(model,str):sys.exit("Traceback (most recent call last):\\n  File x\\n"+model)\n    print(json.dumps({"status":"selected","executable":model,"worker":health["wiki"]["worker"]}))\n'
+            'else:print(json.dumps(health if sys.argv[1]=="health" else {"status":"verified"}))\n',encoding='utf-8')
+    def device(role):(root/'device.json').write_text(json.dumps({'version':'0.2.10','role':role,'python':sys.executable,'vault':str(vault)}),encoding='utf-8')
+    def line(*flags):
+        done=subprocess.run([sys.executable,'-I','-B',str(SOURCE/'check_setup.py'),'--root',str(root),'--home',str(tmp_path/'home'),*flags],capture_output=True,text=True,timeout=120)
+        assert done.returncode==0,done.stdout+done.stderr
+        return [row for row in done.stdout.splitlines() if 'wiki assistant' in row]
+    chosen={'path':'/opt/tools/codex','provider':'codex','model':'gpt-6.1-sol','effort':'high'}
+    runtime(chosen);device('capture')
+    assert line()==[]
+    device('maintainer')
+    # No record: the runtime is not even asked, and the line names the command.
+    assert len(line())==1 and line()[0].startswith('WARN') and 'none selected' in line()[0] and '--wiki claude or --wiki codex' in line()[0]
+    (root/'state/wiki-model.json').write_text('{}',encoding='utf-8')
+    assert line()==['PASS   wiki assistant: /opt/tools/codex, model gpt-6.1-sol, effort high']
+    health['wiki']['worker']={'status':'attention','attention_required':True,'reason':'RuntimeError'}
+    runtime(chosen)
+    assert line()[0].startswith('WARN') and '/opt/tools/codex' in line()[0] and 'needs attention (RuntimeError)' in line()[0] and 'wiki retry' in line()[0]
+    # The stopped run is saved state, so a device without the service shows the same line.
+    assert line('--no-service')==line()
+    # A record the runtime refuses is never a PASS, whatever the file looks like, and its reason is shown.
+    health['wiki']['worker']={'status':'idle','attention_required':False}
+    runtime('ValueError: Invalid model configuration; no model called.')
+    assert line()[0].startswith('WARN') and 'cannot be used (ValueError: Invalid model configuration; no model called.)' in line()[0] and '--wiki' in line()[0]
+    for odd in ({},[],{'path':''},None):
+        runtime(odd)
+        assert line()[0].startswith('WARN') and 'cannot be used' in line()[0]
+
+
+@posix
+def test_wiki_model_command_reads_the_record_as_a_run_does_and_starts_nothing(brain,tmp_path,monkeypatch,capsys):
+    import brain_cli
+    started=[]
+    monkeypatch.setattr(w.subprocess,'Popen',lambda *args,**kwargs:started.append(args))
+    monkeypatch.setattr(sys,'argv',['brain_cli.py','wiki','model'])
+    with pytest.raises(RuntimeError,match='Configure the claude or codex program'):brain_cli.main()
+    tool=program(tmp_path/'tools','codex')
+    w.configure_model(str(tool));capsys.readouterr()
+    brain_cli.main()
+    answer=json.loads(capsys.readouterr().out)
+    assert answer['status']=='selected' and answer['executable']['path']==str(tool.resolve()) and (answer['executable']['model'],answer['executable']['effort'])==('gpt-6.1-sol','high')
+    assert answer['worker']==w._worker_summary() and answer['worker']['attention_required'] is False
+    for damaged in ({'format':2,'executable':str(tool)},{'format':1,'executable':str(tool),'model':None},{'format':1,'executable':str(tmp_path/'gone/codex')}):
+        (cfg.STATE/'wiki-model.json').write_text(json.dumps(damaged),encoding='utf-8')
+        with pytest.raises(ValueError):brain_cli.main()
+    # A program that can no longer be started is refused here and at selection, not only when a run reaches it.
+    w.configure_model(str(tool));tool.chmod(0o600)
+    with pytest.raises(ValueError,match='not executable'):brain_cli.main()
+    with pytest.raises(ValueError,match='not executable'):w.configure_model(str(tool))
+    assert started==[]
+
+
+def test_setup_offers_a_wiki_assistant_only_to_a_maintainer_that_has_none_and_repeats_what_is_open_last(tmp_path,monkeypatch,capsys):
+    setup=setup_module_under_test()
+    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir()
+    def device(role):(root/'device.json').write_text(json.dumps({'device_id':'abc123','role':role,'version':'0.2.10','vault':str(vault),'python':sys.executable}),encoding='utf-8')
+    offered=[];selected=[]
+    class Done:returncode=0;stderr='';stdout=''
+    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'verify':lambda repo:{'version':'0.2.10'}})
+    monkeypatch.setattr(setup,'run',lambda command,capture=False:Done())
+    monkeypatch.setattr(setup,'wait_running',lambda *args,**kwargs:True)
+    monkeypatch.setattr(setup,'offer_wiki',lambda device,assume:offered.append(assume) or 'No wiki assistant is selected: both.')
+    monkeypatch.setattr(setup,'select_wiki',lambda device,name:selected.append(name))
+    def go(*flags):
+        monkeypatch.setattr(sys,'argv',['setup_device.py','--root',str(root),'--clients','',*flags])
+        with pytest.raises(SystemExit) as stop:setup.main()
+        return stop.value.code,capsys.readouterr().out
+    device('maintainer')
+    code,said=go('--yes')
+    assert code==0 and offered==[True] and said.rstrip().endswith('Still open: No wiki assistant is selected: both.')
+    assert said.index('No wiki assistant')<said.index('Acceptance check')
+    offered.clear()
+    assert go('--check')[0]==0 and go('--wiki','codex')[0]==0 and offered==[] and selected==['codex']
+    (root/'state/wiki-model.json').write_text('{}',encoding='utf-8')
+    assert 'Still open' not in go()[1] and offered==[]
+    (root/'state/wiki-model.json').unlink();device('capture')
+    assert 'Still open' not in go()[1] and offered==[]
+
+
+def test_setup_and_check_print_a_path_the_console_encoding_lacks_instead_of_stopping(tmp_path,monkeypatch):
+    """A redirected Windows console is often cp1252; an assistant under a user folder with other letters must still be shown."""
+    import io
+    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'app').mkdir(parents=True);(root/'state').mkdir();vault.mkdir()
+    path='/Users/\u674e/tools/codex'
+    (root/'device.json').write_text(json.dumps({'device_id':'abc123','version':'0.2.10','role':'maintainer','python':sys.executable,'vault':str(vault)}),encoding='utf-8')
+    (root/'state/wiki-model.json').write_text('{}',encoding='utf-8')
+    (root/'app/brain_cli.py').write_text('import json,sys\nsys.stdout.reconfigure(encoding="utf-8")\nprint(json.dumps({"status":"selected","executable":{"path":'+json.dumps(path)+',"model":"m","effort":"high"},"worker":{}} if sys.argv[1]=="wiki" else {}))\n',encoding='utf-8')
+    def narrow():
+        raw=io.BytesIO();monkeypatch.setattr(sys,'stdout',io.TextIOWrapper(raw,encoding='cp1252'));return raw
+    spec=importlib.util.spec_from_file_location('check_setup_narrow',SOURCE/'check_setup.py');check=importlib.util.module_from_spec(spec);spec.loader.exec_module(check)
+    raw=narrow();monkeypatch.setattr(sys,'argv',['check_setup.py','--root',str(root),'--home',str(tmp_path/'home'),'--no-service'])
+    assert check.main()==0
+    sys.stdout.flush();assert 'PASS   wiki assistant: '+path+', model m, effort high' in raw.getvalue().decode('utf-8')
+    setup=setup_module_under_test()
+    class Done:returncode=0;stderr='';stdout=''
+    monkeypatch.setattr(setup.runpy,'run_path',lambda found:{'verify':lambda repo:{'version':'0.2.10'}})
+    monkeypatch.setattr(setup,'run',lambda command,capture=False:Done())
+    monkeypatch.setattr(setup,'wait_running',lambda *args,**kwargs:True)
+    monkeypatch.setattr(setup,'offer_wiki',lambda device,assume:'No wiki assistant is selected: '+path)
+    (root/'state/wiki-model.json').unlink()
+    raw=narrow();monkeypatch.setattr(sys,'argv',['setup_device.py','--root',str(root),'--clients','','--yes'])
+    with pytest.raises(SystemExit) as stop:setup.main()
+    sys.stdout.flush();assert stop.value.code==0 and raw.getvalue().decode('utf-8').rstrip().endswith('Still open: No wiki assistant is selected: '+path)

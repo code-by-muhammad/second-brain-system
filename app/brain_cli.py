@@ -28,6 +28,7 @@ def main():
     parser.add_argument('--hold-id')
     parser.add_argument('--model',help='wiki configure-model: model name instead of the release default.')
     parser.add_argument('--effort',help='wiki configure-model: reasoning effort instead of the release default.')
+    parser.add_argument('--keep-existing',action='store_true',help='wiki configure-model: record only when no assistant is recorded yet.')
     parser.add_argument('--executable',help='Absolute path of the claude or codex program for maintainer wiki configure-model; no model call.')
     parser.add_argument('--snapshot')
     parser.add_argument('--since',type=int)
@@ -62,8 +63,11 @@ def main():
             result=wiki.reset_retries()
         elif args.action=='configure-model':
             if not args.executable:parser.error('wiki configure-model requires --executable.')
-            result=wiki.configure_model(args.executable,args.model,args.effort)
-        else: parser.error('wiki action: status, run, prepare, lint, retry, migrate, relink, configure-model')
+            result=wiki.configure_model(args.executable,args.model,args.effort,args.keep_existing)
+        elif args.action=='model':
+            # The same reading of the record that a run does, with no program started.
+            result={'status':'selected','executable':wiki._model_executable(),'worker':wiki._worker_summary()}
+        else: parser.error('wiki action: status, run, prepare, lint, retry, migrate, relink, configure-model, model')
     elif args.command=='git':
         import brain_git
         if args.action=='status': result=brain_git.review()

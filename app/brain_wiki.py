@@ -2422,6 +2422,8 @@ def _native_model_identity(executable):
         raise ValueError('Linked model executable paths are refused.')
     selected=path;path=path.resolve()
     if not path.is_file():raise ValueError('The selected model program does not name a regular file.')
+    # A file that cannot be started would only fail once a run has prepared its batch.
+    if not os.access(path,os.X_OK):raise ValueError('The selected model program is not executable by this user.')
     # A tool that sits in the folder the command is run from may have been planted there. The home folder and
     # the folders above it are not such a place: every program installed for one user lives below them.
     here=Path.cwd().resolve()
@@ -2460,10 +2462,13 @@ def _model_choice(provider,model=None,effort=None):
         level=effort
     return chosen,level
 
-def configure_model(executable,model=None,effort=None):
+def configure_model(executable,model=None,effort=None,keep_existing=False):
     cfg.require_maintainer()
     with FileLock(str(cfg.STATE/'wiki-worker.lock'),timeout=1):
         cfg.write_admission()
+        # A choice nobody asked for by name never replaces one that is there, however it got there meanwhile.
+        if keep_existing and os.path.lexists(cfg.STATE/'wiki-model.json'):
+            return {'status':'kept; a wiki assistant is already recorded and nothing was changed'}
         identity=_native_model_identity(executable)
         identity['model'],identity['effort']=_model_choice(identity['provider'],model,effort)
         # Only an explicit choice is stored; a device without one follows the defaults of the release it runs.

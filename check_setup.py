@@ -93,11 +93,15 @@ def skill(name, candidates, release):
 
 
 def main():
+    # A path may hold characters the console's own encoding lacks; printing it must never end the check.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8', errors='backslashreplace')
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--root', default=str(Path.home() / '.local/share/second-brain'))
     parser.add_argument('--home', default=str(Path.home()))
     parser.add_argument('--clients', default='', help='Comma-separated: ' + ', '.join(CLIENTS))
-    parser.add_argument('--expect-version', help='For example 0.2.9')
+    parser.add_argument('--expect-version', help='For example 0.2.10')
     parser.add_argument('--release', help='Verified release checkout; compares the protocol block and skill with it')
     parser.add_argument('--no-hooks', action='store_true', help='The owner declined Claude Code hooks')
     parser.add_argument('--local-only', action='store_true', help='Notes must have no Git remote on this device')
@@ -165,6 +169,33 @@ def main():
             state = None
         add('PASS' if state == 'verified' else 'WARN', 'search index',
             str(state) + ('' if state == 'verified' else '; a new index needs a few minutes, otherwise run: brain_cli.py index retry'))
+
+    if device.get('role') == 'maintainer':
+        # Only the maintainer builds wiki pages. A device with no assistant, or with a run that stopped, says so here.
+        again = 'run setup again with --wiki claude or --wiki codex'
+        if not os.path.lexists(root / 'state/wiki-model.json'):
+            add('WARN', 'wiki assistant', 'none selected, so no wiki pages are built (optional); ' + again)
+        else:
+            # The runtime reads the record exactly as a wiki run would, without starting the program.
+            # It also gives the saved state of the last run, so this line is the same with and without the service.
+            chosen, worker, reason = {}, {}, 'the runtime gave no answer'
+            try:
+                done = subprocess.run([str(python), str(root / 'app/brain_cli.py'), 'wiki', 'model'], capture_output=True, text=True,
+                                      encoding='utf-8', errors='replace', timeout=300, stdin=subprocess.DEVNULL, check=False,
+                                      env={k: v for k, v in os.environ.items() if not k.startswith(('BRAIN_', 'BASIC_MEMORY_'))})
+                if done.returncode == 0:
+                    answer = json.loads(done.stdout)
+                    chosen, worker = (answer.get(name) if isinstance(answer.get(name), dict) else {} for name in ('executable', 'worker'))
+                else:
+                    reason = ((done.stderr or '').strip().splitlines() or [reason])[-1]
+            except (OSError, ValueError, AttributeError, subprocess.TimeoutExpired) as error:
+                reason = type(error).__name__
+            if not chosen.get('path'):
+                add('WARN', 'wiki assistant', ('the recorded choice cannot be used (' + reason[:200] + '); ' + again))
+            elif worker.get('attention_required'):
+                add('WARN', 'wiki assistant', f"{chosen.get('path')}; the last wiki run needs attention ({str(worker.get('reason'))[:100]}): see brain_cli.py wiki status, then wiki retry"[:500])
+            else:
+                add('PASS', 'wiki assistant', f"{chosen.get('path')}, model {chosen.get('model')}, effort {chosen.get('effort')}"[:400])
 
     if 'claude-code' in clients:
         try:
