@@ -190,7 +190,7 @@ What the wiki is. Topic pages that are compiled from your notes and saved milest
 
 Who writes the pages. The assistant program you choose, Claude (`claude`) or Codex (`codex`), whichever you have. It must be that assistant's own command-line program, installed and signed in on the maintainer device: `claude --version` or `codex --version` answers in a new ordinary terminal. The Claude desktop app alone is not that program.
 
-- [ ] Each run sends a few of your notes to that assistant's provider under your own account, and it counts against your plan's usage. Apart from the optional sync to your own repository (section 6), this is the only part of Second Brain that sends note text off the device. Decide first whether you want that.
+- [ ] Each run sends a few of your notes to that assistant's provider under your own account, and it counts against your plan's usage. This is the only part of Second Brain that sends note text to a model provider on its own. (The optional sync in section 6 sends notes to your own repository, and what your assistant reads through the brain tools in a chat is part of that chat.) Decide first whether you want that.
 - [ ] Choose the assistant: run the one command with `--wiki claude` or `--wiki codex`. It records the program's path and calls nothing.
 - [ ] Windows needs the real program file (`claude.exe` or `codex.exe`), not a `.cmd` or `.ps1` launcher. If the choice is refused for that reason, install the assistant's native Windows version.
 - [ ] Build: `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" wiki run`. In PowerShell put `& ` in front of a command that starts with a quote. One run handles a few notes. Run it again for more. `wiki status` shows what is waiting.

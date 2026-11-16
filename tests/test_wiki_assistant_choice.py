@@ -94,6 +94,14 @@ def test_deadline_ends_the_program_and_what_it_started(brain,tmp_path):
     else:pytest.fail('A helper the program started outlived the run.')
 
 
+def writer(device_write):
+    """The installer's atomic writer in miniature: a new file is created whole and never over an existing one."""
+    def atomic(target,text,expected_sha256='observe'):
+        if expected_sha256 is not None:return device_write(target,text)
+        with Path(target).open('x',encoding='utf-8') as output:output.write(text)
+    return atomic
+
+
 def setup_module_under_test():
     spec=importlib.util.spec_from_file_location('setup_device_choice',SOURCE/'setup_device.py')
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
@@ -108,7 +116,7 @@ def test_installed_capture_device_becomes_maintainer_only_when_the_notes_have_no
     calls=[]
     class Done:returncode=0;stderr='';stdout=''
     monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:calls.append(arguments) or Done())
-    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':lambda target,text:Path(target).write_text(text,encoding='utf-8')})
+    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':writer(lambda target,text:Path(target).write_text(text,encoding='utf-8'))})
     setup.make_maintainer({**device,'root':str(root)},root,vault,True)
     assert calls==[('service','stop','--wait-seconds','300')]
     assert json.loads((root/'device.json').read_text())=={**device,'role':'maintainer'}
@@ -130,13 +138,13 @@ def test_installed_capture_device_becomes_maintainer_only_when_the_notes_have_no
     # The device record cannot be written: the ownership note this run created is withdrawn again.
     (vault/setup.CONTROL).unlink();monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Done())
     def refuse(target,text):raise OSError('disk full')
-    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':refuse})
+    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':writer(refuse)})
     with pytest.raises(OSError):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
     assert not (vault/setup.CONTROL).exists() and json.loads((root/'device.json').read_text())['role']=='capture'
     # Another device replaces the note while the record write is failing: its note is not removed.
     def replaced_then_refused(target,text):
         (vault/setup.CONTROL).write_text('---\nmaintainer_device_id: other99\n---\n',encoding='utf-8');raise OSError('disk full')
-    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':replaced_then_refused})
+    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':writer(replaced_then_refused)})
     with pytest.raises(OSError):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
     assert 'other99' in (vault/setup.CONTROL).read_text() and json.loads((root/'device.json').read_text())['role']=='capture'
 
@@ -245,7 +253,7 @@ def test_role_change_keeps_a_record_that_was_already_written_and_refuses_beside_
     class Done:returncode=0;stderr='';stdout=''
     monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Done())
     def interrupted_after_replacing(target,text):Path(target).write_text(text,encoding='utf-8');raise KeyboardInterrupt
-    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':interrupted_after_replacing})
+    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':writer(interrupted_after_replacing)})
     with pytest.raises(KeyboardInterrupt):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
     assert json.loads((root/'device.json').read_text())['role']=='maintainer' and 'abc123' in (vault/setup.CONTROL).read_text()
     # Without the service step, a server that is running would keep answering as a capture device.
@@ -277,7 +285,7 @@ def test_failed_stop_before_a_role_change_starts_the_service_again_and_says_so(t
     def controller(device,*arguments,capture=False):
         calls.append(arguments[:2]);return Result(1 if arguments[:2]==('service','stop') else 0)
     monkeypatch.setattr(setup,'brain',controller)
-    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':lambda target,text:pytest.fail('The record must not be written.')})
+    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':writer(lambda target,text:pytest.fail('The record must not be written.'))})
     with pytest.raises(SystemExit,match='role was not changed'):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
     assert calls==[('service','stop'),('service','start')] and not (vault/setup.CONTROL).exists()
     # Ctrl+C while the stop is still waiting may already have ended the service: it is started again too.
@@ -317,7 +325,7 @@ def test_role_change_refuses_a_linked_ownership_note_and_undoes_a_note_written_j
     (root/'device.json').write_text(json.dumps(device),encoding='utf-8')
     class Done:returncode=0;stderr='';stdout=''
     monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Done())
-    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':lambda target,text:pytest.fail('The record must not be written.')})
+    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':writer(lambda target,text:pytest.fail('The record must not be written.'))})
     actual=setup.own_the_notes
     def interrupted_after_writing(vault,device_id):actual(vault,device_id);raise KeyboardInterrupt
     monkeypatch.setattr(setup,'own_the_notes',interrupted_after_writing)

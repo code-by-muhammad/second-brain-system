@@ -77,13 +77,11 @@ def own_the_notes(vault,device_id):
     """Name this device as the one maintainer. Never through a link, never over an existing owner."""
     control=control_path(vault)
     control.parent.mkdir(parents=True,exist_ok=True)
-    try:
-        with control.open('x',encoding='utf-8',newline='\n') as output:
-            try:output.write('---\nmaintainer_device_id: '+device_id+'\n---\n\n# Shared writer ownership\n\nThis device links saved milestones into daily notes. Additional devices are installed with the capture role.\n');output.flush()
-            except BaseException:
-                # A half-written ownership note must not stay behind.
-                output.close();control.unlink(missing_ok=True);raise
-    except FileExistsError:
+    text='---\nmaintainer_device_id: '+device_id+'\n---\n\n# Shared writer ownership\n\nThis device links saved milestones into daily notes. Additional devices are installed with the capture role.\n'
+    # The whole note appears at once or not at all, and never over a file that is already there.
+    try:runpy.run_path(str(REPO/'install.py'))['atomic'](control,text,expected_sha256=None)
+    except ValueError as error:
+        if type(error).__name__!='ConcurrentWriteError':raise
         raise SystemExit(CONTROL+' appeared while this was running. Another device may own these notes; check it before starting the service.') from None
 
 
