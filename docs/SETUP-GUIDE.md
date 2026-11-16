@@ -1,4 +1,4 @@
-# Second Brain setup guide (v0.2.8)
+# Second Brain setup guide (v0.2.9)
 
 One guide for a new device and for a device that already runs Second Brain. One command does the setup. This guide tells you what to prepare, what the command asks, and how to read its result.
 
@@ -20,7 +20,7 @@ A chat without terminal access cannot do this.
 
 Release identity. The command in section 3 checks the commit for you. These values let you check by hand:
 
-- Tag `v0.2.8`, commit `{{COMMIT}}`
+- Tag `v0.2.9`, commit `{{COMMIT}}`
 - `release-manifest.json` SHA256 `{{MANIFEST_SHA256}}`
 - Software repository: `https://github.com/code-by-muhammad/second-brain-system` (public, no account needed)
 
@@ -54,13 +54,13 @@ You do not need a GitHub account. Sync is an optional extra (section 6).
 Mac and Linux:
 
 ```text
-curl -fsSLO https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.8/setup.sh && echo "{{SETUP_SH_SHA256}}  setup.sh" | shasum -a 256 -c - && sh setup.sh
+curl -fsSLO https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.9/setup.sh && echo "{{SETUP_SH_SHA256}}  setup.sh" | shasum -a 256 -c - && sh setup.sh
 ```
 
 Windows PowerShell:
 
 ```text
-iwr https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.8/setup.ps1 -OutFile setup.ps1; if ((Get-FileHash setup.ps1 -Algorithm SHA256).Hash -ne '{{SETUP_PS1_SHA256}}') { throw 'setup.ps1 does not match this guide' }; powershell -ExecutionPolicy Bypass -File .\setup.ps1
+iwr https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.9/setup.ps1 -OutFile setup.ps1; if ((Get-FileHash setup.ps1 -Algorithm SHA256).Hash -ne '{{SETUP_PS1_SHA256}}') { throw 'setup.ps1 does not match this guide' }; powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
 The first part downloads a small script and checks it against the hash in this guide. The script then downloads the exact release, checks its commit, and starts the setup. A release folder kept from an earlier run must match that fresh download exactly. If any check fails, nothing runs.
@@ -103,7 +103,7 @@ Running the same command again is safe. On a device that is already set up it ad
 The command ends with a list like this:
 
 ```text
-PASS   service health: status running, version 0.2.8
+PASS   service health: status running, version 0.2.9
 PASS   Claude Code connection: points at this runtime
 PASS   Claude Code instructions: one block matching this release
 PASS   Claude Code skill: ...
@@ -218,6 +218,7 @@ Who writes the pages. The assistant program you choose, Claude (`claude`) or Cod
 | The assistant cannot see the `brain_` tools | It was open during setup. Restart it and open a new chat. |
 | Port 8765 is in use | If Second Brain already holds it, this device is already installed. If another program holds it, stop and ask. |
 | "search index" stays on WARN | Run `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" index retry --full --stall-seconds 300` and wait. It repeats by itself while it makes progress and then says `verified` or what is still wrong. On a very large vault this can take over an hour. Judge the result with `index status`. |
+| "maintenance: needs attention: Operational log rotation is deferred" | A `service-*.log` file in the runtime's `logs` folder is over 5 MB. Before v0.2.9 this was almost always `service-maintenance.log`; since v0.2.9 that file is no longer written or counted, so update and run the command with `--check` again after the next background pass, at most about fifteen minutes later. If the line stays, another log is the large one: keep it and ask the maintainer of this software. |
 | "notes sync: needs attention" | Read the text after it. Usual causes: no network, the GitHub sign-in expired, or other uncommitted files in the notes folder. |
 | "notes sync: paused" | The text after it says what blocks the sync: a conflict between two devices, files you staged yourself, or other uncommitted files. Nothing is lost. Clear that in the notes folder with Git and the sync resumes. |
 | After a restart the service is not running | Mac: `launchctl list | grep second-brain`. Windows: the task `SecondBrainLocalService`. Linux: `systemctl --user status second-brain.service`. Then run the command with `--check`. |

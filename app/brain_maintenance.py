@@ -305,6 +305,8 @@ def maintenance(sync=True):
         # Child stdout/stderr can retain independent append descriptors. Do not
         # copy/truncate or rename a potentially live log without writer ownership.
         for p in (s.ROOT/'logs').glob('service-*.log'):
+            # Retired in v0.2.9: nothing appends to this file any more, so its size is no longer a growing one.
+            if p.name=='service-maintenance.log':continue
             if p.stat().st_size>5_000_000:
                 status.update(status='needs attention',error='Operational log rotation is deferred: active logs are preserved and may continue growing.')
         from brain_wiki import cleanup
@@ -339,4 +341,16 @@ def maintenance(sync=True):
         raise
     return status
 
-if __name__=='__main__': print(json.dumps(maintenance('--no-sync' not in sys.argv)))
+def _attention_line(status):
+    """One bounded line for the service log when a pass needs attention. The service keeps only error output of
+    a pass, and the saved status is overwritten by the next pass, so this is the lasting record of the failure."""
+    # Each value is cut on its own, so the record is always complete JSON. The Git state is kept at the length its
+    # own diagnostic limit allows (2,000 characters): its reason comes after the path and must not be cut away.
+    fields={name:str(status[name])[:2000 if name=='git' else 400] for name in ('at','status','stage','error_type','error','git') if status.get(name) is not None}
+    return json.dumps(fields,ensure_ascii=False)
+
+if __name__=='__main__':
+    result=maintenance('--no-sync' not in sys.argv)
+    if result.get('status')=='needs attention':
+        sys.stderr.buffer.write((_attention_line(result)+'\n').encode('utf-8'));sys.stderr.buffer.flush()
+    print(json.dumps(result))

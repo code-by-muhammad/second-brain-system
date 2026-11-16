@@ -97,7 +97,7 @@ def main():
     parser.add_argument('--root', default=str(Path.home() / '.local/share/second-brain'))
     parser.add_argument('--home', default=str(Path.home()))
     parser.add_argument('--clients', default='', help='Comma-separated: ' + ', '.join(CLIENTS))
-    parser.add_argument('--expect-version', help='For example 0.2.8')
+    parser.add_argument('--expect-version', help='For example 0.2.9')
     parser.add_argument('--release', help='Verified release checkout; compares the protocol block and skill with it')
     parser.add_argument('--no-hooks', action='store_true', help='The owner declined Claude Code hooks')
     parser.add_argument('--local-only', action='store_true', help='Notes must have no Git remote on this device')
@@ -151,6 +151,11 @@ def main():
             f"vault {health.get('vault_exists')}, index {health.get('database_exists')}")
         sync = str((health.get('maintenance') or {}).get('git', 'not run yet'))
         add('FAIL' if sync.startswith('needs attention') else 'WARN' if sync.startswith('paused') else 'PASS', 'notes sync', sync[:200])
+        # The background pass that links milestones and syncs reports its own state; health shows it, so does this.
+        upkeep = health.get('maintenance') or {}
+        state = str(upkeep.get('status', 'not run yet'))
+        reason = str(upkeep.get('error') or '')
+        add('WARN' if state == 'needs attention' else 'PASS', 'maintenance', (state + (': ' + reason if state == 'needs attention' and reason else ''))[:200])
         try:
             done = subprocess.run([str(python), str(root / 'app/brain_cli.py'), 'index', 'status'], capture_output=True, text=True,
                                   timeout=600, stdin=subprocess.DEVNULL, check=False,

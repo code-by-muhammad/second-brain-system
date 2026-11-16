@@ -114,7 +114,7 @@ def test_verified_sync_restores_status_after_cleanup_notice(brain,tmp_path,monke
 
 def test_cleanup_success_preserves_prior_operational_log_attention(brain,tmp_path,monkeypatch,isolated_git):
     vault,state,source,remote,before=_repository(brain,tmp_path,monkeypatch,isolated_git)
-    log=state.parent/'logs/service-maintenance.log';raw=b'x'*5_000_001;log.write_bytes(raw)
+    log=state.parent/'logs/service-server.log';raw=b'x'*5_000_001;log.write_bytes(raw)
     commits,notices=_observe_commit_callback(monkeypatch,state,2)
     result=_public_cli(monkeypatch)
     assert commits==[0] and len(notices)==2

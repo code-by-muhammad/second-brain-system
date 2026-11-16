@@ -69,8 +69,13 @@ def main(owned=None):
                             maintenance=None
                             _publish_owned(owned)
                         if listening and maintenance is None and time.monotonic()-owned.get('_maintenance_finished',0)>900:
-                            with (cfg.ROOT/'logs/service-maintenance.log').open('ab') as log:
-                                maintenance=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_maintenance.py')],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
+                            with (cfg.ROOT/'logs/service-upkeep.log').open('ab') as log:
+                                # The pass saves its whole result to maintenance-status.json. What it prints is that
+                                # same result again, tens of kilobytes on a large vault every fifteen minutes, so
+                                # only its error output is kept, and a pass that needs attention writes one short
+                                # line there itself. The log has a new name: the old service-maintenance.log is
+                                # no longer written, so it can stay as it is without ever being renamed or cut.
+                                maintenance=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_maintenance.py')],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=log,env=cfg.environment(),**cfg.child_options())
                                 owned['maintenance']=maintenance
                                 _publish_owned(owned)
                         service.write_heartbeat('ready' if listening else 'starting')
