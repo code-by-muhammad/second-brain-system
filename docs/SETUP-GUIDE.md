@@ -1,4 +1,4 @@
-# Second Brain setup guide (v0.2.6)
+# Second Brain setup guide (v0.2.7)
 
 One guide for a new device and for a device that already runs Second Brain. One command does the setup. This guide tells you what to prepare, what the command asks, and how to read its result.
 
@@ -14,12 +14,13 @@ A chat without terminal access cannot do this.
 |---|---|
 | Fresh install, Mac, Windows x64, Ubuntu 24.04 | {{FRESH_STATUS}} |
 | Update an existing Mac on macOS 27 | {{MAC_UPDATE_STATUS}} |
-| Update an existing Windows device | The updater code path is unchanged since v0.2.3. No v0.2.6 device record yet. |
+| Update an existing Windows device | {{WINDOWS_UPDATE_STATUS}} |
+| Wiki pages built with Claude or Codex | {{WIKI_STATUS}} |
 | Notes kept on one device, no GitHub | Supported. Sync shows "off" and the check passes. |
 
 Release identity. The command in section 3 checks the commit for you. These values let you check by hand:
 
-- Tag `v0.2.6`, commit `{{COMMIT}}`
+- Tag `v0.2.7`, commit `{{COMMIT}}`
 - `release-manifest.json` SHA256 `{{MANIFEST_SHA256}}`
 - Software repository: `https://github.com/code-by-muhammad/second-brain-system` (public, no account needed)
 
@@ -41,6 +42,7 @@ If this copy still shows `{{...}}` placeholders, it is the source file. Use the 
 - [ ] Mac only: Homebrew Python 3.12 is installed: `brew install python@3.12`. Other Python builds on a Mac cannot run both the service and the search index, and setup refuses them.
 - [ ] uv 0.9.16 or newer is installed. Mac and Linux: see https://docs.astral.sh/uv/getting-started/installation/. Windows: `winget install --id astral-sh.uv -e`.
 - [ ] Open a new terminal after installing either tool. Windows: ordinary PowerShell, not Git Bash.
+- [ ] Windows: run every command in this guide from ordinary PowerShell, never from a terminal inside the Claude desktop app. That app is packaged, and what is installed from inside it lands in a private copy that the background service cannot see.
 - [ ] Decide where the notes live. It must be a plain local folder, not inside OneDrive, iCloud or Dropbox. A folder that does not exist yet is created for you with a blank starter layout.
 - [ ] Obsidian is optional. Install it from obsidian.md if you want to read and edit the notes there.
 - [ ] Updating an existing device: close other assistant sessions first (see section 5).
@@ -52,13 +54,13 @@ You do not need a GitHub account. Sync is an optional extra (section 6).
 Mac and Linux:
 
 ```text
-curl -fsSLO https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.6/setup.sh && echo "{{SETUP_SH_SHA256}}  setup.sh" | shasum -a 256 -c - && sh setup.sh
+curl -fsSLO https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.7/setup.sh && echo "{{SETUP_SH_SHA256}}  setup.sh" | shasum -a 256 -c - && sh setup.sh
 ```
 
 Windows PowerShell:
 
 ```text
-iwr https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.6/setup.ps1 -OutFile setup.ps1; if ((Get-FileHash setup.ps1 -Algorithm SHA256).Hash -ne '{{SETUP_PS1_SHA256}}') { throw 'setup.ps1 does not match this guide' }; powershell -ExecutionPolicy Bypass -File .\setup.ps1
+iwr https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.7/setup.ps1 -OutFile setup.ps1; if ((Get-FileHash setup.ps1 -Algorithm SHA256).Hash -ne '{{SETUP_PS1_SHA256}}') { throw 'setup.ps1 does not match this guide' }; powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
 The first part downloads a small script and checks it against the hash in this guide. The script then downloads the exact release, checks its commit, and starts the setup. A release folder kept from an earlier run must match that fresh download exactly. If any check fails, nothing runs.
@@ -84,7 +86,8 @@ Options, added after `setup.sh` or `setup.ps1`:
 |---|---|
 | `--yes` | Accept every default without asking. For an assistant running it. |
 | `--vault "<folder>"` | The notes folder. |
-| `--role maintainer` or `--role capture` | Set the role yourself. |
+| `--role maintainer` or `--role capture` | Set the role yourself. On a device that is already installed as capture, `--role maintainer` makes it the maintainer, provided the notes have no maintainer yet (section 7). |
+| `--wiki claude` or `--wiki codex` | Maintainer only: choose the assistant program that builds the wiki pages (section 7). Nothing is built by this. |
 | `--clients "claude-code,codex"` | Choose the assistants. Keep the quotes on Windows. Add `claude-desktop` for the Claude Desktop chat app, which must be closed while you run this. |
 | `--no-hooks` | Leave out the Claude Code session hooks. |
 | `--timezone Europe/Berlin` | Use this timezone instead of the system one. |
@@ -100,7 +103,7 @@ Running the same command again is safe. On a device that is already set up it ad
 The command ends with a list like this:
 
 ```text
-PASS   service health: status running, version 0.2.6
+PASS   service health: status running, version 0.2.7
 PASS   Claude Code connection: points at this runtime
 PASS   Claude Code instructions: one block matching this release
 PASS   Claude Code skill: ...
@@ -148,7 +151,7 @@ During:
 After:
 
 - [ ] The acceptance check passes (section 4), including a new chat in each assistant.
-- [ ] The search index says verified. If the check shows a WARN for it after ten minutes, see section 7.
+- [ ] The search index says verified. If the check shows a WARN for it after ten minutes, see section 8.
 
 ## 6. Optional: sync the notes with a private GitHub repository
 
@@ -173,7 +176,28 @@ Rules:
 - [ ] Never sign in with someone else's GitHub account, and never push one person's notes to another person's repository.
 - [ ] Do not run your own sync loop or scheduled push. The service is the only one that syncs.
 
-## 7. Troubleshooting
+## 7. Optional: wiki pages and the maintainer role
+
+Saving, search and reading work without this section.
+
+What the maintainer does. One device per set of notes is the maintainer. It links saved milestones into the daily notes, and it is the only device that may build wiki pages. With a single device, that device must be the maintainer.
+
+- [ ] Check the role: the acceptance check prints `device record: version ..., role ...`.
+- [ ] A single device that was installed as `capture`: run the one command again with `--role maintainer`. It stops the service, records this device as the maintainer in the notes (`02-Areas/AI-Memory/Wiki/Control.md`), and starts the service again. It refuses when the notes already name another device.
+- [ ] The other direction, and moving the maintainer from one device to another, is not supported by the command. Ask the maintainer of this software.
+
+What the wiki is. Topic pages that are compiled from your notes and saved milestones. Every claim names the note it came from. The pages are summaries; the original notes are never changed. Start page: `02-Areas/AI-Memory/Wiki/Index.md`.
+
+Who writes the pages. The assistant program you choose, Claude (`claude`) or Codex (`codex`), whichever you have. It must be installed and signed in on the maintainer device.
+
+- [ ] Each run sends a few of your notes to that assistant's provider under your own account, and it counts against your plan's usage. This is the one part of Second Brain that sends note text off the device. Decide first whether you want that.
+- [ ] Choose the assistant: run the one command with `--wiki claude` or `--wiki codex`. It records the program's path and calls nothing.
+- [ ] Windows needs the real program file (`claude.exe` or `codex.exe`), not a `.cmd` or `.ps1` launcher. If the choice is refused for that reason, install the assistant's native Windows version.
+- [ ] Build: `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" wiki run`. One run handles a few notes. Run it again for more. `wiki status` shows what is waiting.
+- [ ] The assistant gets the note text on standard input, with no tools, no access to your files, none of your assistant settings and no MCP servers. Its answer is checked against the notes before any page is written.
+- [ ] "model authentication/quota requires attention": sign in to that assistant, or wait for your usage to reset, then run `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" wiki retry` and `wiki run` again.
+
+## 8. Troubleshooting
 
 | What you see | What to do |
 |---|---|
@@ -185,6 +209,9 @@ Rules:
 | "Left alone: ... leaves the home folder" | An instruction or skill file is a link that points outside your home folder. Setup never writes there. Put the shared copy inside your home folder, or make the file a regular one, and run the command again. |
 | "Left alone: ... loaded from more than one file" | The instruction block exists twice. Remove one copy so exactly one BEGIN and one END marker remain, then run the command again. |
 | "Existing second-brain entry belongs to another or unknown runtime" | An older Second Brain connection points somewhere else. Remove that one entry from the assistant's settings, then run the command again. |
+| "Startup readiness failed" during an update | The new version did not answer in time and the old version was put back. Run the command once more. If it fails a second time, stop and send the full output to the maintainer of this software. |
+| "Python launcher/base pair disagrees", or the tools fail only inside the Claude desktop app on Windows | Something was installed from a terminal inside that app. Run setup from ordinary PowerShell. Ask before renaming or removing the private Python copy the app made. |
+| "Codex skill: separate copies" | Two copies of the skill exist, in `.codex/skills` and `.agents/skills`. Keep one, move the other to the Recycle Bin or Trash, and run the command with `--check`. |
 | "Claude Desktop is open" | Close it, or leave `claude-desktop` out of `--clients`. |
 | FAIL on a connection, hooks, instructions or skill line | Close that assistant, run the command again, then open a new chat. |
 | The assistant cannot see the `brain_` tools | It was open during setup. Restart it and open a new chat. |
@@ -196,7 +223,7 @@ Rules:
 
 `<DEVICE PYTHON>` is the `python` value in `<RUNTIME>/device.json`.
 
-## 8. Never
+## 9. Never
 
 - [ ] Editing `device.json` or files under `state` by hand.
 - [ ] Copying a database, token, index or Python environment from another device.

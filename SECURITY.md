@@ -2,7 +2,7 @@
 
 Candidate review revision 14 November 2026; FastMCP is 4.1.8 and no advisory exception is carried. The candidate declares the local FastEmbed provider with reranking disabled, loopback MCP and one static local bearer credential. The server checks this configuration before importing Basic Memory, refuses an installed LiteLLM SDK/proxy, and exposes only the six constrained `brain_*` tools. The client verifies the owned listener and rejects non-local destinations, redirects, ambient proxies and OAuth auth objects before transport use.
 
-The separately authorized wiki compiler intentionally sends its selected, screened packet through the Codex/OpenAI CLI. It is not part of the local-only retrieval claim. This candidate requires an explicitly selected native executable, records its observed byte hash, contains its Windows process lifetime and limits private output. Selection/hash recording does not authenticate a publisher or qualify the receiving device. Missing native selection makes no model call; there is no shell-shim fallback. [Operational changes and limits](docs/REVIEW-FOLLOWUP-20261102.md) apply before compilation.
+The separately authorized wiki compiler intentionally sends its selected, screened packet through the assistant program the maintainer selected: the Codex/OpenAI CLI or, since v0.2.7, the Claude Code CLI (`claude -p`, no tools, no user settings, no MCP servers). It is not part of the local-only retrieval claim. This candidate requires an explicitly selected native executable, records its observed byte hash, contains its Windows process lifetime and limits private output. Selection/hash recording does not authenticate a publisher or qualify the receiving device. Missing native selection makes no model call; there is no shell-shim fallback. [Operational changes and limits](docs/REVIEW-FOLLOWUP-20261102.md) apply before compilation.
 
 ## Dependency remediation
 
@@ -14,7 +14,7 @@ The transitive `joserfc` dependency is constrained to 1.7.7 for [GHSA-9pg5-8c7x-
 
 LiteLLM is deliberately excluded with uv's `exclude-dependencies`; uv 0.9.16 or newer is required. Basic Memory 0.23.2 still declares the SDK in its distribution metadata, so generic `pip check` can report that declaration as unsatisfied. This is an explicit product composition decision, not a supported installation of every upstream Basic Memory feature. The server refuses any non-FastEmbed provider or any enabled/invalid reranker, including the second LiteLLM import path through reranking. Package discovery, proxy-entrypoint absence and actual search are tested. Do not reinstall LiteLLM to silence a metadata warning or run upstream proxy/provider entry points from this environment.
 
-## No advisory exception in v0.2.6
+## No advisory exception since v0.2.6
 
 Through v0.2.5 the raw dependency audit was affected by **GHSA-vqqp-x5qm-5qp4** in FastMCP 4.0.0b1, and a time-limited, source-bound exception covered it because the product creates no OAuth provider and uses only its owned loopback static-token transport. The [maintainer advisory](https://github.com/PrefectHQ/fastmcp/security/advisories/GHSA-vqqp-x5qm-5qp4) was fixed upstream in FastMCP 4.1.2.
 

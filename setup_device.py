@@ -78,6 +78,24 @@ def own_the_notes(vault,device_id):
         raise SystemExit(CONTROL+' appeared while this was running. Another device may own these notes; check it before starting the service.') from None
 
 
+def make_maintainer(device,root,vault,service):
+    """Turn an installed capture device into the one maintainer of notes that have none yet."""
+    control=vault/CONTROL
+    if control.exists():
+        owner=[line.split(':',1)[1].strip() for line in control.read_text(encoding='utf-8-sig').splitlines() if line.startswith('maintainer_device_id:')]
+        if owner!=[device['device_id']]:
+            raise SystemExit('These notes already name another device as maintainer in '+CONTROL+'. Only one device may be; nothing was changed.')
+    if (root/'state/service-transaction.json').exists():raise SystemExit('An update is in progress on this device; nothing was changed.')
+    if service:
+        result=brain(device,'service','stop','--wait-seconds','300',capture=True)
+        if result.returncode:
+            raise SystemExit('The service could not be stopped: '+((result.stderr or '').strip().splitlines() or [''])[-1][:300]+'\nNothing was changed.')
+    if not control.exists():own_the_notes(vault,device['device_id'])
+    record=json.loads((root/'device.json').read_text(encoding='utf-8-sig'));record['role']='maintainer'
+    runpy.run_path(str(REPO/'install.py'))['atomic'](root/'device.json',json.dumps(record,indent=2)+'\n')
+    say('This device is now the maintainer of these notes.')
+
+
 def brain(device,*arguments,capture=False):
     return run([device['python'],Path(device['root'])/'app/brain_cli.py',*arguments],capture=capture)
 
@@ -111,8 +129,9 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__,formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--root',default='C:/Second-Brain-System' if windows else str(home/'.local/share/second-brain'),help='Runtime folder.')
     parser.add_argument('--vault',help='Notes folder. A folder that does not exist is created from the blank starter.')
-    parser.add_argument('--role',choices=['capture','maintainer'],help='Default: maintainer for the first device of a brain, capture for an additional one.')
+    parser.add_argument('--role',choices=['capture','maintainer'],help='Default: maintainer for the first device of a brain, capture for an additional one. On an installed capture device, maintainer makes it the maintainer if the notes have none.')
     parser.add_argument('--clients',help='Comma-separated: '+', '.join(CLIENTS)+'. Default: the assistants found on this device.')
+    parser.add_argument('--wiki',choices=['claude','codex'],help='Maintainer only: select which assistant program builds the wiki pages. Nothing is built by this.')
     parser.add_argument('--no-hooks',action='store_true',help='Leave out the Claude Code session hooks.')
     parser.add_argument('--timezone',help='IANA name such as Europe/Berlin. Default: the system timezone.')
     parser.add_argument('--no-service',action='store_true',help='Install without registering or starting the background service.')
@@ -187,9 +206,19 @@ def main():
                 for row in json.loads(result.stdout).get('client_result',{}).get('skipped',[]):
                     if row.get('reason')!='shared file already planned':say('Left alone: '+str(row.get('path'))+': '+str(row.get('reason'))[:300])
         device['root']=str(root)
+        if args.role and args.role!=device.get('role'):
+            if args.role!='maintainer':raise SystemExit('A maintainer cannot be turned into a capture device here; nothing was changed.')
+            make_maintainer(device,root,vault,not args.no_service)
+            device['role']='maintainer'
         # A first run that stopped before the service was up is finished here.
         if not args.no_service and not wait_running(device,version,seconds=15):start_service(device,version,root,registered=True)
     device['root']=str(root)
+    if args.wiki and not args.check:
+        program=shutil.which(args.wiki)
+        result=brain(device,'wiki','configure-model','--executable',program,capture=True) if program else None
+        if result is None or result.returncode:
+            say('The wiki assistant was not selected: '+(((result.stderr or '').strip().splitlines() or [''])[-1][:300] if result else args.wiki+' was not found on this device.'))
+        else:say('Wiki assistant selected: '+program+'. No page is built until you run: brain_cli.py wiki run')
 
     command=[device['python'],'-I','-B',REPO/'check_setup.py','--root',root,'--clients',','.join(selected),'--expect-version',version,'--release',REPO]
     if args.no_hooks:command.append('--no-hooks')
