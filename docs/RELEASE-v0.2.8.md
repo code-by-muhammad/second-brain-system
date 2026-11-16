@@ -7,7 +7,7 @@ In v0.2.7 the wiki compiler named no model. Claude ran on the default of the sig
 ## What changed
 
 1. **Fixed defaults.** Claude is called with `--model claude-opus-5-5 --effort high`, Codex with `-m gpt-6.1-sol -c model_reasoning_effort="high"`. The values are in `app/brain_wiki.py` (`MODEL_DEFAULTS`).
-2. **An explicit choice.** `wiki configure-model --executable <path> [--model <name>] [--effort <level>]` stores another model or effort in `state/wiki-model.json`. Only what is given is stored; a device without a stored choice follows the defaults of the release it runs. A model name must be 1 to 80 letters, digits, dots, colons, brackets, underscores or hyphens, and must not start with a hyphen. The effort must be one of the levels that assistant accepts (Claude: low, medium, high, xhigh, max; Codex: none, minimal, low, medium, high, xhigh). Anything else is refused before it is stored and again before a run.
+2. **An explicit choice.** `wiki configure-model --executable <path> [--model <name>] [--effort <level>]` stores another model or effort in `state/wiki-model.json`. Only what is given is stored; a device without a stored choice follows the defaults of the release it runs. A model name must start with a letter or digit and be 1 to 80 letters, digits, dots, colons, brackets, underscores or hyphens. The effort must be one of the levels that assistant accepts (Claude: low, medium, high, xhigh, max; Codex: none, minimal, low, medium, high, xhigh). Anything else is refused before it is stored and again before a run.
 3. **Recorded per run.** The model and effort used are written to the batch's `model-executable.json` with the program's path and hash.
 
 Nothing else changed. `setup_device.py --wiki claude|codex` still only records the program.

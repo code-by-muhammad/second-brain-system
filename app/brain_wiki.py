@@ -2453,7 +2453,7 @@ def _model_choice(provider,model=None,effort=None):
     chosen,level=MODEL_DEFAULTS[provider]
     if model is not None:
         if not isinstance(model,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,79}',model):
-            raise ValueError('Model name must be 1-80 letters, digits, dots, colons, brackets, underscores or hyphens.')
+            raise ValueError('Model name must start with a letter or digit and be 1-80 letters, digits, dots, colons, brackets, underscores or hyphens.')
         chosen=model
     if effort is not None:
         if effort not in MODEL_EFFORTS[provider]:raise ValueError('Effort for '+provider+' must be one of: '+', '.join(MODEL_EFFORTS[provider])+'.')
