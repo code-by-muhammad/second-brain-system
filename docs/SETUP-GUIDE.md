@@ -194,7 +194,7 @@ Who writes the pages. The assistant program you choose, Claude (`claude`) or Cod
 - [ ] Choose the assistant: run the one command with `--wiki claude` or `--wiki codex`. It records the program's path and calls nothing.
 - [ ] Windows needs the real program file (`claude.exe` or `codex.exe`), not a `.cmd` or `.ps1` launcher. If the choice is refused for that reason, install the assistant's native Windows version.
 - [ ] Build: `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" wiki run`. In PowerShell put `& ` in front of a command that starts with a quote. One run handles a few notes. Run it again for more. `wiki status` shows what is waiting.
-- [ ] The assistant gets the note text on standard input, with no tools, no access to your files, none of your assistant settings and no MCP servers. Its answer is checked against the notes before any page is written.
+- [ ] The assistant gets the note text on standard input, with no tools, file attachments switched off, none of your assistant settings and no MCP servers. Its answer is checked against the notes before any page is written.
 - [ ] "model authentication/quota requires attention": sign in to that assistant, or wait for your usage to reset, then run `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" wiki retry` and `wiki run` again.
 
 ## 8. Troubleshooting

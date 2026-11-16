@@ -392,7 +392,7 @@ def desktop_path(home,explicit=None,skip=False):
 def codex_skill(home):
     """Codex also reads ~/.agents/skills. A copy that is already there is the one to keep current; no second one is made."""
     own=home/'.codex/skills/second-brain/SKILL.md';common=home/'.agents/skills/second-brain/SKILL.md'
-    return common if common.is_file() and not own.exists() and not own.is_symlink() else own
+    return common if common.is_file() and not own.exists() else own
 
 
 def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,desktop=None,skip_desktop=False,skill=None):

@@ -198,3 +198,58 @@ def test_setup_offers_only_real_programs_from_absolute_path_folders(tmp_path,mon
     monkeypatch.setenv('PATH',os.pathsep.join(['','.',str(first),str(second),str(third),str(second)]))
     assert setup.wiki_programs('claude')==[str(real.resolve() if os.name=='nt' else real)]
     assert setup.wiki_programs('codex')==[]
+
+
+def test_claude_is_started_with_file_attachments_switched_off(brain,monkeypatch):
+    """Claude Code would read a file named as @path in a note; the model process must not."""
+    from test_wiki import fixture
+    source,packet,result=fixture(brain);seen={}
+    monkeypatch.setattr(w,'_model_executable',lambda:{'path':'/tools/claude','sha256':'0'*64,'bytes':1,'provider':'claude'})
+    def transport(command,model_input,timeout,**kwargs):
+        seen.update(command=command,env=kwargs['env'],separate=kwargs['stdout'] is not kwargs['log'])
+        kwargs['on_started']();raise RuntimeError('stop before any model output')
+    monkeypatch.setattr(w,'_run_model',transport)
+    with pytest.raises(RuntimeError,match='stop before'):w.run(limit=1)
+    assert seen['env']['CLAUDE_CODE_DISABLE_ATTACHMENTS']=='1' and seen['env'].get('PATH')==os.environ.get('PATH')
+    assert seen['command'][:2]==['/tools/claude','-p'] and seen['separate']
+
+
+def test_finished_batch_cleanup_also_removes_the_saved_claude_reply(brain):
+    from datetime import datetime,timedelta,timezone
+    from test_wiki import fixture
+    source,packet,result=fixture(brain);w.apply(packet,result)
+    folder=cfg.STATE/'wiki/batches'/packet['batch_id'];(folder/'model-reply.json').write_text('{"result":"private"}',encoding='utf-8')
+    old=(datetime.now(timezone.utc)-timedelta(days=40)).isoformat()
+    with w.db() as conn:conn.execute('UPDATE batches SET updated=? WHERE id=?',(old,packet['batch_id']))
+    assert w.cleanup()>0 and not (folder/'model-reply.json').exists()
+
+
+def test_role_change_keeps_a_record_that_was_already_written_and_refuses_beside_a_running_service(tmp_path,monkeypatch):
+    setup=setup_module_under_test()
+    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir()
+    device={'device_id':'abc123','role':'capture','version':'0.2.7','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
+    (root/'device.json').write_text(json.dumps(device),encoding='utf-8')
+    class Done:returncode=0;stderr='';stdout=''
+    monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Done())
+    def interrupted_after_replacing(target,text):Path(target).write_text(text,encoding='utf-8');raise KeyboardInterrupt
+    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':interrupted_after_replacing})
+    with pytest.raises(KeyboardInterrupt):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
+    assert json.loads((root/'device.json').read_text())['role']=='maintainer' and 'abc123' in (vault/setup.CONTROL).read_text()
+    # Without the service step, a server that is running would keep answering as a capture device.
+    (root/'device.json').write_text(json.dumps(device),encoding='utf-8');(vault/setup.CONTROL).unlink()
+    class Running:returncode=0;stderr='';stdout=json.dumps({'status':'running','version':'0.2.7'})
+    monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Running())
+    with pytest.raises(SystemExit,match='service is running'):setup.make_maintainer({**device,'root':str(root)},root,vault,False)
+    assert json.loads((root/'device.json').read_text())['role']=='capture' and not (vault/setup.CONTROL).exists()
+
+
+@posix
+def test_codex_skill_link_that_leads_nowhere_does_not_become_a_second_copy(tmp_path,monkeypatch):
+    spec=importlib.util.spec_from_file_location('choice_install_link',SOURCE/'install.py')
+    installer=importlib.util.module_from_spec(spec);spec.loader.exec_module(installer);helpers=installer.setup_helpers()
+    home=tmp_path/'home';common=home/'.agents/skills/second-brain';common.mkdir(parents=True);(common/'SKILL.md').write_text('old skill\n')
+    own=home/'.codex/skills/second-brain';own.mkdir(parents=True);os.symlink(home/'gone/SKILL.md',own/'SKILL.md')
+    monkeypatch.setattr(helpers,'desktop_busy',lambda:False)
+    result=helpers.plan(tmp_path/'runtime',tmp_path/'python.exe','new protocol',installer._codex_toml_plan,home=home,skill='new skill\n',selected=['codex'])
+    assert [row['path'] for row in result['files'] if row['path'].endswith('SKILL.md')]==[str((common/'SKILL.md').resolve())]
+    assert (own/'SKILL.md').is_symlink() and not (home/'gone').exists()
