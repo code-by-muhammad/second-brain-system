@@ -456,38 +456,20 @@ def test_only_an_explicit_choice_is_stored_and_an_invalid_stored_one_calls_no_mo
     with pytest.raises(ValueError,match='Invalid model configuration'):w._model_executable()
 
 
-def test_supervisor_sets_an_oversized_maintenance_log_aside_only_while_no_pass_can_be_writing(brain):
-    import brain_supervisor as supervisor
-    from filelock import FileLock
-    logs=cfg.ROOT/'logs';logs.mkdir(parents=True,exist_ok=True)
-    log=logs/'service-maintenance.log';previous=logs/'service-maintenance.log.previous'
-    log.write_bytes(b'x'*(supervisor.LOG_LIMIT+1))
-    with FileLock(str(cfg.STATE/'maintenance.lock'),timeout=0):  # A pass is running somewhere: nothing is renamed.
-        assert supervisor._maintenance_log()==log and log.stat().st_size==supervisor.LOG_LIMIT+1 and not previous.exists()
-    assert supervisor._maintenance_log()==log and not log.exists()
-    assert previous.stat().st_size==supervisor.LOG_LIMIT+1 and previous not in set(logs.glob('service-*.log'))
-    # A later oversized log replaces the one kept before: two files at most, never a growing series.
-    log.write_bytes(b'y'*(supervisor.LOG_LIMIT+2));supervisor._maintenance_log()
-    assert previous.stat().st_size==supervisor.LOG_LIMIT+2 and sorted(path.name for path in logs.iterdir() if 'maintenance' in path.name)==['service-maintenance.log.previous']
-    log.write_bytes(b'small\n');assert supervisor._maintenance_log()==log and log.read_bytes()==b'small\n'
-
-
-def test_supervisor_starts_the_pass_with_a_fresh_log_and_keeps_only_its_error_output(brain,monkeypatch):
-    """One real supervisor cycle with a recording process: the oversized log is set aside before the start,
-    the pass's standard output is discarded, and the server's and the bootstrap's logs are left alone."""
+def test_supervisor_starts_the_pass_with_only_its_error_output_kept_and_never_touches_an_old_log(brain,monkeypatch):
+    """One real supervisor cycle with a recording process."""
     import brain_supervisor as supervisor
     from supervisor_fixture import install
     install(monkeypatch,supervisor)
     logs=cfg.ROOT/'logs';logs.mkdir(parents=True,exist_ok=True)
     (cfg.STATE/'index-bootstrap-status.json').write_text('{"status":"verified"}',encoding='utf-8')
-    (logs/'service-maintenance.log').write_bytes(b'x'*(supervisor.LOG_LIMIT+1))
-    (logs/'service-server.log').write_bytes(b's'*(supervisor.LOG_LIMIT+1))
+    old=logs/'service-maintenance.log';old.write_bytes(b'x'*5_000_001)
     started=[]
     class End(BaseException):pass
     class Process:
         def __init__(self,command,**kwargs):
             self.pid=4321;self.returncode=None
-            started.append((Path(command[1]).name,kwargs['stdout'],kwargs['stderr'].name,(logs/'service-maintenance.log').stat().st_size))
+            started.append((Path(command[1]).name,kwargs['stdout'],kwargs['stderr'].name))
         def poll(self):return self.returncode
     class Socket:
         def __enter__(self):return self
@@ -500,23 +482,37 @@ def test_supervisor_starts_the_pass_with_a_fresh_log_and_keeps_only_its_error_ou
     monkeypatch.setattr(supervisor.time,'sleep',stop)
     monkeypatch.setattr(cfg,'environment',lambda:{});monkeypatch.setattr(cfg,'child_options',lambda:{})
     with pytest.raises(End):supervisor.main({})
-    assert started==[('brain_maintenance.py',supervisor.subprocess.DEVNULL,str(logs/'service-maintenance.log'),0)]
-    assert (logs/'service-maintenance.log.previous').stat().st_size==supervisor.LOG_LIMIT+1
-    assert (logs/'service-server.log').stat().st_size==supervisor.LOG_LIMIT+1 and not (logs/'service-server.log.previous').exists()
+    assert started==[('brain_maintenance.py',supervisor.subprocess.DEVNULL,str(logs/'service-upkeep.log'))]
+    assert old.stat().st_size==5_000_001 and sorted(path.name for path in logs.iterdir())==['service-maintenance.log','service-upkeep.log']
 
 
-def test_pass_that_needs_attention_leaves_one_bounded_line_for_the_log(brain,monkeypatch,capsys):
+def test_retired_maintenance_log_no_longer_keeps_a_device_in_attention_but_any_other_large_log_does(brain,monkeypatch):
+    import brain_maintenance as maintenance
+    monkeypatch.setattr(cfg,'ROLE','capture')
+    logs=cfg.ROOT/'logs';logs.mkdir(parents=True,exist_ok=True)
+    old=logs/'service-maintenance.log';old.write_bytes(b'x'*5_000_001)
+    status=maintenance.maintenance(False)
+    assert status['status']=='completed' and 'error' not in status and old.stat().st_size==5_000_001
+    (logs/'service-upkeep.log').write_bytes(b'y'*5_000_001)
+    assert maintenance.maintenance(False)['error'].startswith('Operational log rotation is deferred')
+
+
+def test_pass_that_needs_attention_leaves_one_complete_bounded_line_for_the_log(brain,monkeypatch,capfdbinary):
     import runpy
     import brain_maintenance as maintenance
-    status={'at':'2026-11-16T20:00:00+05:00','status':'needs attention','stage':'finished','git':'needs attention: '+'x'*5000,
-            'error':None,'review':[{'path':'a.md','reasons':['r']}]*500,'captures_linked':0}
-    line=maintenance._attention_line(status)
-    assert len(line)<=2000 and json.loads(line[:line.index(', "git"')]+'}')=={'at':status['at'],'status':'needs attention','stage':'finished'}
-    assert 'review' not in line and 'error' not in json.loads(maintenance._attention_line({**status,'git':'synced'}))
-    # The command run by hand prints its whole result as before, and the short line goes to error output only.
+    reason='possible credential; redact before syncing'
+    status={'at':'2026-11-16T20:00:00+05:00','status':'needs attention','stage':'finished','captures_linked':0,
+            'git':'needs attention: 01-Projects/'+'né"\\'*100+'.md: '+reason,'error':'e'*5000,'review':[{'path':'a.md','reasons':['r']}]*500}
+    record=json.loads(maintenance._attention_line(status))  # Always one complete record, whatever the lengths.
+    assert set(record)=={'at','status','stage','error','git'} and all(len(value)<=400 for value in record.values())
+    assert record['error']=='e'*400 and record['status']=='needs attention'
+    # The reason of a Git failure survives a long path in front of it when it fits the field, and is never broken JSON.
+    short=json.loads(maintenance._attention_line({**status,'git':'needs attention: 01-Projects/a.md: '+reason}))
+    assert short['git'].endswith(reason)
+    # Run by hand, the command prints its whole result as before; the short line goes to error output only.
     monkeypatch.setattr(sys,'argv',[str(Path(maintenance.__file__)),'--no-sync'])
     (cfg.ROOT/'logs').mkdir(parents=True,exist_ok=True);(cfg.ROOT/'logs/service-server.log').write_bytes(b'x'*5_000_001)
     runpy.run_path(maintenance.__file__,run_name='__main__')
-    printed=capsys.readouterr()
-    assert json.loads(printed.out)['status']=='needs attention' and 'review' in json.loads(printed.out)
-    assert json.loads(printed.err)['error'].startswith('Operational log rotation is deferred') and 'review' not in printed.err
+    out,err=capfdbinary.readouterr()
+    assert json.loads(out)['status']=='needs attention' and 'review' in json.loads(out)
+    assert json.loads(err)['error'].startswith('Operational log rotation is deferred') and b'review' not in err

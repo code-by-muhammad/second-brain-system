@@ -24,21 +24,6 @@ def _bootstrap_admitted():
     except Timeout:
         return False
 
-LOG_LIMIT=5_000_000
-
-def _maintenance_log():
-    """The log the next maintenance pass is started with. An oversized one is set aside first, but only while
-    this process holds the lock every running pass holds, so no pass can be writing to it. Without the lock the
-    log is left exactly as it is. One previous file is kept, under a name the service-*.log size check skips."""
-    path=cfg.ROOT/'logs/service-maintenance.log'
-    try:
-        if path.is_symlink() or not path.is_file() or path.stat().st_size<=LOG_LIMIT:return path
-        with FileLock(str(cfg.STATE/'maintenance.lock'),timeout=0):
-            import os
-            os.replace(path,path.with_name(path.name+'.previous'))
-    except (OSError,Timeout):pass  # Left as it is; maintenance goes on reporting its size.
-    return path
-
 def _publish_owned(owned):
     # Publish only this process's live handles, never adopt cached registry PIDs.
     import os
@@ -84,11 +69,12 @@ def main(owned=None):
                             maintenance=None
                             _publish_owned(owned)
                         if listening and maintenance is None and time.monotonic()-owned.get('_maintenance_finished',0)>900:
-                            with _maintenance_log().open('ab') as log:
+                            with (cfg.ROOT/'logs/service-upkeep.log').open('ab') as log:
                                 # The pass saves its whole result to maintenance-status.json. What it prints is that
                                 # same result again, tens of kilobytes on a large vault every fifteen minutes, so
-                                # only its error output is kept in the log. A pass that needs attention writes one
-                                # short line there itself.
+                                # only its error output is kept, and a pass that needs attention writes one short
+                                # line there itself. The log has a new name: the old service-maintenance.log is
+                                # no longer written, so it can stay as it is without ever being renamed or cut.
                                 maintenance=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_maintenance.py')],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=log,env=cfg.environment(),**cfg.child_options())
                                 owned['maintenance']=maintenance
                                 _publish_owned(owned)

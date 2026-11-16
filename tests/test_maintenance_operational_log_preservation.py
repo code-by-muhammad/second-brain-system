@@ -110,7 +110,7 @@ def test_oversize_logs_and_existing_archives_survive_repeated_attention_passes(b
 def test_small_and_exact_threshold_logs_remain_unchanged_and_complete_normally(brain,monkeypatch):
     vault,state=brain;monkeypatch.setattr(cfg,'ROLE','capture')
     logs=state.parent/'logs'
-    payloads={'service-maintenance.log':b'small synthetic diagnostic\n',
+    payloads={'service-upkeep.log':b'small synthetic diagnostic\n',
               'service-supervisor.log':b'e'*5_000_000}
     for name,raw in payloads.items():(logs/name).write_bytes(raw)
     status=_public_cli(monkeypatch)
@@ -127,7 +127,7 @@ def test_log_attention_keeps_daily_linking_cleanup_and_git_sync_running(brain,mo
     capture=store.capture('r144-synthetic-daily','Synthetic log preservation milestone',
                           'Harmless synthetic result.','tests','Synthetic local fixture')
     capture_path=vault/capture['path'];capture_before=capture_path.read_bytes()
-    active=state.parent/'logs/service-maintenance.log';raw=b'q'*5_000_001;active.write_bytes(raw)
+    active=state.parent/'logs/service-server.log';raw=b'q'*5_000_001;active.write_bytes(raw)
     calls=[];cleanup_calls=[];actual_cleanup=wiki.cleanup
     def sync_fixture():
         calls.append('synthetic sync seam')

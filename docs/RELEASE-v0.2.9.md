@@ -10,18 +10,18 @@ The supervisor started the background maintenance pass every fifteen minutes wit
 
 ## What changed
 
-1. **The pass no longer writes its result into the log.** The supervisor starts it with standard output discarded and only error output appended to the log. The result is still saved to `maintenance-status.json` and shown by `health`; the `brain_maintenance.py` command prints it as before when run by hand.
-2. **A pass that needs attention leaves one short line in the log.** Handled failures, such as a Git synchronization that needs review, were only in the printed result. The command now also writes one line of at most 2,000 characters to error output (time, status, stage, Git state, error) whenever its status is "needs attention". The saved status is overwritten by the next pass; this line is the lasting record.
-3. **An oversized maintenance log is set aside under the maintenance lock.** Before starting a pass, the supervisor renames a `service-maintenance.log` over 5,000,000 bytes to `service-maintenance.log.previous`, replacing an earlier one, and only while it holds `state/maintenance.lock`, the lock every running pass holds. If the lock is taken, or the rename fails, the log is left as it is. Two files at most. The rule in maintenance is unchanged: it still reports an oversized `service-*.log` and still never touches one.
+1. **The pass no longer writes its result into a log.** The supervisor starts it with standard output discarded and only error output kept. The result is still saved to `maintenance-status.json` and shown by `health`; the `brain_maintenance.py` command prints it as before when run by hand.
+2. **A new log name, and the old file is retired.** Error output of a pass now goes to `logs/service-upkeep.log`. Nothing appends to `logs/service-maintenance.log` any more, and maintenance no longer counts that one file in its size check. The old file is not renamed, cut or removed by anything: it stays where it is and the owner may delete it. No live log is ever touched, so the earlier guarantee holds without any new locking.
+3. **A pass that needs attention leaves one short line in the log.** Handled failures, such as a Git synchronization that needs review, were only in the printed result. The command now also writes one line to error output whenever its status is "needs attention": time, status, stage, error type, error and Git state, each cut to 400 characters on its own, as one complete JSON record. The saved status is overwritten by the next pass; this line is the lasting record.
 4. **The acceptance check has a `maintenance` line.** PASS when the last pass completed or is running, WARN with the reason when it needs attention.
 
-A device that already has an oversized `service-maintenance.log` clears itself at the first maintenance start after the update, about fifteen minutes after the service starts.
+A device that already has an oversized `service-maintenance.log` reports a completed pass at the first maintenance run after the update, about fifteen minutes after the service starts, unless another log is also over the limit.
 
 ## Boundaries to review
 
-- **Only the maintenance log is handled.** `service-server.log`, `service-bootstrap.log` and `service-supervisor.log` are appended to as before and are never renamed, because no lock proves their writer is gone. They receive error output only and grow slowly (the server log on the Mac that showed this defect was 573,102 bytes after a month), but one of them over 5,000,000 bytes would again leave the device in "needs attention" until someone decides what to do with it.
-- **A pass between start and lock.** A pass has its log open from the moment it is started and takes the maintenance lock a moment later. A pass left over from an earlier supervisor in exactly that moment could have its log renamed under it; on macOS and Linux it then writes its error output to the renamed file, on Windows the rename fails and nothing changes. No output is lost in either case.
-- **Error output is still unbounded within one run.** A pass that printed megabytes of errors would grow its log until the next start sets it aside.
+- **The retired file stays on disk.** On the Mac that showed this defect it is 10 MB. It is never cleaned up automatically.
+- **A pass from the previous version** that is still running during the update writes its last output to the old file, as before.
+- **The other logs are unchanged.** `service-server.log`, `service-bootstrap.log`, `service-supervisor.log` and the new `service-upkeep.log` receive error output and are never renamed or cut. They grow slowly (the server log on that Mac was 573,102 bytes after a month), but any one of them over 5,000,000 bytes leaves the device in "needs attention" until someone decides what to do with it. A pass that failed at every run would add one line of at most about 2,500 bytes each time, which reaches the limit after roughly three weeks of continuous failure.
 - **What is discarded is not read by anything.** It is the same data that `maintenance-status.json` holds.
 
 ## Known limits
