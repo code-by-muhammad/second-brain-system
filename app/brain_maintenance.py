@@ -344,8 +344,9 @@ def maintenance(sync=True):
 def _attention_line(status):
     """One bounded line for the service log when a pass needs attention. The service keeps only error output of
     a pass, and the saved status is overwritten by the next pass, so this is the lasting record of the failure."""
-    # Each value is cut on its own, so the record is always complete JSON and the reason is never cut off by a long path.
-    fields={name:str(status[name])[:400] for name in ('at','status','stage','error_type','error','git') if status.get(name) is not None}
+    # Each value is cut on its own, so the record is always complete JSON. The Git state is kept at the length its
+    # own diagnostic limit allows (2,000 characters): its reason comes after the path and must not be cut away.
+    fields={name:str(status[name])[:2000 if name=='git' else 400] for name in ('at','status','stage','error_type','error','git') if status.get(name) is not None}
     return json.dumps(fields,ensure_ascii=False)
 
 if __name__=='__main__':

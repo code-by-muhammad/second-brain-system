@@ -504,11 +504,10 @@ def test_pass_that_needs_attention_leaves_one_complete_bounded_line_for_the_log(
     status={'at':'2026-11-16T20:00:00+05:00','status':'needs attention','stage':'finished','captures_linked':0,
             'git':'needs attention: 01-Projects/'+'né"\\'*100+'.md: '+reason,'error':'e'*5000,'review':[{'path':'a.md','reasons':['r']}]*500}
     record=json.loads(maintenance._attention_line(status))  # Always one complete record, whatever the lengths.
-    assert set(record)=={'at','status','stage','error','git'} and all(len(value)<=400 for value in record.values())
-    assert record['error']=='e'*400 and record['status']=='needs attention'
-    # The reason of a Git failure survives a long path in front of it when it fits the field, and is never broken JSON.
-    short=json.loads(maintenance._attention_line({**status,'git':'needs attention: 01-Projects/a.md: '+reason}))
-    assert short['git'].endswith(reason)
+    assert set(record)=={'at','status','stage','error','git'} and record['error']=='e'*400 and record['status']=='needs attention'
+    # The reason of a Git failure stands after the path; a long path with characters that need escaping must not cut it away.
+    assert len(status['git'])>400 and record['git']==status['git'] and record['git'].endswith(reason)
+    assert len(json.loads(maintenance._attention_line({**status,'git':'g'*9000}))['git'])==2000
     # Run by hand, the command prints its whole result as before; the short line goes to error output only.
     monkeypatch.setattr(sys,'argv',[str(Path(maintenance.__file__)),'--no-sync'])
     (cfg.ROOT/'logs').mkdir(parents=True,exist_ok=True);(cfg.ROOT/'logs/service-server.log').write_bytes(b'x'*5_000_001)
