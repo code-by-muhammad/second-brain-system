@@ -257,13 +257,16 @@ def main():
                 for row in json.loads(result.stdout).get('client_result',{}).get('skipped',[]):
                     if row.get('reason')!='shared file already planned':say('Left alone: '+str(row.get('path'))+': '+str(row.get('reason'))[:300])
         device['root']=str(root)
+        if not args.role and device.get('role')=='capture' and (vault/CONTROL).is_file() and 'maintainer_device_id: '+str(device.get('device_id'))+'\n' in (vault/CONTROL).read_text(encoding='utf-8-sig',errors='replace'):
+            # A role change that was cut off after its first step: the notes name this device, the device does not know yet.
+            say('These notes name this device as their maintainer, but it is still set up as capture. Run this again with --role maintainer to finish that.')
         if args.role and args.role!=device.get('role'):
             if args.role!='maintainer':raise SystemExit('A maintainer cannot be turned into a capture device here; nothing was changed.')
             make_maintainer(device,root,vault,not args.no_service)
             device['role']='maintainer'
         # A first run that stopped before the service was up is finished here.
         if not args.no_service and not wait_running(device,version,seconds=15):start_service(device,version,root,registered=True)
-    device['root']=str(root)
+    device['root']=str(root);unselected=False
     if args.wiki and not args.check:
         reason=args.wiki+' was not found as a program on this device. Install it, check that "'+args.wiki+' --version" answers in a new terminal, and run this again.'
         for program in wiki_programs(args.wiki):
@@ -271,7 +274,8 @@ def main():
             if result.returncode==0:
                 say('Wiki assistant selected: '+program+'. No page is built until you run: brain_cli.py wiki run');break
             reason=program+': '+((result.stderr or '').strip().splitlines() or [''])[-1][:300]
-        else:say('The wiki assistant was not selected. '+reason)
+        else:
+            say('The wiki assistant was not selected. '+reason);unselected=True
 
     command=[device['python'],'-I','-B',REPO/'check_setup.py','--root',root,'--clients',','.join(selected),'--expect-version',version,'--release',REPO]
     if args.no_hooks:command.append('--no-hooks')
@@ -280,7 +284,8 @@ def main():
     say('\nAcceptance check:')
     failed=run(command).returncode
     say('\nNext: open a NEW chat in your assistant and ask it to call brain_context. After a restart of this computer, run this again with --check.')
-    raise SystemExit(failed)
+    # A requested wiki assistant that could not be selected is a failure of this run, whatever the check says.
+    raise SystemExit(failed or int(unselected))
 
 
 if __name__=='__main__':main()
