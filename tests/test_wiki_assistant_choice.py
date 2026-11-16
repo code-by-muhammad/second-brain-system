@@ -275,5 +275,32 @@ def test_failed_stop_before_a_role_change_starts_the_service_again_and_says_so(t
         calls.append(arguments[:2]);return Result(1 if arguments[:2]==('service','stop') else 0)
     monkeypatch.setattr(setup,'brain',controller)
     monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':lambda target,text:pytest.fail('The record must not be written.')})
-    with pytest.raises(SystemExit,match='role was not changed. The service was started again'):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
+    with pytest.raises(SystemExit,match='role was not changed'):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
     assert calls==[('service','stop'),('service','start')] and not (vault/setup.CONTROL).exists()
+    # Ctrl+C while the stop is still waiting may already have ended the service: it is started again too.
+    calls.clear()
+    def interrupted(device,*arguments,capture=False):
+        calls.append(arguments[:2])
+        if arguments[:2]==('service','stop'):raise KeyboardInterrupt
+        return Result(0)
+    monkeypatch.setattr(setup,'brain',interrupted)
+    with pytest.raises(KeyboardInterrupt):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
+    assert calls==[('service','stop'),('service','start')] and json.loads((root/'device.json').read_text())['role']=='capture'
+
+
+@posix
+def test_interrupt_that_arrives_while_the_model_is_being_started_still_ends_it(brain,tmp_path,monkeypatch):
+    import signal,subprocess,time
+    mark=tmp_path/'model.pid'
+    script=program(tmp_path/'tools','synthetic-model','#!/bin/sh\necho $$ > "'+str(mark)+'"\nsleep 60\n')
+    actual=subprocess.Popen
+    def launch_then_interrupt(*args,**kwargs):
+        process=actual(*args,**kwargs);os.kill(os.getpid(),signal.SIGINT);time.sleep(.2)  # Before the caller holds the handle.
+        return process
+    monkeypatch.setattr(w.subprocess,'Popen',launch_then_interrupt)
+    with (tmp_path/'runner.log').open('wb') as log:
+        with pytest.raises(KeyboardInterrupt):
+            w._run_model_posix([str(script)],'',60,cwd=tmp_path,log=log,stdout=log,on_started=lambda:None)
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+    if mark.exists() and mark.read_text().strip():
+        with pytest.raises(ProcessLookupError):os.kill(int(mark.read_text()),0)

@@ -2478,8 +2478,8 @@ def _run_model_posix(command,model_input,timeout,*,cwd,log,stdout,on_started,env
     asked=[]
     def interrupted(number,frame):asked.append(number)
     main=threading.current_thread() is threading.main_thread()
-    # Ending the worker and closing its terminal both arrive here.
-    previous={number:signal.signal(number,interrupted) for number in (signal.SIGTERM,signal.SIGHUP)} if main else {}
+    # Ending the worker, closing its terminal and Ctrl+C all arrive here.
+    previous={number:signal.signal(number,interrupted) for number in (signal.SIGTERM,signal.SIGHUP,signal.SIGINT)} if main else {}
     process=None;failure=None;code=None
     try:
         with tempfile.TemporaryFile() as incoming:
@@ -2492,7 +2492,7 @@ def _run_model_posix(command,model_input,timeout,*,cwd,log,stdout,on_started,env
             # The leader is observed without being collected, so its number cannot pass to an
             # unrelated process before the group has been signalled.
             done=watch()
-            if asked:failure=SystemExit(128+asked[0])
+            if asked:failure=KeyboardInterrupt() if asked[0]==signal.SIGINT else SystemExit(128+asked[0])
             elif time.monotonic()>=deadline:failure=subprocess.TimeoutExpired(command,timeout)
             elif over():failure=RuntimeError('Model output exceeded its byte budget.')
             if done or failure is not None:break

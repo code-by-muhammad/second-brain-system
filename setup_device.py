@@ -98,30 +98,29 @@ def make_maintainer(device,root,vault,service):
         # A server that is running, or still starting, keeps the old role until it is restarted. Without the
         # service step the change is made only on a device whose service has never run.
         raise SystemExit('This device has a background service. Run this without --no-service so it can be stopped and started around the change; nothing was changed.')
-    if service:
-        result=brain(device,'service','stop','--wait-seconds','300',capture=True)
-        if result.returncode:
-            # A stop that fails late may already have ended the service, so it is started again before giving up.
-            back=brain(device,'service','start',capture=True).returncode==0
-            raise SystemExit('The service could not be stopped cleanly: '+((result.stderr or '').strip().splitlines() or [''])[-1][:300]+'\nThe role was not changed. '
-                             +('The service was started again.' if back else 'The service may be stopped. Start it with: "'+device['python']+'" "'+str(root/'app/brain_cli.py')+'" service start'))
     created=False
     try:
+        if service:
+            result=brain(device,'service','stop','--wait-seconds','300',capture=True)
+            if result.returncode:
+                raise SystemExit('The service could not be stopped cleanly: '+((result.stderr or '').strip().splitlines() or [''])[-1][:300]+'\nThe role was not changed.')
         # Another device may have claimed the notes while the service was stopping.
         if owned_by_another():raise SystemExit(refusal)
         if not control.exists():own_the_notes(vault,device['device_id']);created=True
         write(root/'device.json',json.dumps({**record,'role':'maintainer'},indent=2)+'\n')
     except BaseException:
         # Leave one consistent device. If the record was already replaced the change is complete and stays;
-        # otherwise the ownership note made here is withdrawn. Either way the service comes back up.
+        # otherwise the ownership note made here is withdrawn. Either way the service comes back up, also
+        # after a stop that failed late or was interrupted and may already have ended it.
         try:
             try:switched=json.loads((root/'device.json').read_text(encoding='utf-8-sig')).get('role')=='maintainer'
             except (OSError,ValueError):switched=False
             # Only the note this run wrote is withdrawn; one that another device has put there since stays.
             if created and not switched and not owned_by_another():control.unlink(missing_ok=True)
         finally:
-            if service and brain(device,'service','start',capture=True).returncode:
-                say('The service is stopped. Start it with: "'+device['python']+'" "'+str(root/'app/brain_cli.py')+'" service start')
+            if service:
+                say('The service was started again.' if brain(device,'service','start',capture=True).returncode==0
+                    else 'The service is stopped. Start it with: "'+device['python']+'" "'+str(root/'app/brain_cli.py')+'" service start')
         raise
     say('This device is now the maintainer of these notes.')
 
