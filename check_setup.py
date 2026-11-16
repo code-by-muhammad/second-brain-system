@@ -92,12 +92,25 @@ def skill(name, candidates, release):
     add('PASS', name, str(path))
 
 
+def wiki_program(root):
+    """The recorded wiki assistant program: its path, '' when the record is unusable, None when there is none."""
+    path = root / 'state/wiki-model.json'
+    if not os.path.lexists(path):
+        return None
+    try:
+        with path.open('rb') as stream:
+            value = json.loads(stream.read(16385))
+        return value['executable'] if Path(value['executable']).is_file() else ''
+    except (OSError, ValueError, KeyError, TypeError):
+        return ''
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--root', default=str(Path.home() / '.local/share/second-brain'))
     parser.add_argument('--home', default=str(Path.home()))
     parser.add_argument('--clients', default='', help='Comma-separated: ' + ', '.join(CLIENTS))
-    parser.add_argument('--expect-version', help='For example 0.2.9')
+    parser.add_argument('--expect-version', help='For example 0.2.10')
     parser.add_argument('--release', help='Verified release checkout; compares the protocol block and skill with it')
     parser.add_argument('--no-hooks', action='store_true', help='The owner declined Claude Code hooks')
     parser.add_argument('--local-only', action='store_true', help='Notes must have no Git remote on this device')
@@ -165,6 +178,20 @@ def main():
             state = None
         add('PASS' if state == 'verified' else 'WARN', 'search index',
             str(state) + ('' if state == 'verified' else '; a new index needs a few minutes, otherwise run: brain_cli.py index retry'))
+
+    if device.get('role') == 'maintainer':
+        # Only the maintainer builds wiki pages. A device with no assistant, or with a run that stopped, says so here.
+        chosen = wiki_program(root)
+        worker = (health.get('wiki') or {}).get('worker') if isinstance(health.get('wiki'), dict) else None
+        worker = worker if isinstance(worker, dict) else {}
+        if chosen is None:
+            add('WARN', 'wiki assistant', 'none selected, so no wiki pages are built (optional); run setup again with --wiki claude or --wiki codex')
+        elif not chosen:
+            add('WARN', 'wiki assistant', 'the recorded program is missing or unreadable; run setup again with --wiki claude or --wiki codex')
+        elif worker.get('attention_required'):
+            add('WARN', 'wiki assistant', f"{chosen}; the last wiki run needs attention ({str(worker.get('reason'))[:100]}): see brain_cli.py wiki status, then wiki retry"[:400])
+        else:
+            add('PASS', 'wiki assistant', str(chosen)[:300])
 
     if 'claude-code' in clients:
         try:

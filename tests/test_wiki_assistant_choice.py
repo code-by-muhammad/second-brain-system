@@ -515,3 +515,95 @@ def test_pass_that_needs_attention_leaves_one_complete_bounded_line_for_the_log(
     out,err=capfdbinary.readouterr()
     assert json.loads(out)['status']=='needs attention' and 'review' in json.loads(out)
     assert json.loads(err)['error'].startswith('Operational log rotation is deferred') and b'review' not in err
+
+
+def test_maintainer_without_a_wiki_assistant_gets_the_only_one_installed_and_is_told_when_setup_cannot_decide(tmp_path,monkeypatch,capsys):
+    setup=setup_module_under_test();suffix='.exe' if os.name=='nt' else '';calls=[]
+    class Done:returncode=0;stderr='';stdout=''
+    monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:calls.append(arguments) or Done())
+    both=tmp_path/'both';one=tmp_path/'one';none=tmp_path/'none'
+    for folder,names in ((both,('claude','codex')),(one,('codex',)),(none,())):
+        folder.mkdir()
+        for name in names:(folder/(name+suffix)).write_bytes(b'inert');(folder/(name+suffix)).chmod(0o700)
+    (none/'codex.cmd').write_text('launcher')
+    only=str((one/('codex'+suffix)).resolve() if os.name=='nt' else one/('codex'+suffix))
+    # One assistant: recorded without a question, and the run says which and that nothing is built yet.
+    monkeypatch.setenv('PATH',str(one))
+    assert setup.offer_wiki({},True)==''
+    assert calls==[('wiki','configure-model','--executable',only)]
+    said=capsys.readouterr().out
+    assert 'codex is the only assistant program found' in said and 'Wiki assistant selected: '+only in said and 'No page is built' in said
+    # Two assistants and nobody to ask: nothing is recorded and the exact next command is named.
+    calls.clear();monkeypatch.setenv('PATH',str(both))
+    for assume in (True,False):
+        assert '--wiki claude or --wiki codex' in setup.offer_wiki({},assume)
+    assert calls==[]
+    # Two assistants and a person at the terminal: the answer decides; anything else selects nothing.
+    monkeypatch.setattr(setup.sys.stdin,'isatty',lambda:True,raising=False)
+    monkeypatch.setattr('builtins.input',lambda prompt:' Claude ')
+    assert setup.offer_wiki({},False)=='' and calls[0][-1].endswith('claude'+suffix) and len(calls)==1
+    calls.clear();monkeypatch.setattr('builtins.input',lambda prompt:'')
+    assert 'both installed' in setup.offer_wiki({},False) and calls==[]
+    # None, with only a launcher present: named as missing, nothing recorded.
+    monkeypatch.setenv('PATH',str(none))
+    assert 'neither claude nor codex was found' in setup.offer_wiki({},True) and calls==[]
+    # The only assistant is refused by the runtime: its reason is passed on.
+    class Refused:returncode=1;stderr='ValueError: Model executable must be outside runtime';stdout=''
+    monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Refused())
+    monkeypatch.setenv('PATH',str(one))
+    assert 'was not selected' in setup.offer_wiki({},True) and 'must be outside runtime' in setup.offer_wiki({},True)
+
+
+def test_check_names_the_wiki_assistant_of_a_maintainer_and_warns_when_none_is_recorded_or_a_run_stopped(tmp_path):
+    """The acceptance check is run as a program against a runtime whose health answer is fixed."""
+    import subprocess
+    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'app').mkdir(parents=True);(root/'state').mkdir();vault.mkdir()
+    health={'status':'running','version':'0.2.10','vault_exists':True,'database_exists':True,'maintenance':{'status':'completed','git':'synced'},
+            'wiki':{'worker':{'status':'idle','attention_required':False}}}
+    def runtime():(root/'app/brain_cli.py').write_text('import json,sys\nprint(json.dumps('+repr(health)+' if sys.argv[1]=="health" else {"status":"verified"}))\n',encoding='utf-8')
+    def device(role):(root/'device.json').write_text(json.dumps({'version':'0.2.10','role':role,'python':sys.executable,'vault':str(vault)}),encoding='utf-8')
+    def line():
+        done=subprocess.run([sys.executable,'-I','-B',str(SOURCE/'check_setup.py'),'--root',str(root),'--home',str(tmp_path/'home')],capture_output=True,text=True,timeout=120)
+        assert done.returncode==0,done.stdout+done.stderr
+        return [row for row in done.stdout.splitlines() if 'wiki assistant' in row]
+    runtime();device('capture')
+    assert line()==[]
+    device('maintainer')
+    assert len(line())==1 and line()[0].startswith('WARN') and 'none selected' in line()[0] and '--wiki claude or --wiki codex' in line()[0]
+    tool=tmp_path/'codex';tool.write_bytes(b'inert')
+    (root/'state/wiki-model.json').write_text(json.dumps({'format':1,'executable':str(tool)}),encoding='utf-8')
+    assert line()==['PASS   wiki assistant: '+str(tool)]
+    health['wiki']['worker']={'status':'attention','attention_required':True,'reason':'RuntimeError'}
+    runtime()
+    assert line()[0].startswith('WARN') and 'needs attention (RuntimeError)' in line()[0] and 'wiki retry' in line()[0]
+    health['wiki']['worker']={'status':'idle','attention_required':False};runtime()
+    for damaged in ('{"format":1,"executable":'+json.dumps(str(tmp_path/'gone'))+'}','[]','{"executable":7}','not json'):
+        (root/'state/wiki-model.json').write_text(damaged,encoding='utf-8')
+        assert line()[0].startswith('WARN') and 'missing or unreadable' in line()[0]
+
+
+def test_setup_offers_a_wiki_assistant_only_to_a_maintainer_that_has_none_and_repeats_what_is_open_last(tmp_path,monkeypatch,capsys):
+    setup=setup_module_under_test()
+    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir()
+    def device(role):(root/'device.json').write_text(json.dumps({'device_id':'abc123','role':role,'version':'0.2.10','vault':str(vault),'python':sys.executable}),encoding='utf-8')
+    offered=[];selected=[]
+    class Done:returncode=0;stderr='';stdout=''
+    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'verify':lambda repo:{'version':'0.2.10'}})
+    monkeypatch.setattr(setup,'run',lambda command,capture=False:Done())
+    monkeypatch.setattr(setup,'wait_running',lambda *args,**kwargs:True)
+    monkeypatch.setattr(setup,'offer_wiki',lambda device,assume:offered.append(assume) or 'No wiki assistant is selected: both.')
+    monkeypatch.setattr(setup,'select_wiki',lambda device,name:selected.append(name))
+    def go(*flags):
+        monkeypatch.setattr(sys,'argv',['setup_device.py','--root',str(root),'--clients','',*flags])
+        with pytest.raises(SystemExit) as stop:setup.main()
+        return stop.value.code,capsys.readouterr().out
+    device('maintainer')
+    code,said=go('--yes')
+    assert code==0 and offered==[True] and said.rstrip().endswith('Still open: No wiki assistant is selected: both.')
+    assert said.index('No wiki assistant')<said.index('Acceptance check')
+    offered.clear()
+    assert go('--check')[0]==0 and go('--wiki','codex')[0]==0 and offered==[] and selected==['codex']
+    (root/'state/wiki-model.json').write_text('{}',encoding='utf-8')
+    assert 'Still open' not in go()[1] and offered==[]
+    (root/'state/wiki-model.json').unlink();device('capture')
+    assert 'Still open' not in go()[1] and offered==[]

@@ -157,6 +157,37 @@ def brain(device,*arguments,capture=False):
     return run([device['python'],Path(device['root'])/'app/brain_cli.py',*arguments],capture=capture)
 
 
+def select_wiki(device,name):
+    """Record the first usable program of that assistant. Returns nothing, or the reason none was recorded."""
+    reason=name+' was not found as a program on this device. Install it, check that "'+name+' --version" answers in a new terminal, and run this again.'
+    for program in wiki_programs(name):
+        result=brain(device,'wiki','configure-model','--executable',program,capture=True)
+        if result.returncode==0:
+            say('Wiki assistant selected: '+program+'. No page is built until you run: brain_cli.py wiki run');return None
+        reason=program+': '+((result.stderr or '').strip().splitlines() or [''])[-1][:300]
+    return reason
+
+
+def offer_wiki(device,assume):
+    """A maintainer with no wiki assistant: record the only one installed, ask between two, or say what is missing.
+
+    Recording calls no model and sends nothing; pages are built only by wiki run. Returns what is still open, or ''."""
+    found=[name for name in ('claude','codex') if wiki_programs(name)]
+    if len(found)==2:
+        answer=ask('Both claude and codex are installed. Which one builds the wiki pages: claude, codex or none','none',assume).strip().lower()
+        if answer not in found:
+            return 'No wiki assistant is selected: claude and codex are both installed. Choose one by running this again with --wiki claude or --wiki codex.'
+        found=[answer]
+    elif found:
+        say('Wiki: '+found[0]+' is the only assistant program found on this maintainer, so it is recorded as the one that builds wiki pages.')
+    if not found:
+        return ('No wiki assistant is selected: neither claude nor codex was found as a program'
+                +(' (Windows needs claude.exe or codex.exe, not a .cmd or .ps1 launcher)' if os.name=='nt' else '')
+                +'. Wiki pages are optional. To build them, install one, check that its --version answers in a new terminal, and run this again.')
+    reason=select_wiki(device,found[0])
+    return 'The wiki assistant was not selected. '+reason if reason else ''
+
+
 def wait_running(device,version,seconds=240):
     deadline=time.monotonic()+seconds
     while time.monotonic()<deadline:
@@ -276,16 +307,14 @@ def main():
             device['role']='maintainer'
         # A first run that stopped before the service was up is finished here.
         if not args.no_service and not wait_running(device,version,seconds=15):start_service(device,version,root,registered=True)
-    device['root']=str(root);unselected=False
+    device['root']=str(root);unselected=False;open_wiki=''
     if args.wiki and not args.check:
-        reason=args.wiki+' was not found as a program on this device. Install it, check that "'+args.wiki+' --version" answers in a new terminal, and run this again.'
-        for program in wiki_programs(args.wiki):
-            result=brain(device,'wiki','configure-model','--executable',program,capture=True)
-            if result.returncode==0:
-                say('Wiki assistant selected: '+program+'. No page is built until you run: brain_cli.py wiki run');break
-            reason=program+': '+((result.stderr or '').strip().splitlines() or [''])[-1][:300]
-        else:
-            say('The wiki assistant was not selected. '+reason);unselected=True
+        reason=select_wiki(device,args.wiki)
+        if reason:say('The wiki assistant was not selected. '+reason);unselected=True
+    elif not args.check and device.get('role')=='maintainer' and not os.path.lexists(root/'state/wiki-model.json'):
+        # Without this a maintainer that was set up or updated with the plain command has no assistant and is never told.
+        open_wiki=offer_wiki(device,args.yes)
+        if open_wiki:say(open_wiki)
 
     command=[device['python'],'-I','-B',REPO/'check_setup.py','--root',root,'--clients',','.join(selected),'--expect-version',version,'--release',REPO]
     if args.no_hooks:command.append('--no-hooks')
@@ -294,6 +323,7 @@ def main():
     say('\nAcceptance check:')
     failed=run(command).returncode
     say('\nNext: open a NEW chat in your assistant and ask it to call brain_context. After a restart of this computer, run this again with --check.')
+    if open_wiki:say('Still open: '+open_wiki)
     # A requested wiki assistant that could not be selected is a failure of this run, whatever the check says.
     raise SystemExit(failed or int(unselected))
 
