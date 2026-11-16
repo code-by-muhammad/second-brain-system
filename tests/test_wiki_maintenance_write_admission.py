@@ -49,7 +49,7 @@ def test_no_hold_retry_really_resets_existing_db_and_backoff(brain,monkeypatch):
 
 def test_no_hold_model_configuration_keeps_identity_validation_and_db_status(brain,monkeypatch):
     before=seed();calls=[]
-    identity={'path':'synthetic-never-executed.exe','sha256':'b'*64,'bytes':1}
+    identity={'path':'synthetic-never-executed.exe','sha256':'b'*64,'bytes':1,'provider':'codex'}
     monkeypatch.setattr(wiki,'_native_model_identity',lambda value:calls.append(value) or identity)
     result=wiki.configure_model(identity['path'])
     assert calls==[identity['path']] and result['executable']==identity
