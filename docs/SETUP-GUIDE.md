@@ -188,7 +188,7 @@ What the maintainer does. One device per set of notes is the maintainer. It link
 
 What the wiki is. Topic pages that are compiled from your notes and saved milestones. Every claim names the note it came from. The pages are summaries; the original notes are never changed. Start page: `02-Areas/AI-Memory/Wiki/Index.md`.
 
-Who writes the pages. The assistant program you choose, Claude (`claude`) or Codex (`codex`), whichever you have. It must be installed and signed in on the maintainer device.
+Who writes the pages. The assistant program you choose, Claude (`claude`) or Codex (`codex`), whichever you have. It must be that assistant's own command-line program, installed and signed in on the maintainer device: `claude --version` or `codex --version` answers in a new ordinary terminal. The Claude desktop app alone is not that program.
 
 - [ ] Each run sends a few of your notes to that assistant's provider under your own account, and it counts against your plan's usage. Apart from the optional sync to your own repository (section 6), this is the only part of Second Brain that sends note text off the device. Decide first whether you want that.
 - [ ] Choose the assistant: run the one command with `--wiki claude` or `--wiki codex`. It records the program's path and calls nothing.

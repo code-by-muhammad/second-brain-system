@@ -2409,7 +2409,11 @@ def _native_model_identity(executable):
         raise ValueError('Linked model executable paths are refused.')
     selected=path;path=path.resolve()
     if not path.is_file():raise ValueError('The selected model program does not name a regular file.')
-    if any(path.is_relative_to(Path(folder).resolve()) for folder in (cfg.ROOT,cfg.STATE,cfg.VAULT,Path.cwd(),cfg.PYTHON.parent)):
+    # A tool that sits in the folder the command is run from may have been planted there. The home folder and
+    # the folders above it are not such a place: every program installed for one user lives below them.
+    here=Path.cwd().resolve()
+    guarded=[cfg.ROOT,cfg.STATE,cfg.VAULT,cfg.PYTHON.parent]+([] if Path.home().resolve().is_relative_to(here) else [here])
+    if any(path.is_relative_to(Path(folder).resolve()) for folder in guarded):
         raise ValueError('Model executable must be outside runtime, vault, checkout/current directory and Python folder.')
     before=path.stat()
     if not 0<before.st_size<=512*1024*1024:raise ValueError('Model executable exceeds its identity bound.')
@@ -2503,7 +2507,7 @@ def _run_model_posix(command,model_input,timeout,*,cwd,log,stdout,on_started):
                     if time.monotonic()>=gone:raise RuntimeError('Model process group did not end; inspect it before another run.')
                     time.sleep(.1)
         finally:
-            if main:signal.signal(signal.SIGTERM,previous)
+            if main:signal.signal(signal.SIGTERM,signal.SIG_DFL if previous is None else previous)
     # What the group wrote while it was being ended counts too.
     if failure is None and over():failure=RuntimeError('Model output exceeded its byte budget.')
     if failure is not None:raise failure

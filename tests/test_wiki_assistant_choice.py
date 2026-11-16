@@ -173,3 +173,28 @@ def test_terminating_the_runner_ends_the_model_it_started(brain,tmp_path):
         except ProcessLookupError:break
         time.sleep(.1)
     else:pytest.fail('The model outlived its terminated runner.')
+
+
+def test_per_user_program_is_accepted_from_the_home_folder_and_refused_from_the_folder_that_holds_it(brain,tmp_path,monkeypatch):
+    home=tmp_path/'home';tools=home/'.local/bin';tools.mkdir(parents=True)
+    tool=tools/('claude.exe' if os.name=='nt' else 'claude');tool.write_bytes(b'Synthetic inert identity, never execute.');tool.chmod(0o700)
+    monkeypatch.setattr(Path,'home',classmethod(lambda cls:home))
+    for folder in (home,home.parent):  # Where a new terminal opens, and a folder above it.
+        monkeypatch.chdir(folder)
+        assert w._native_model_identity(str(tool))['provider']=='claude'
+    for folder in (tools,tools.parent):  # A project-like folder that itself contains the tool.
+        monkeypatch.chdir(folder)
+        with pytest.raises(ValueError,match='outside'):w._native_model_identity(str(tool))
+
+
+def test_setup_offers_only_real_programs_from_absolute_path_folders(tmp_path,monkeypatch):
+    setup=setup_module_under_test();suffix='.exe' if os.name=='nt' else ''
+    first=tmp_path/'launchers';second=tmp_path/'native';third=tmp_path/'again'
+    for folder in (first,second,third):folder.mkdir()
+    (first/'claude.cmd').write_text('launcher');(first/'claude.ps1').write_text('launcher')
+    real=second/('claude'+suffix);real.write_bytes(b'inert');real.chmod(0o700)
+    planted=tmp_path/'cwd';planted.mkdir();(planted/('claude'+suffix)).write_bytes(b'inert');(planted/('claude'+suffix)).chmod(0o700)
+    monkeypatch.chdir(planted)
+    monkeypatch.setenv('PATH',os.pathsep.join(['','.',str(first),str(second),str(third),str(second)]))
+    assert setup.wiki_programs('claude')==[str(real.resolve() if os.name=='nt' else real)]
+    assert setup.wiki_programs('codex')==[]

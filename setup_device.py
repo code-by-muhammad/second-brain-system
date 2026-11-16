@@ -115,6 +115,18 @@ def make_maintainer(device,root,vault,service):
     say('This device is now the maintainer of these notes.')
 
 
+def wiki_programs(name):
+    """Programs called claude or codex on PATH, in order. Windows needs the real .exe: launchers are passed over and a link is named by its target."""
+    found=[]
+    for folder in os.environ.get('PATH','').split(os.pathsep):
+        candidate=Path(folder)/(name+('.exe' if os.name=='nt' else ''))
+        # A relative PATH entry means the current folder, where a tool may have been planted.
+        if not Path(folder).is_absolute() or not candidate.is_file() or not os.access(candidate,os.X_OK):continue
+        program=str(candidate.resolve() if os.name=='nt' else candidate)
+        if program not in found:found.append(program)
+    return found
+
+
 def brain(device,*arguments,capture=False):
     return run([device['python'],Path(device['root'])/'app/brain_cli.py',*arguments],capture=capture)
 
@@ -233,11 +245,13 @@ def main():
         if not args.no_service and not wait_running(device,version,seconds=15):start_service(device,version,root,registered=True)
     device['root']=str(root)
     if args.wiki and not args.check:
-        program=shutil.which(args.wiki)
-        result=brain(device,'wiki','configure-model','--executable',program,capture=True) if program else None
-        if result is None or result.returncode:
-            say('The wiki assistant was not selected: '+(((result.stderr or '').strip().splitlines() or [''])[-1][:300] if result else args.wiki+' was not found on this device.'))
-        else:say('Wiki assistant selected: '+program+'. No page is built until you run: brain_cli.py wiki run')
+        reason=args.wiki+' was not found as a program on this device. Install it, check that "'+args.wiki+' --version" answers in a new terminal, and run this again.'
+        for program in wiki_programs(args.wiki):
+            result=brain(device,'wiki','configure-model','--executable',program,capture=True)
+            if result.returncode==0:
+                say('Wiki assistant selected: '+program+'. No page is built until you run: brain_cli.py wiki run');break
+            reason=program+': '+((result.stderr or '').strip().splitlines() or [''])[-1][:300]
+        else:say('The wiki assistant was not selected. '+reason)
 
     command=[device['python'],'-I','-B',REPO/'check_setup.py','--root',root,'--clients',','.join(selected),'--expect-version',version,'--release',REPO]
     if args.no_hooks:command.append('--no-hooks')
