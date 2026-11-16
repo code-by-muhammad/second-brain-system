@@ -219,8 +219,11 @@ def test_claude_is_started_with_file_attachments_switched_off(brain,monkeypatch)
         seen.update(command=command,env=kwargs['env'],separate=kwargs['stdout'] is not kwargs['log'])
         kwargs['on_started']();raise RuntimeError('stop before any model output')
     monkeypatch.setattr(w,'_run_model',transport)
+    for name,value in (('CLAUDE_CODE_PLUGIN_DIRS','/planted/plugins'),('CLAUDECODE','1'),('CLAUDE_CODE_ENTRYPOINT','cli'),('CLAUDE_CONFIG_DIR','/kept/sign-in')):monkeypatch.setenv(name,value)
     with pytest.raises(RuntimeError,match='stop before'):w.run(limit=1)
     assert seen['env']['CLAUDE_CODE_DISABLE_ATTACHMENTS']=='1' and seen['env'].get('PATH')==os.environ.get('PATH')
+    assert not {'CLAUDE_CODE_PLUGIN_DIRS','CLAUDECODE','CLAUDE_CODE_ENTRYPOINT'}&set(seen['env']) and seen['env']['CLAUDE_CONFIG_DIR']=='/kept/sign-in'
+    assert seen['command'][seen['command'].index('--settings')+1]=='{"disableAllHooks":true}'
     assert seen['command'][:2]==['/tools/claude','-p'] and seen['separate']
 
 
@@ -304,3 +307,23 @@ def test_interrupt_that_arrives_while_the_model_is_being_started_still_ends_it(b
     assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
     if mark.exists() and mark.read_text().strip():
         with pytest.raises(ProcessLookupError):os.kill(int(mark.read_text()),0)
+
+
+@posix
+def test_role_change_refuses_a_linked_ownership_note_and_undoes_a_note_written_just_before_an_interrupt(tmp_path,monkeypatch):
+    setup=setup_module_under_test()
+    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir()
+    device={'device_id':'abc123','role':'capture','version':'0.2.7','vault':str(vault),'python':sys.executable,'timezone':'UTC'}
+    (root/'device.json').write_text(json.dumps(device),encoding='utf-8')
+    class Done:returncode=0;stderr='';stdout=''
+    monkeypatch.setattr(setup,'brain',lambda device,*arguments,capture=False:Done())
+    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'atomic':lambda target,text:pytest.fail('The record must not be written.')})
+    actual=setup.own_the_notes
+    def interrupted_after_writing(vault,device_id):actual(vault,device_id);raise KeyboardInterrupt
+    monkeypatch.setattr(setup,'own_the_notes',interrupted_after_writing)
+    with pytest.raises(KeyboardInterrupt):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
+    assert not (vault/setup.CONTROL).exists() and json.loads((root/'device.json').read_text())['role']=='capture'
+    # A note that is a link is refused before anything stops, even when it names this device.
+    elsewhere=tmp_path/'elsewhere.md';elsewhere.write_text('---\nmaintainer_device_id: abc123\n---\n',encoding='utf-8')
+    os.symlink(elsewhere,vault/setup.CONTROL)
+    with pytest.raises(SystemExit,match='linked'):setup.make_maintainer({**device,'root':str(root)},root,vault,True)

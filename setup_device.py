@@ -63,13 +63,19 @@ def remotes(vault):
     return result.stdout.split() if result is not None and result.returncode==0 else None
 
 
-def own_the_notes(vault,device_id):
-    """Name this device as the one maintainer. Never through a link, never over an existing owner."""
+def control_path(vault):
+    """Where the notes name their maintainer. A link anywhere on the way is refused, as the running service refuses it."""
     control=vault
     for part in CONTROL.split('/'):
         control=control/part
         if control.is_symlink() or (hasattr(control,'is_junction') and control.is_junction()):
-            raise SystemExit('A linked folder on the way to '+CONTROL+' is refused. Make it a plain folder inside the notes and run this again.')
+            raise SystemExit('A linked folder or file on the way to '+CONTROL+' is refused. Make it a plain one inside the notes and run this again.')
+    return control
+
+
+def own_the_notes(vault,device_id):
+    """Name this device as the one maintainer. Never through a link, never over an existing owner."""
+    control=control_path(vault)
     control.parent.mkdir(parents=True,exist_ok=True)
     try:
         with control.open('x',encoding='utf-8',newline='\n') as output:
@@ -83,7 +89,7 @@ def own_the_notes(vault,device_id):
 
 def make_maintainer(device,root,vault,service):
     """Turn an installed capture device into the one maintainer of notes that have none yet."""
-    control=vault/CONTROL
+    control=control_path(vault);existed=control.exists()
     def owned_by_another():
         if not control.exists():return False
         owner=[line.split(':',1)[1].strip() for line in control.read_text(encoding='utf-8-sig').splitlines() if line.startswith('maintainer_device_id:')]
@@ -98,7 +104,6 @@ def make_maintainer(device,root,vault,service):
         # A server that is running, or still starting, keeps the old role until it is restarted. Without the
         # service step the change is made only on a device whose service has never run.
         raise SystemExit('This device has a background service. Run this without --no-service so it can be stopped and started around the change; nothing was changed.')
-    created=False
     try:
         if service:
             result=brain(device,'service','stop','--wait-seconds','300',capture=True)
@@ -106,7 +111,7 @@ def make_maintainer(device,root,vault,service):
                 raise SystemExit('The service could not be stopped cleanly: '+((result.stderr or '').strip().splitlines() or [''])[-1][:300]+'\nThe role was not changed.')
         # Another device may have claimed the notes while the service was stopping.
         if owned_by_another():raise SystemExit(refusal)
-        if not control.exists():own_the_notes(vault,device['device_id']);created=True
+        if not control.exists():own_the_notes(vault,device['device_id'])
         write(root/'device.json',json.dumps({**record,'role':'maintainer'},indent=2)+'\n')
     except BaseException:
         # Leave one consistent device. If the record was already replaced the change is complete and stays;
@@ -115,8 +120,9 @@ def make_maintainer(device,root,vault,service):
         try:
             try:switched=json.loads((root/'device.json').read_text(encoding='utf-8-sig')).get('role')=='maintainer'
             except (OSError,ValueError):switched=False
-            # Only the note this run wrote is withdrawn; one that another device has put there since stays.
-            if created and not switched and not owned_by_another():control.unlink(missing_ok=True)
+            # Only a note that was not there before and names this device is withdrawn; one that another
+            # device has put there since stays.
+            if not existed and not switched and not owned_by_another():control.unlink(missing_ok=True)
         finally:
             if service:
                 say('The service was started again.' if brain(device,'service','start',capture=True).returncode==0
