@@ -2466,7 +2466,10 @@ def _run_model_posix(command,model_input,timeout,*,cwd,log,stdout,on_started):
     passes its deadline or output bound, or this process is asked to terminate."""
     import signal,threading
     def over():return any(os.fstat(stream.fileno()).st_size>5_000_000 for stream in (stdout,log))
-    def interrupted(number,frame):raise SystemExit(128+number)
+    # A termination request is noted and acted on by the loop, so it can never arrive between starting the
+    # program and holding its handle.
+    asked=[]
+    def interrupted(number,frame):asked.append(number)
     main=threading.current_thread() is threading.main_thread()
     previous=signal.signal(signal.SIGTERM,interrupted) if main else None
     process=None;failure=None;code=None
@@ -2481,7 +2484,8 @@ def _run_model_posix(command,model_input,timeout,*,cwd,log,stdout,on_started):
             # group number cannot be reused before the group has been signalled.
             if hasattr(os,'waitid'):done=os.waitid(os.P_PID,process.pid,os.WEXITED|os.WNOWAIT|os.WNOHANG) is not None
             else:done=process.poll() is not None
-            if time.monotonic()>=deadline:failure=subprocess.TimeoutExpired(command,timeout)
+            if asked:failure=SystemExit(128+asked[0])
+            elif time.monotonic()>=deadline:failure=subprocess.TimeoutExpired(command,timeout)
             elif over():failure=RuntimeError('Model output exceeded its byte budget.')
             if done or failure is not None:break
             time.sleep(.2)
@@ -2500,6 +2504,8 @@ def _run_model_posix(command,model_input,timeout,*,cwd,log,stdout,on_started):
                     time.sleep(.1)
         finally:
             if main:signal.signal(signal.SIGTERM,previous)
+    # What the group wrote while it was being ended counts too.
+    if failure is None and over():failure=RuntimeError('Model output exceeded its byte budget.')
     if failure is not None:raise failure
     return subprocess.CompletedProcess(command,code)
 

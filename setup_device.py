@@ -73,7 +73,10 @@ def own_the_notes(vault,device_id):
     control.parent.mkdir(parents=True,exist_ok=True)
     try:
         with control.open('x',encoding='utf-8',newline='\n') as output:
-            output.write('---\nmaintainer_device_id: '+device_id+'\n---\n\n# Shared writer ownership\n\nThis device links saved milestones into daily notes. Additional devices are installed with the capture role.\n')
+            try:output.write('---\nmaintainer_device_id: '+device_id+'\n---\n\n# Shared writer ownership\n\nThis device links saved milestones into daily notes. Additional devices are installed with the capture role.\n');output.flush()
+            except BaseException:
+                # A half-written ownership note must not stay behind.
+                output.close();control.unlink(missing_ok=True);raise
     except FileExistsError:
         raise SystemExit(CONTROL+' appeared while this was running. Another device may own these notes; check it before starting the service.') from None
 
@@ -103,9 +106,11 @@ def make_maintainer(device,root,vault,service):
         write(root/'device.json',json.dumps({**record,'role':'maintainer'},indent=2)+'\n')
     except BaseException:
         # Leave the device as it was: no ownership note for a device still recorded as capture, and the service back up.
-        if created:control.unlink(missing_ok=True)
-        if service and brain(device,'service','start',capture=True).returncode:
-            say('The service is stopped. Start it with: "'+device['python']+'" "'+str(root/'app/brain_cli.py')+'" service start')
+        try:
+            if created:control.unlink(missing_ok=True)
+        finally:
+            if service and brain(device,'service','start',capture=True).returncode:
+                say('The service is stopped. Start it with: "'+device['python']+'" "'+str(root/'app/brain_cli.py')+'" service start')
         raise
     say('This device is now the maintainer of these notes.')
 
