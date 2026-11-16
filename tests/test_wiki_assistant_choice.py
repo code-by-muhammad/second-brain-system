@@ -337,14 +337,41 @@ def test_role_change_refuses_a_linked_ownership_note_and_undoes_a_note_written_j
     with pytest.raises(SystemExit,match='linked'):setup.make_maintainer({**device,'root':str(root)},root,vault,True)
 
 
-def test_codex_log_counts_only_its_own_error_lines_even_when_the_echo_is_cut_short():
-    packet='Compile sources\nINPUT_JSON:\n{"source":"'+'ordinary text '*6000+' ERROR: rate limit and 401 Unauthorized are quoted in this note"}'
-    echo=('user\n'+packet).encode('utf-8')[:65536].decode('utf-8',errors='replace')  # What the worker reads of a long echo.
-    assert packet not in echo and not w._model_auth_quota_failure(1,echo,packet,'codex')
-    # What the model wrote about the note is not a diagnostic either.
-    assert not w._model_auth_quota_failure(1,'codex\n{"pages":[{"claims":[{"quote":"ERROR: rate limit"}]}]}\ntokens used',packet,'codex')
-    for line in ('ERROR: unexpected status 401 Unauthorized','2026-11-16T09:53:37.187645Z ERROR codex_core: usage limit reached'):
-        assert w._model_auth_quota_failure(1,echo+'\n'+line,packet,'codex')
+def test_codex_log_is_classified_by_position_so_neither_note_nor_model_text_decides():
+    quoted='ERROR: unexpected status 401 Unauthorized'
+    packet='Compile sources\nINPUT_JSON:\n{"source":"'+'ordinary text '*6000+' '+quoted+' and ERROR: rate limit are quoted in this note"}'
+    header='OpenAI Codex\n--------\nuser\n'
+    cut=(header+packet).encode('utf-8')[:65536].decode('utf-8',errors='replace')  # What the worker reads of a long echo.
+    assert not w._model_auth_quota_failure(1,cut,packet,'codex')
+    small='Compile sources\nINPUT_JSON:\n{"source":"a note that quotes '+quoted+'"}'
+    # The model's own text after the `codex` line is never a diagnostic.
+    assert not w._model_auth_quota_failure(1,header+small+'\ncodex\nERROR: rate limit\n{"pages":[]}\ntokens used',small,'codex')
+    # A real diagnostic counts, also when the note quotes the very same line.
+    for line in (quoted,'2026-11-16T09:53:37.187645Z ERROR codex_core: usage limit reached'):
+        assert w._model_auth_quota_failure(1,header+small+'\n'+line,small,'codex')
+    assert w._model_auth_quota_failure(1,header+small+'\n'+quoted+'\ncodex\n{"pages":[]}',small,'codex')
+    # A log of another shape decides nothing.
+    assert not w._model_auth_quota_failure(1,small+'\n'+quoted,small,'codex')
+
+
+def test_both_programs_start_without_node_preloads(monkeypatch):
+    inherited={'PATH':'/bin','NODE_OPTIONS':'--require /planted.js','node_options':'--require /planted.js','CLAUDE_CODE_PLUGIN_DIRS':'/p','HOME':'/h'}
+    assert w._model_environment('codex',inherited)=={'PATH':'/bin','CLAUDE_CODE_PLUGIN_DIRS':'/p','HOME':'/h'}
+    assert w._model_environment('claude',inherited)=={'PATH':'/bin','HOME':'/h','CLAUDE_CODE_DISABLE_ATTACHMENTS':'1'}
+
+
+@posix
+def test_request_to_stop_that_arrives_during_cleanup_is_not_lost(brain,tmp_path,monkeypatch):
+    import signal
+    script=program(tmp_path/'tools','synthetic-model','#!/bin/sh\nexit 0\n')
+    actual=os.killpg
+    def interrupt_during_cleanup(group,number):
+        if number==signal.SIGKILL:os.kill(os.getpid(),signal.SIGINT)
+        return actual(group,number)
+    monkeypatch.setattr(w.os,'killpg',interrupt_during_cleanup)
+    with (tmp_path/'runner.log').open('wb') as log:
+        with pytest.raises(KeyboardInterrupt):
+            w._run_model_posix([str(script)],'',10,cwd=tmp_path,log=log,stdout=log,on_started=lambda:None)
 
 
 def test_setup_reports_why_an_existing_registration_did_not_start_and_registers_only_a_missing_one(monkeypatch):
