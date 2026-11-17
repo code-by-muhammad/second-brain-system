@@ -112,13 +112,16 @@ def test_text_index_phase_is_not_ended_by_the_count_rule_and_the_count_clock_sta
     def run(command,log,overall,tick,cleanup):
         log.write(b'  Rebuilding full-text search index (full project index)...\n');log.flush()
         tick();clock[0]+=1000;tick();reached.append('text phase survived')
-        log.write(EMBEDDING);log.flush()
-        tick();clock[0]+=4;tick();reached.append('within the stall budget')
+        # The marker arrives after more output than one read takes and split across two reads; the tick that
+        # sees it is 30 seconds after the one before, and still starts the count clock instead of ending the run.
+        log.write(b'x'*1048576+b'  Building vector ');log.flush();clock[0]+=30;tick()
+        log.write(b'embeddings (full rebuild)...\n');log.flush();clock[0]+=30;tick();reached.append('marker found')
+        clock[0]+=4;tick();reached.append('within the stall budget')
         clock[0]+=2;tick()
         pytest.fail('A stalled embedding phase must be cancelled.')
     monkeypatch.setattr(bootstrap,'_run_reindex',run)
     result=bootstrap.main(retry=True,full=True,overall_seconds=5000,stall_seconds=5)
-    assert reached==['text phase survived','within the stall budget']
+    assert reached==['text phase survived','marker found','within the stall budget']
     assert result['status']=='needs attention' and result['error_type']=='IndexStalled'
 
 
@@ -271,3 +274,17 @@ def test_unsafe_source_mutation_config_refused_before_model(brain,monkeypatch):
 @pytest.mark.parametrize('overall,stall',[(0,1),(3,3),(86401,1),(10,0)])
 def test_budgets_cannot_be_unbounded(brain,overall,stall):
     with pytest.raises(ValueError): bootstrap.main(overall_seconds=overall,stall_seconds=stall)
+
+
+def test_text_phase_budget_leaves_time_to_read_coverage_inside_a_short_overall_budget(brain,monkeypatch):
+    """A complete index whose program never leaves the text phase was verified in v0.2.10 and still is."""
+    ready()
+    clock=[100.]
+    monkeypatch.setattr(bootstrap.time,'monotonic',lambda:clock[0])
+    def run(command,log,overall,tick,cleanup):
+        for _ in range(40):
+            tick();clock[0]+=1
+        pytest.fail('A text phase past half of the overall budget must be cancelled.')
+    monkeypatch.setattr(bootstrap,'_run_reindex',run)
+    result=bootstrap.main(overall_seconds=20,stall_seconds=5)
+    assert result['status']=='verified' and result['elapsed_seconds']==10

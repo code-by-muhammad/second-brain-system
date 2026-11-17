@@ -744,7 +744,9 @@ def test_self_test_reports_every_step_and_stops_claiming_when_nothing_was_saved(
             if name=='brain_capture':
                 if state['capture'] is None:raise RuntimeError('write refused')
                 assert arguments==selftest.milestone();return Answer(state['capture'])
-            if name=='brain_read':return Answer({'path':arguments['path'],'lines':['# '+selftest.milestone()['title']]})
+            if name=='brain_read':
+                wanted=selftest.milestone()
+                return Answer({'path':state.get('read_path',arguments['path']),'content':state.get('note','1: event_id: '+wanted['event_id']+'\n2: # '+wanted['title']+'\n3: '+wanted['outcome'])})
             if name=='brain_search':return Answer({'results':[{'path':state.get('hit','00-Inbox/AI-Captures/x.md')}]})
     monkeypatch.setattr(fastmcp,'Client',Client)
     monkeypatch.setattr(transports,'StdioTransport',lambda **options:options)
@@ -759,6 +761,20 @@ def test_self_test_reports_every_step_and_stops_claiming_when_nothing_was_saved(
     state['hit']='01-Projects/Other.md'
     report=selftest.run()
     assert report['failed']==1 and report['checks'][-1]['status']=='FAIL'
+    # A note that keeps only the title, or an answer for another path, is not the saved milestone.
+    state.pop('hit')
+    for wrong in ({'note':'1: # '+selftest.milestone()['title']},{'read_path':'00-Inbox/AI-Captures/other.md'}):
+        state.update(wrong);report=selftest.run()
+        assert [row['check'] for row in report['checks'] if row['status']=='FAIL']==['self-test read'],wrong
+        for key in wrong:state.pop(key)
+    # A connection that cannot be opened still gives all six lines, each with the reason.
+    class Broken(Client):
+        async def __aenter__(self):raise OSError('adapter did not start')
+    monkeypatch.setattr(fastmcp,'Client',Broken)
+    report=selftest.run()
+    assert [row['check'] for row in report['checks']]==['self-test '+name for name in selftest.STEPS] and report['failed']==6
+    assert all('adapter did not start' in row['detail'] for row in report['checks'])
+    monkeypatch.setattr(fastmcp,'Client',Client)
     state['capture']=None;state['tools']=set(REQUIRED)-{'brain_capture'}
     report=selftest.run()
     failed={row['check'] for row in report['checks'] if row['status']=='FAIL'}

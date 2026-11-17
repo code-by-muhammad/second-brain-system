@@ -13,9 +13,9 @@ Found on the owner's Windows maintainer on v0.2.10: `index retry --full --stall-
 
 ## What changed
 
-1. **The text-index phase has its own budget.** Until a pass has written the upstream line that starts embedding, the count rule does not run; the phase may take up to two hours (or the stall budget, if that is larger). The count rule and its clock start when embedding starts. Each pass is judged by what it wrote itself.
+1. **The text-index phase has its own budget.** Until a pass has written the upstream line that starts embedding, the count rule does not run; the phase may take up to two hours (or the stall budget, if that is larger), and never more than half of the time the run has left, so coverage can still be read afterwards. The count rule and its clock start when embedding starts. Each pass is judged by what it wrote itself.
 2. **The guide gives a plain `index retry`** for a search index that stays on WARN, with measured durations, and `--full` only for a stale checksum that remains. `index status` says the same.
-3. **`--selftest`: one end-to-end test, the same on every device.** `setup ... --check --selftest` (or `brain_cli.py selftest`) starts the same stdio adapter with the same Python that an assistant's connection entry starts, and through it lists the tools, reads health and context, saves one milestone, reads it back and finds it by search. Six PASS/FAIL lines; any FAIL fails the command. It calls no model.
+3. **`--selftest`: one end-to-end test, the same on every device.** `setup ... --check --selftest` (or `brain_cli.py selftest`) starts the same stdio adapter with the same Python that an assistant's connection entry starts, and through it lists the tools, reads health and context, saves one milestone, reads it back and finds it by search. Always six PASS/FAIL lines, also when the connection itself fails; any FAIL fails the command. Read-back passes only for the note at the saved path with this device's identity, title and text. It calls no model.
 
 ## Boundaries to review
 

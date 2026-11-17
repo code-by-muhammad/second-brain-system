@@ -2,10 +2,11 @@
 
 It lists the tools, reads health and context, saves one test milestone, reads it back and finds it by search.
 The milestone has a fixed identity and text per device, so repeating the test never adds a second note."""
-import asyncio, json
+import asyncio
 import brain_settings as cfg
 
 TITLE='Second Brain self-test'
+STEPS=('tools','health','context','save','read','search')
 OUTCOME=('Written by the self-test of this device to prove that saving, reading and searching work end to end. '
          'It is written once per device and may be kept or deleted.')
 
@@ -43,7 +44,12 @@ async def _steps(add):
             return saved.get('status') in ('saved','duplicate') and bool(saved.get('path')),f"{saved.get('status')}: {saved.get('path')}"
         async def read():
             value=(await client.call_tool('brain_read',{'path':saved['path']})).data
-            return milestone()['title'] in json.dumps(value,ensure_ascii=False),'the saved milestone was read back'
+            # The note itself, at the path that was saved, with this device's identity, title and text.
+            text=value.get('content') if isinstance(value,dict) else None
+            wanted=milestone()
+            good=(isinstance(text,str) and value.get('path')==saved['path']
+                  and all(part in text for part in ('event_id: '+wanted['event_id'],'# '+wanted['title'],wanted['outcome'])))
+            return good,'the saved milestone was read back' if good else 'the note at that path is not the saved milestone'
         async def search():
             value=(await client.call_tool('brain_search',{'query':milestone()['title'],'limit':15})).data
             found=any(hit.get('path')==saved['path'] for hit in value.get('results',[]))
@@ -60,6 +66,10 @@ def run():
     def add(ok,detail,*,name):rows.append({'status':'PASS' if ok else 'FAIL','check':'self-test '+name,'detail':str(detail)[:300]})
     try:asyncio.run(_steps(add))
     except Exception as error:
-        add(False,type(error).__name__+': '+str(error),name='connection')
+        # Every step that got no result is reported with the reason, so the report always has all six.
+        reason='not run: '+type(error).__name__+': '+str(error)
+        done={row['check'] for row in rows}
+        for name in STEPS:
+            if 'self-test '+name not in done:add(False,reason,name=name)
     failed=sum(row['status']=='FAIL' for row in rows)
     return {'status':'failed' if failed else 'passed','failed':failed,'checks':rows}
