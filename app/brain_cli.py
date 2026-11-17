@@ -18,7 +18,7 @@ def main():
     # Embedded callers may replace stdout with a text-only stream such as StringIO.
     if hasattr(sys.stdout,'reconfigure'): sys.stdout.reconfigure(encoding='utf-8')
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command',choices=['health','search','read','wiki','service','index','git'])
+    parser.add_argument('command',choices=['health','search','read','wiki','service','index','git','selftest'])
     parser.add_argument('action',nargs='?',default='status'); parser.add_argument('--limit',type=int,default=4)
     parser.add_argument('--apply',action='store_true',help='Apply an explicitly reviewed legacy migration.')
     parser.add_argument('--requeue-unverified',action='store_true',help='Keep unverified legacy parts pending instead of claiming completion.')
@@ -68,6 +68,9 @@ def main():
             # The same reading of the record that a run does, with no program started.
             result={'status':'selected','executable':wiki._model_executable(),'worker':wiki._worker_summary()}
         else: parser.error('wiki action: status, run, prepare, lint, retry, migrate, relink, configure-model, model')
+    elif args.command=='selftest':
+        from brain_selftest import run
+        result=run()
     elif args.command=='git':
         import brain_git
         if args.action=='status': result=brain_git.review()
@@ -88,5 +91,7 @@ def main():
         elif args.action=='definition': result={'definition':service.definition()}
         else: result=service.recovery_status()
     print(json.dumps(result,indent=2,ensure_ascii=False,default=str))
+    # The self-test is a verdict: a failed one ends the command unsuccessfully, after its report.
+    if args.command=='selftest' and result.get('failed'):sys.exit(1)
 
 if __name__=='__main__': main()

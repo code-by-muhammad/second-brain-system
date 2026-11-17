@@ -165,6 +165,20 @@ def again(name):
     return shlex.join(parts)
 
 
+def selftest(device):
+    """Run the runtime's end-to-end self-test and print its lines. Returns 1 when any step failed or it gave no report."""
+    result=brain(device,'selftest',capture=True)
+    try:report=json.loads(result.stdout)
+    except ValueError:report=None
+    rows=report.get('checks') if isinstance(report,dict) else None
+    if not isinstance(rows,list) or not rows:
+        say('FAIL   self-test: it gave no report: '+((result.stderr or '').strip().splitlines() or ['no output'])[-1][:300]);return 1
+    for row in rows:say(f"{str(row.get('status')):<6} {row.get('check')}: {row.get('detail')}")
+    bad=sum(row.get('status')!='PASS' for row in rows) or int(bool(result.returncode))
+    say(f'{bad} failed.' if bad else 'Self-test passed: saving, reading and searching work end to end on this device.')
+    return int(bool(bad))
+
+
 def select_wiki(device,name,keep_existing=False):
     """Record the first usable program of that assistant. Returns nothing, or the reason none was recorded.
 
@@ -247,6 +261,7 @@ def main():
     parser.add_argument('--no-model',action='store_true',help='Skip the search model download (search stays unavailable until it is present).')
     parser.add_argument('--local-only',action='store_true',help='The owner wants no Git remote for these notes; the check fails if one exists.')
     parser.add_argument('--check',action='store_true',help='Only run the acceptance check.')
+    parser.add_argument('--selftest',action='store_true',help='After the check, run the end-to-end self-test: through the connection an assistant uses it saves one test milestone (once per device), reads it back and finds it by search.')
     parser.add_argument('--yes',action='store_true',help='Accept every default without asking.')
     args=parser.parse_args()
     root=Path(args.root).expanduser().resolve()
@@ -339,6 +354,11 @@ def main():
     if args.no_service:command.append('--no-service')
     say('\nAcceptance check:')
     failed=run(command).returncode
+    if args.selftest and args.no_service:
+        say('SKIP   self-test: it needs the running service, and this device was set up without it')
+    elif args.selftest:
+        say('\nEnd-to-end self-test (the connection an assistant uses; one test milestone per device):')
+        failed=selftest(device) or failed
     say('\nNext: open a NEW chat in your assistant and ask it to call brain_context. After a restart of this computer, run this again with --check.')
     if open_wiki:say('Still open: '+open_wiki)
     # A requested wiki assistant that could not be selected is a failure of this run, whatever the check says.

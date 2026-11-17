@@ -16,6 +16,11 @@ OVERALL_SECONDS=28800
 STALL_SECONDS=1800
 LOG_LIMIT=64*1024*1024
 FOLLOW_UP_STALL=300
+# Upstream rebuilds the text index first and, with --full, rewrites every note's rows without changing any of the
+# counted tables. Measured on a 4,400-note vault: 6 to 11 minutes on one machine, over 30 on another. Ending the
+# program there leaves the rebuild half done, so that phase has its own budget and the count rule starts after it.
+TEXT_PHASE_SECONDS=7200
+EMBEDDING_MARKER=b'Building vector embeddings'
 MAX_PASSES=160  # More than the largest verifiable note needs: 32,768 chunks at 256 per pass.
 
 
@@ -189,10 +194,21 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
             if log_path.exists():os.replace(log_path,previous)
             progress.update(stage='indexing local notes',source_manifest_sha256=manifest,last_progress_at=_now())
             _save(progress)
-            limit=stall_seconds;moved=False
+            limit=stall_seconds;moved=False;offset=0;embedding=False;began=started;tail=b''
             def tick():
-                nonlocal changed,observed,last_saved,moved
-                check()
+                nonlocal changed,observed,last_saved,moved,embedding,offset,tail
+                check();started_embedding=False
+                if not embedding:
+                    # Only what this pass has written counts; the marker of an earlier pass is before the offset.
+                    # New output is read as it comes, with enough of the previous piece kept to join a split marker.
+                    # Everything written so far is read before the phase is judged; the log has its own size limit.
+                    with log_path.open('rb') as written:
+                        written.seek(offset)
+                        while not embedding:
+                            check();piece=written.read(1048576)
+                            if not piece:break
+                            offset+=len(piece);embedding=started_embedding=EMBEDDING_MARKER in tail+piece
+                            tail=(tail+piece)[-len(EMBEDDING_MARKER):]
                 try: current=_counts(deadline)
                 except (sqlite3.Error,OSError): current=None
                 now=time.monotonic()
@@ -204,7 +220,15 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
                 if now-last_saved>=15:
                     _save(progress);last_saved=now
                 if log_path.stat().st_size>LOG_LIMIT: raise index.IndexAttention('private_log_budget_exceeded')
-                if now-changed>=limit: raise IndexStalled('Local indexing made no observable DB progress within its stall budget.')
+                if not embedding:
+                    # The text phase is judged by its own budget: two hours, but no more than a quarter of what this
+                    # run had left when the pass began, so that coverage can still be read and decide after the program
+                    # is ended. It is never shorter than the stall budget, which is what applied here before.
+                    if now-began>=max(limit,min(TEXT_PHASE_SECONDS,(deadline-began)/4)):
+                        raise IndexStalled('Local indexing did not finish its text index phase within its budget.')
+                    changed=now
+                elif started_embedding:changed=now  # The count clock starts when embedding does.
+                elif now-changed>=limit: raise IndexStalled('Local indexing made no observable DB progress within its stall budget.')
             def cleanup_wait():
                 progress.update(stage='containment cleanup pending',cleanup='bootstrap lock retained until owned processes exit')
                 _save(progress,terminal=True)
@@ -217,7 +241,8 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
             with log_path.open('ab') as log:
                 while True:
                     passes+=1;check()
-                    changed=time.monotonic();observed=None;moved=False
+                    changed=began=time.monotonic();observed=None;moved=False;embedding=False;tail=b''
+                    offset=log_path.stat().st_size  # The program writes through its own handle; ours does not move.
                     limit=stall_seconds if passes==1 else min(stall_seconds,FOLLOW_UP_STALL)
                     try:result=_run_reindex(command+arguments,log,deadline-time.monotonic(),tick,cleanup_wait)
                     except IndexStalled:result=subprocess.CompletedProcess(command+arguments,None)

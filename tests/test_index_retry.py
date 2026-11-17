@@ -9,6 +9,9 @@ import brain_index_bootstrap as bootstrap
 from test_index_coverage import config,database,add_note
 
 
+EMBEDDING=b'  done Full-text search index rebuilt\n  Building vector embeddings (incremental sync)...\n'
+
+
 def ready():
     config()
     with closing(database()) as connection: add_note(connection,1,'01-Projects/Source.md')
@@ -73,6 +76,7 @@ def test_stall_uses_monotonic_db_progress(brain,monkeypatch):
     clock=[100.]
     monkeypatch.setattr(bootstrap.time,'monotonic',lambda:clock[0])
     def run(command,log,overall,tick,cleanup):
+        log.write(EMBEDDING);log.flush()
         tick()
         clock[0]+=6
         tick()
@@ -89,6 +93,7 @@ def test_stall_after_complete_work_is_verified_by_coverage(brain,monkeypatch):
     clock=[100.]
     monkeypatch.setattr(bootstrap.time,'monotonic',lambda:clock[0])
     def run(command,log,overall,tick,cleanup):
+        log.write(EMBEDDING);log.flush()
         tick()
         clock[0]+=6
         tick()
@@ -96,6 +101,52 @@ def test_stall_after_complete_work_is_verified_by_coverage(brain,monkeypatch):
     monkeypatch.setattr(bootstrap,'_run_reindex',run)
     result=bootstrap.main(overall_seconds=20,stall_seconds=5)
     assert result['status']=='verified' and result['process_exit'] is None and 'error_type' not in result
+
+
+def test_text_index_phase_is_not_ended_by_the_count_rule_and_the_count_clock_starts_with_embedding(brain,monkeypatch):
+    """Measured: a full rebuild of the text index changes none of the counted tables for many minutes while it works."""
+    ready()
+    (cfg.VAULT/'01-Projects/Unindexed.md').write_text('Synthetic unindexed note.',encoding='utf-8')
+    clock=[100.];reached=[]
+    monkeypatch.setattr(bootstrap.time,'monotonic',lambda:clock[0])
+    def run(command,log,overall,tick,cleanup):
+        log.write(b'  Rebuilding full-text search index (full project index)...\n');log.flush()
+        tick();clock[0]+=1000;tick();reached.append('text phase survived')
+        # The marker arrives after more output than one read takes and split across two reads; the tick that
+        # sees it is 30 seconds after the one before, and still starts the count clock instead of ending the run.
+        log.write(b'x'*(1048576-10)+b'  Building vector ');log.flush();clock[0]+=30;tick()  # One read ends inside the marker.
+        log.write(b'embeddings (full rebuild)...\n');log.flush();clock[0]+=30;tick();reached.append('marker found')
+        clock[0]+=4;tick();reached.append('within the stall budget')
+        clock[0]+=2;tick()
+        pytest.fail('A stalled embedding phase must be cancelled.')
+    monkeypatch.setattr(bootstrap,'_run_reindex',run)
+    result=bootstrap.main(retry=True,full=True,overall_seconds=5000,stall_seconds=5)
+    assert reached==['text phase survived','marker found','within the stall budget']
+    assert result['status']=='needs attention' and result['error_type']=='IndexStalled'
+
+
+def test_text_index_phase_has_its_own_budget_and_an_earlier_pass_does_not_lend_its_marker(brain,monkeypatch):
+    ready()
+    (cfg.VAULT/'01-Projects/Unindexed.md').write_text('Synthetic unindexed note.',encoding='utf-8')
+    clock=[100.];passes=[]
+    monkeypatch.setattr(bootstrap.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(bootstrap,'TEXT_PHASE_SECONDS',50)
+    counts=iter(range(1,10000))
+    monkeypatch.setattr(bootstrap,'_counts',lambda deadline=None:{'entity':next(counts),'search_vector_embeddings_rowids':5})
+    def run(command,log,overall,tick,cleanup):
+        passes.append(len(passes)+1)
+        if len(passes)==1:
+            # The first pass reaches embedding and changes rows, so another pass follows.
+            log.write(EMBEDDING);log.flush();tick();tick()
+            return SimpleNamespace(returncode=0)
+        # The second writes nothing: the marker still in the log belongs to the first pass.
+        tick();clock[0]+=49;tick();passes.append('inside the text budget')
+        clock[0]+=2;tick()
+        pytest.fail('A text phase past its budget must be cancelled.')
+    monkeypatch.setattr(bootstrap,'_run_reindex',run)
+    result=bootstrap.main(retry=True,overall_seconds=5000,stall_seconds=5)
+    assert passes==[1,2,'inside the text budget']
+    assert result['status']=='needs attention' and result['error_type']=='IndexStalled'
 
 
 def _coverage(status,**vectors):
@@ -223,3 +274,41 @@ def test_unsafe_source_mutation_config_refused_before_model(brain,monkeypatch):
 @pytest.mark.parametrize('overall,stall',[(0,1),(3,3),(86401,1),(10,0)])
 def test_budgets_cannot_be_unbounded(brain,overall,stall):
     with pytest.raises(ValueError): bootstrap.main(overall_seconds=overall,stall_seconds=stall)
+
+
+def test_text_phase_budget_leaves_time_to_read_coverage_inside_a_short_overall_budget(brain,monkeypatch):
+    """A complete index whose program never leaves the text phase was verified in v0.2.10 and still is."""
+    ready()
+    clock=[100.]
+    monkeypatch.setattr(bootstrap.time,'monotonic',lambda:clock[0])
+    def run(command,log,overall,tick,cleanup):
+        for _ in range(80):
+            tick();clock[0]+=1
+        pytest.fail('A text phase past its budget must be cancelled.')
+    monkeypatch.setattr(bootstrap,'_run_reindex',run)
+    # Reading coverage takes time too: twelve seconds here, which fitted after the stall budget in v0.2.10.
+    actual=bootstrap.index.status
+    def slow(deadline=None):
+        clock[0]+=12;return actual(deadline=deadline)
+    monkeypatch.setattr(bootstrap.index,'status',slow)
+    result=bootstrap.main(overall_seconds=20,stall_seconds=5)
+    assert result['status']=='verified' and result['elapsed_seconds']==17
+    # With room to spare the phase gets a quarter of the run, not just the stall budget.
+    clock[0]=100.
+    assert bootstrap.main(overall_seconds=200,stall_seconds=5)['elapsed_seconds']==50+12
+
+
+
+def test_marker_behind_a_long_log_is_found_in_one_tick_so_a_progressing_pass_is_not_judged_as_text_phase(brain,monkeypatch):
+    ready()
+    clock=[100.];counts=iter(range(1,100000));ticks=[]
+    monkeypatch.setattr(bootstrap.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(bootstrap,'_counts',lambda deadline=None:{'entity':next(counts),'search_vector_embeddings_rowids':5})
+    def run(command,log,overall,tick,cleanup):
+        log.write(b'y'*(8*1048576)+EMBEDDING);log.flush()
+        for _ in range(12):
+            tick();clock[0]+=1;ticks.append(clock[0])  # Rows change at every tick: nothing may end this pass.
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(bootstrap,'_run_reindex',run)
+    result=bootstrap.main(overall_seconds=20,stall_seconds=5)
+    assert len(ticks)==12 and result['status']=='verified' and result['process_exit']==0

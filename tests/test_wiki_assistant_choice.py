@@ -684,3 +684,98 @@ def test_setup_and_check_print_a_path_the_console_encoding_lacks_instead_of_stop
     raw=narrow();monkeypatch.setattr(sys,'argv',['setup_device.py','--root',str(root),'--clients','','--yes'])
     with pytest.raises(SystemExit) as stop:setup.main()
     sys.stdout.flush();assert stop.value.code==0 and raw.getvalue().decode('utf-8').rstrip().endswith('Still open: No wiki assistant is selected: '+path)
+
+
+def test_setup_runs_the_self_test_only_when_asked_and_its_failure_fails_the_run(tmp_path,monkeypatch,capsys):
+    setup=setup_module_under_test()
+    root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir()
+    (root/'device.json').write_text(json.dumps({'device_id':'abc123','role':'capture','version':'0.2.11','vault':str(vault),'python':sys.executable}),encoding='utf-8')
+    asked=[];answer={}
+    class Done:
+        returncode=0;stderr='';stdout=''
+    def brain(device,*arguments,capture=False):
+        asked.append(arguments);done=Done();done.stdout=answer.get('out','');done.returncode=answer.get('code',0);done.stderr=answer.get('err','');return done
+    monkeypatch.setattr(setup,'brain',brain)
+    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'verify':lambda repo:{'version':'0.2.11'}})
+    monkeypatch.setattr(setup,'run',lambda command,capture=False:Done())
+    monkeypatch.setattr(setup,'wait_running',lambda *args,**kwargs:True)
+    def go(*flags):
+        asked.clear();monkeypatch.setattr(sys,'argv',['setup_device.py','--root',str(root),'--clients','',*flags])
+        with pytest.raises(SystemExit) as stop:setup.main()
+        return stop.value.code,capsys.readouterr().out
+    assert go('--yes')==(0,go('--yes')[1]) and asked==[] and 'self-test' not in go('--yes')[1]
+    rows=[{'status':'PASS','check':'self-test save','detail':'saved: 00-Inbox/AI-Captures/a.md'},{'status':'PASS','check':'self-test search','detail':'found'}]
+    answer.update(out=json.dumps({'status':'passed','failed':0,'checks':rows}))
+    code,said=go('--check','--selftest')
+    assert code==0 and asked==[('selftest',)] and 'PASS   self-test save: saved: 00-Inbox/AI-Captures/a.md' in said and 'Self-test passed' in said
+    rows[1]={'status':'FAIL','check':'self-test search','detail':'the saved milestone is not among the results'}
+    answer.update(out=json.dumps({'status':'failed','failed':1,'checks':rows}),code=1)
+    code,said=go('--selftest')
+    assert code==1 and 'FAIL   self-test search' in said and '1 failed.' in said
+    # No report at all is a failure with the runtime's last line, never a silent pass.
+    answer.update(out='',code=1,err='Traceback\nOwnershipError: No owned local service is available')
+    code,said=go('--selftest')
+    assert code==1 and 'FAIL   self-test: it gave no report: OwnershipError: No owned local service is available' in said
+    answer.update(out=json.dumps({'status':'passed','failed':0,'checks':[]}),code=0)
+    assert go('--selftest')[0]==1
+    code,said=go('--selftest','--no-service')
+    assert code==0 and asked==[] and 'SKIP   self-test' in said
+
+
+def test_self_test_reports_every_step_and_stops_claiming_when_nothing_was_saved(brain,monkeypatch):
+    """The steps run against a stand-in for the assistant connection; the real one is exercised on a device."""
+    import brain_selftest as selftest
+    import fastmcp,fastmcp.client.transports as transports
+    from brain_client import REQUIRED
+    monkeypatch.setattr(cfg,'VERSION','0.2.11')
+    state={'tools':set(REQUIRED),'capture':{'status':'saved','path':'00-Inbox/AI-Captures/x.md'},'started':[]}
+    class Tool:
+        def __init__(self,name):self.name=name
+    class Answer:
+        def __init__(self,data):self.data=data
+    class Client:
+        def __init__(self,transport,timeout=None):state['started'].append(transport)
+        async def __aenter__(self):return self
+        async def __aexit__(self,*args):return False
+        async def list_tools(self):return [Tool(name) for name in state['tools']]
+        async def call_tool(self,name,arguments):
+            if name=='brain_health':return Answer({'status':'running','version':'0.2.11'})
+            if name=='brain_context':return Answer({'context':{}})
+            if name=='brain_capture':
+                if state['capture'] is None:raise RuntimeError('write refused')
+                assert arguments==selftest.milestone();return Answer(state['capture'])
+            if name=='brain_read':
+                wanted=selftest.milestone()
+                return Answer({'path':state.get('read_path',arguments['path']),'content':state.get('note','1: event_id: '+wanted['event_id']+'\n2: # '+wanted['title']+'\n3: '+wanted['outcome'])})
+            if name=='brain_search':return Answer({'results':[{'path':state.get('hit','00-Inbox/AI-Captures/x.md')}]})
+    monkeypatch.setattr(fastmcp,'Client',Client)
+    monkeypatch.setattr(transports,'StdioTransport',lambda **options:options)
+    report=selftest.run()
+    assert report['status']=='passed' and [row['check'] for row in report['checks']]==['self-test '+name for name in ('tools','health','context','save','read','search')]
+    # The connection is the recorded Python with the adapter and nothing else, as in an assistant's settings.
+    assert state['started'][0]['command']==str(cfg.PYTHON) and state['started'][0]['args']==[str(cfg.ROOT/'app/brain_client.py')]
+    # The milestone is the same every time on one device, so a second run is a duplicate and still a pass.
+    assert selftest.milestone()==selftest.milestone() and cfg.DEVICE_ID in selftest.milestone()['event_id']
+    state['capture']={'status':'duplicate','path':'00-Inbox/AI-Captures/x.md'}
+    assert selftest.run()['status']=='passed'
+    state['hit']='01-Projects/Other.md'
+    report=selftest.run()
+    assert report['failed']==1 and report['checks'][-1]['status']=='FAIL'
+    # A note that keeps only the title, or an answer for another path, is not the saved milestone.
+    state.pop('hit')
+    for wrong in ({'note':'1: # '+selftest.milestone()['title']},{'read_path':'00-Inbox/AI-Captures/other.md'}):
+        state.update(wrong);report=selftest.run()
+        assert [row['check'] for row in report['checks'] if row['status']=='FAIL']==['self-test read'],wrong
+        for key in wrong:state.pop(key)
+    # A connection that cannot be opened still gives all six lines, each with the reason.
+    class Broken(Client):
+        async def __aenter__(self):raise OSError('adapter did not start')
+    monkeypatch.setattr(fastmcp,'Client',Broken)
+    report=selftest.run()
+    assert [row['check'] for row in report['checks']]==['self-test '+name for name in selftest.STEPS] and report['failed']==6
+    assert all('adapter did not start' in row['detail'] for row in report['checks'])
+    monkeypatch.setattr(fastmcp,'Client',Client)
+    state['capture']=None;state['tools']=set(REQUIRED)-{'brain_capture'}
+    report=selftest.run()
+    failed={row['check'] for row in report['checks'] if row['status']=='FAIL'}
+    assert failed=={'self-test tools','self-test save','self-test read','self-test search'} and report['status']=='failed'

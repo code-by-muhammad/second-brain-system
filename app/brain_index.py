@@ -368,7 +368,7 @@ def status(*,deadline=None):
         verified=bool(notes) and complete and stable and vectors.get('invalid')==0
         return {**base,'status':'verified' if verified else 'needs review','coverage':coverage,'vectors':vectors,
                 'inventory_stable':stable,'reason':'file_body_and_vector_structure_verified' if verified else 'coverage_or_vector_review_required',
-                'guidance':'Use index retry --full after a stale checksum; search ranking and named-client retrieval require separate probes.'}
+                'guidance':'Use a plain index retry first; index retry --full only for a stale checksum that remains; search ranking and named-client retrieval require separate probes.'}
     except Exception as error:
         reason='status_time_limit' if time.monotonic()>=deadline else (str(error) if isinstance(error,(IndexAttention,WalkLimit)) else 'local_index_unavailable')
         return {**base,'status':'needs attention','reason':reason,'error_type':type(error).__name__,
