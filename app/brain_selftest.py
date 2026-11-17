@@ -1,7 +1,9 @@
 """End-to-end self-test of one device, through the same stdio adapter an assistant starts.
 
 It lists the tools, reads health and context, saves one test milestone, reads it back and finds it by search.
-The milestone has a fixed identity and text per device, so repeating the test never adds a second note."""
+The milestone has a fixed identity and text per device, so repeating the test never adds a second note.
+No assistant program and no remote model is called; the search step uses the device's own local embedding
+model, as every search does."""
 import asyncio
 import brain_settings as cfg
 

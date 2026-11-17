@@ -201,10 +201,14 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
                 if not embedding:
                     # Only what this pass has written counts; the marker of an earlier pass is before the offset.
                     # New output is read as it comes, with enough of the previous piece kept to join a split marker.
+                    # Everything written so far is read before the phase is judged; the log has its own size limit.
                     with log_path.open('rb') as written:
-                        written.seek(offset);piece=written.read(1048576)
-                    offset+=len(piece);embedding=started_embedding=EMBEDDING_MARKER in tail+piece
-                    tail=(tail+piece)[-len(EMBEDDING_MARKER):]
+                        written.seek(offset)
+                        while not embedding:
+                            check();piece=written.read(1048576)
+                            if not piece:break
+                            offset+=len(piece);embedding=started_embedding=EMBEDDING_MARKER in tail+piece
+                            tail=(tail+piece)[-len(EMBEDDING_MARKER):]
                 try: current=_counts(deadline)
                 except (sqlite3.Error,OSError): current=None
                 now=time.monotonic()
