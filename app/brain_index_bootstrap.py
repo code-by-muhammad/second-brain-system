@@ -20,9 +20,6 @@ FOLLOW_UP_STALL=300
 # counted tables. Measured on a 4,400-note vault: 6 to 11 minutes on one machine, over 30 on another. Ending the
 # program there leaves the rebuild half done, so that phase has its own budget and the count rule starts after it.
 TEXT_PHASE_SECONDS=7200
-# Kept back at the end of a run for ending the program and reading coverage, so that coverage and not the clock
-# decides the result: five minutes, or a quarter of a shorter run. Reading coverage of 4,400 notes takes seconds.
-COVERAGE_RESERVE=300
 EMBEDDING_MARKER=b'Building vector embeddings'
 MAX_PASSES=160  # More than the largest verifiable note needs: 32,768 chunks at 256 per pass.
 
@@ -219,8 +216,6 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
                 if now-last_saved>=15:
                     _save(progress);last_saved=now
                 if log_path.stat().st_size>LOG_LIMIT: raise index.IndexAttention('private_log_budget_exceeded')
-                if deadline-now<=min(COVERAGE_RESERVE,overall_seconds/4):
-                    raise IndexStalled('Local indexing is ended before the overall budget so that coverage can still be read.')
                 if not embedding:
                     # The text phase is judged by its own budget: two hours, but no more than a quarter of what this
                     # run had left when the pass began, so that coverage can still be read and decide after the program

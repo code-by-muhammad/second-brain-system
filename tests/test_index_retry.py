@@ -297,27 +297,3 @@ def test_text_phase_budget_leaves_time_to_read_coverage_inside_a_short_overall_b
     clock[0]=100.
     assert bootstrap.main(overall_seconds=200,stall_seconds=5)['elapsed_seconds']==50+12
 
-
-def test_end_of_the_overall_budget_is_kept_for_reading_coverage_so_a_late_pass_still_verifies(brain,monkeypatch):
-    """A complete index, a program still running near the end of the run: coverage decides, not the clock."""
-    ready()
-    clock=[100.];counts=iter(range(1,100000))
-    monkeypatch.setattr(bootstrap.time,'monotonic',lambda:clock[0])
-    monkeypatch.setattr(bootstrap,'_counts',lambda deadline=None:{'entity':next(counts),'search_vector_embeddings_rowids':5})
-    def run(command,log,overall,tick,cleanup):
-        log.write(EMBEDDING);log.flush()
-        for _ in range(2000):
-            tick();clock[0]+=1  # Rows keep changing, so the stall rule never ends this pass.
-        pytest.fail('A pass inside the kept-back end of the run must be ended.')
-    monkeypatch.setattr(bootstrap,'_run_reindex',run)
-    actual=bootstrap.index.status
-    reading=[110]
-    def slow(deadline=None):
-        clock[0]+=reading[0];return actual(deadline=deadline)
-    monkeypatch.setattr(bootstrap.index,'status',slow)
-    result=bootstrap.main(overall_seconds=1000,stall_seconds=50)
-    assert result['status']=='verified' and result['elapsed_seconds']==750+110
-    # A shorter run keeps back a quarter of itself: 100 of 400 seconds, enough for a 60-second reading.
-    clock[0]=100.;reading[0]=60
-    result=bootstrap.main(overall_seconds=400,stall_seconds=50)
-    assert result['status']=='verified' and result['elapsed_seconds']==300+60
