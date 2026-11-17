@@ -114,7 +114,7 @@ def test_text_index_phase_is_not_ended_by_the_count_rule_and_the_count_clock_sta
         tick();clock[0]+=1000;tick();reached.append('text phase survived')
         # The marker arrives after more output than one read takes and split across two reads; the tick that
         # sees it is 30 seconds after the one before, and still starts the count clock instead of ending the run.
-        log.write(b'x'*1048576+b'  Building vector ');log.flush();clock[0]+=30;tick()
+        log.write(b'x'*(1048576-10)+b'  Building vector ');log.flush();clock[0]+=30;tick()  # This read ends inside the marker.
         log.write(b'embeddings (full rebuild)...\n');log.flush();clock[0]+=30;tick();reached.append('marker found')
         clock[0]+=4;tick();reached.append('within the stall budget')
         clock[0]+=2;tick()
@@ -282,9 +282,17 @@ def test_text_phase_budget_leaves_time_to_read_coverage_inside_a_short_overall_b
     clock=[100.]
     monkeypatch.setattr(bootstrap.time,'monotonic',lambda:clock[0])
     def run(command,log,overall,tick,cleanup):
-        for _ in range(40):
+        for _ in range(80):
             tick();clock[0]+=1
-        pytest.fail('A text phase past half of the overall budget must be cancelled.')
+        pytest.fail('A text phase past its budget must be cancelled.')
     monkeypatch.setattr(bootstrap,'_run_reindex',run)
+    # Reading coverage takes time too: twelve seconds here, which fitted after the stall budget in v0.2.10.
+    actual=bootstrap.index.status
+    def slow(deadline=None):
+        clock[0]+=12;return actual(deadline=deadline)
+    monkeypatch.setattr(bootstrap.index,'status',slow)
     result=bootstrap.main(overall_seconds=20,stall_seconds=5)
-    assert result['status']=='verified' and result['elapsed_seconds']==10
+    assert result['status']=='verified' and result['elapsed_seconds']==17
+    # With room to spare the phase gets a quarter of the run, not just the stall budget.
+    clock[0]=100.
+    assert bootstrap.main(overall_seconds=200,stall_seconds=5)['elapsed_seconds']==50+12

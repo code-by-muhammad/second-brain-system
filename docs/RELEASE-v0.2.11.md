@@ -13,7 +13,7 @@ Found on the owner's Windows maintainer on v0.2.10: `index retry --full --stall-
 
 ## What changed
 
-1. **The text-index phase has its own budget.** Until a pass has written the upstream line that starts embedding, the count rule does not run; the phase may take up to two hours (or the stall budget, if that is larger), and never more than half of the time the run has left, so coverage can still be read afterwards. The count rule and its clock start when embedding starts. Each pass is judged by what it wrote itself.
+1. **The text-index phase has its own budget.** Until a pass has written the upstream line that starts embedding, the count rule does not run; the phase may take up to two hours, cut to a quarter of the time the run had left when the pass began so that coverage can still be read afterwards, and never less than the stall budget, which is what applied to it before. The count rule and its clock start when embedding starts. Each pass is judged by what it wrote itself.
 2. **The guide gives a plain `index retry`** for a search index that stays on WARN, with measured durations, and `--full` only for a stale checksum that remains. `index status` says the same.
 3. **`--selftest`: one end-to-end test, the same on every device.** `setup ... --check --selftest` (or `brain_cli.py selftest`) starts the same stdio adapter with the same Python that an assistant's connection entry starts, and through it lists the tools, reads health and context, saves one milestone, reads it back and finds it by search. Always six PASS/FAIL lines, also when the connection itself fails; any FAIL fails the command. Read-back passes only for the note at the saved path with this device's identity, title and text. It calls no model.
 
@@ -24,6 +24,7 @@ Found on the owner's Windows maintainer on v0.2.10: `index retry --full --stall-
 - **It needs the running service** and is skipped with a line on a device set up with `--no-service`.
 - **The text phase is recognised by an upstream log line** (`Building vector embeddings`) of the pinned Basic Memory version. If a later version words it differently, a pass is judged by the two-hour budget alone, which is slower but ends nothing early.
 - **A text phase that truly hangs** is now ended after two hours instead of after the stall budget.
+- **A run with a very short overall budget can end differently.** The text phase may now use up to a quarter of the overall budget where it used the stall budget before. A run whose overall budget is so short that this quarter plus the coverage reading no longer fits ends with `overall_time_limit` where v0.2.10 could still verify. With the default eight hours the quarter is the two-hour cap; this only concerns explicit `--overall-seconds` values of minutes.
 - **Why that phase took over 30 minutes on the Windows device** against 6 to 11 on the Mac is not established. The service was running there during the retry and was not in the Mac measurement.
 - **The follow-up passes still wait out their stall budget** after each 256-chunk step; a large first index spends about 40 minutes there. Unchanged.
 

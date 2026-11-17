@@ -217,9 +217,10 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
                     _save(progress);last_saved=now
                 if log_path.stat().st_size>LOG_LIMIT: raise index.IndexAttention('private_log_budget_exceeded')
                 if not embedding:
-                    # The text phase is judged by its own budget, never more than half of what this run has left, so
-                    # that coverage can still be read and decide after the program is ended.
-                    if now-began>=min(max(limit,TEXT_PHASE_SECONDS),max(limit,(deadline-began)/2)):
+                    # The text phase is judged by its own budget: two hours, but no more than a quarter of what this
+                    # run had left when the pass began, so that coverage can still be read and decide after the program
+                    # is ended. It is never shorter than the stall budget, which is what applied here before.
+                    if now-began>=max(limit,min(TEXT_PHASE_SECONDS,(deadline-began)/4)):
                         raise IndexStalled('Local indexing did not finish its text index phase within its budget.')
                     changed=now
                 elif started_embedding:changed=now  # The count clock starts when embedding does.
