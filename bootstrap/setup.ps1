@@ -3,7 +3,7 @@
 # Extra arguments go to setup_device.py, for example: .\setup.ps1 --yes
 $ErrorActionPreference = 'Stop'
 
-$Tag = if ($env:SECOND_BRAIN_REF) { $env:SECOND_BRAIN_REF } else { 'v0.2.10' }
+$Tag = if ($env:SECOND_BRAIN_REF) { $env:SECOND_BRAIN_REF } else { 'v0.2.11' }
 $Commit = if ($env:SECOND_BRAIN_COMMIT) { $env:SECOND_BRAIN_COMMIT } else { '__COMMIT__' }
 $Root = if ($env:SECOND_BRAIN_ROOT) { $env:SECOND_BRAIN_ROOT } else { 'C:\Second-Brain-System' }
 $Source = 'https://github.com/code-by-muhammad/second-brain-system.git'

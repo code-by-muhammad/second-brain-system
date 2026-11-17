@@ -16,6 +16,11 @@ OVERALL_SECONDS=28800
 STALL_SECONDS=1800
 LOG_LIMIT=64*1024*1024
 FOLLOW_UP_STALL=300
+# Upstream rebuilds the text index first and, with --full, rewrites every note's rows without changing any of the
+# counted tables. Measured on a 4,400-note vault: 6 to 11 minutes on one machine, over 30 on another. Ending the
+# program there leaves the rebuild half done, so that phase has its own budget and the count rule starts after it.
+TEXT_PHASE_SECONDS=7200
+EMBEDDING_MARKER=b'Building vector embeddings'
 MAX_PASSES=160  # More than the largest verifiable note needs: 32,768 chunks at 256 per pass.
 
 
@@ -189,10 +194,14 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
             if log_path.exists():os.replace(log_path,previous)
             progress.update(stage='indexing local notes',source_manifest_sha256=manifest,last_progress_at=_now())
             _save(progress)
-            limit=stall_seconds;moved=False
+            limit=stall_seconds;moved=False;offset=0;embedding=False;began=started
             def tick():
-                nonlocal changed,observed,last_saved,moved
+                nonlocal changed,observed,last_saved,moved,embedding
                 check()
+                if not embedding:
+                    # Only what this pass has written counts; the marker of an earlier pass is before the offset.
+                    with log_path.open('rb') as written:
+                        written.seek(offset);embedding=EMBEDDING_MARKER in written.read(65536)
                 try: current=_counts(deadline)
                 except (sqlite3.Error,OSError): current=None
                 now=time.monotonic()
@@ -204,7 +213,11 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
                 if now-last_saved>=15:
                     _save(progress);last_saved=now
                 if log_path.stat().st_size>LOG_LIMIT: raise index.IndexAttention('private_log_budget_exceeded')
-                if now-changed>=limit: raise IndexStalled('Local indexing made no observable DB progress within its stall budget.')
+                if not embedding:
+                    # The text phase is judged by its own budget; the count clock starts when embedding does.
+                    if now-began>=max(limit,TEXT_PHASE_SECONDS): raise IndexStalled('Local indexing did not finish its text index phase within its budget.')
+                    changed=now
+                elif now-changed>=limit: raise IndexStalled('Local indexing made no observable DB progress within its stall budget.')
             def cleanup_wait():
                 progress.update(stage='containment cleanup pending',cleanup='bootstrap lock retained until owned processes exit')
                 _save(progress,terminal=True)
@@ -217,7 +230,8 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
             with log_path.open('ab') as log:
                 while True:
                     passes+=1;check()
-                    changed=time.monotonic();observed=None;moved=False
+                    changed=began=time.monotonic();observed=None;moved=False;embedding=False
+                    offset=log_path.stat().st_size  # The program writes through its own handle; ours does not move.
                     limit=stall_seconds if passes==1 else min(stall_seconds,FOLLOW_UP_STALL)
                     try:result=_run_reindex(command+arguments,log,deadline-time.monotonic(),tick,cleanup_wait)
                     except IndexStalled:result=subprocess.CompletedProcess(command+arguments,None)
