@@ -82,8 +82,17 @@ def main(owned=None):
                                 arguments=['--reconcile']
                             if arguments is not None:
                                 reconciling=owned['_reconciling']=arguments==['--reconcile']
-                                with (cfg.ROOT/'logs/service-bootstrap.log').open('ab') as log:
-                                    bootstrap=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_index_bootstrap.py'),*arguments],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
+                                try:
+                                    with (cfg.ROOT/'logs/service-bootstrap.log').open('ab') as log:
+                                        bootstrap=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_index_bootstrap.py'),*arguments],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
+                                except OSError:
+                                    # A repair that cannot be started waits a whole interval like one that ran, and
+                                    # the rest of this cycle, the heartbeat included, goes on. The first index is
+                                    # not optional: its launch failure is raised as before.
+                                    if not reconciling:raise
+                                    reconciling=owned['_reconciling']=False
+                                    owned['_index_finished']=time.monotonic()
+                                else:
                                     owned['bootstrap']=bootstrap
                                     _publish_owned(owned)
                         if maintenance is not None and maintenance.poll() is not None:

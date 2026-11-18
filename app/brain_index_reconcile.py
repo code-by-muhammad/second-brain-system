@@ -203,14 +203,15 @@ def main():
         # owns it, and this repair waits for its next turn.
         lock = FileLock(str(cfg.STATE / 'index-bootstrap.lock'), timeout=0)
         with lock, FileLock(str(cfg.STATE / 'maintenance.lock'), timeout=0):
-            cfg.write_admission()
             started = time.monotonic()
-            # Armed before the first scan and for the whole pass: nothing in it may keep the locks for longer.
+            # Armed as soon as the locks are held and for the whole pass: nothing in it, the admission check
+            # included, may keep the locks for longer.
             import threading
             watchdog = threading.Timer(PASS_SECONDS, _deadline_exit)
             watchdog.daemon = True
             watchdog.start()
             try:
+                cfg.write_admission()
                 plan = index.RepairPlan()
                 current = index.status(repair=plan)
                 cursors = _previous_cursors()

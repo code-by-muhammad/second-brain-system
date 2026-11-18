@@ -290,3 +290,36 @@ def test_observation_cancellation_does_not_kill_owned_maintenance(lifecycle, end
     assert h.owned['maintenance'] is maintenance
     assert h.registry()['maintenance'] == maintenance.pid
     # No native service-stop or abrupt OS-exit containment is inferred here.
+
+
+def test_repair_that_cannot_be_started_waits_an_interval_and_the_cycle_goes_on(lifecycle, monkeypatch):
+    h = lifecycle
+    (h.state / 'index-bootstrap-status.json').write_text('{"status":"verified"}', encoding='utf-8')
+    h.observe()
+    upkeep, = h.named('brain_maintenance.py')
+    upkeep.returncode = 0
+    h.observe()  # Records that the pass ended; the repair is due in the next cycle.
+    spawn = supervisor.subprocess.Popen
+    attempts = []
+
+    def refuse(command, **kwargs):
+        if Path(command[1]).name == 'brain_index_bootstrap.py':
+            attempts.append(h.now)
+            raise OSError('synthetic launch failure')
+        return spawn(command, **kwargs)
+
+    beats = []
+    monkeypatch.setattr(supervisor.subprocess, 'Popen', refuse)
+    monkeypatch.setattr(supervisor.service, 'write_heartbeat', lambda state: beats.append(state))
+    h.observe(3)
+    # One attempt, not one per cycle; the heartbeat was still written in every cycle.
+    assert attempts == [h.now] and beats == ['ready'] * 3 and h.owned.get('bootstrap') is None
+    assert h.owned['_reconciling'] is False
+    h.now += 899
+    h.observe()
+    assert len(attempts) == 1
+    h.now += 1
+    monkeypatch.setattr(supervisor.subprocess, 'Popen', spawn)
+    h.observe()
+    retried, = h.named('brain_index_bootstrap.py')
+    assert retried.arguments == ['--reconcile']
