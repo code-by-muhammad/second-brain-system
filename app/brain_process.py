@@ -176,12 +176,23 @@ def _selected_python():
     return selected
 
 
+def _process_pythons():
+    """Mac process evidence can omit an absent prior-release path."""
+    for value in _selected_python():
+        path=Path(value)
+        if sys.platform=='darwin' and path!=cfg.PYTHON:
+            try:path.lstat()
+            except FileNotFoundError:continue
+            except OSError:raise OwnershipError('Selected Python interpreter is unavailable.') from None
+        yield path
+
+
 def _bm_paths():
     if os.name=='nt':
         return {_path(Path(value).parent/'bm.exe') for value in _launchers()}
     result=set()
-    for value in _selected_python():
-        path=Path(value).parent/'bm'
+    for interpreter in _process_pythons():
+        path=interpreter.parent/'bm'
         try:info=path.lstat()
         except FileNotFoundError:continue
         except OSError:raise OwnershipError('Index executable metadata is unavailable.') from None
@@ -193,9 +204,7 @@ def _bm_paths():
 
 def _launchers():
     result={}
-    selected=_selected_python()
-    for value in selected:
-        path=Path(value)
+    for path in _process_pythons():
         if path.name.lower() not in ('python.exe','pythonw.exe','python','python3'):continue
         config=path.parent.parent/'pyvenv.cfg'
         base=None

@@ -1427,6 +1427,23 @@ class _EvidenceHistory:
         self.log_failures={}; self.blob_failures={}; self.result_failures={}; self.legacy_proofs={}
         self.failure_serial=0; self.failure_reason=None; self.first_failure_reason=None
         self.failure_serial_by_reason={}
+        self._history_paused_at=None; self.history_seconds=0
+
+    @contextmanager
+    def _history_work(self):
+        # Lint also scans current evidence, which must not use its Git history budget.
+        paused_at=self._history_paused_at
+        if paused_at is None:
+            yield
+            return
+        started=time.monotonic()
+        self.deadline+=started-paused_at
+        self._history_paused_at=None
+        try:
+            yield
+        finally:
+            self._history_paused_at=time.monotonic()
+            self.history_seconds+=self._history_paused_at-started
 
     def _incomplete(self,reason):
         self.failure_serial+=1; self.failure_reason=reason
@@ -1550,6 +1567,10 @@ class _EvidenceHistory:
                 proof={key:info[key] for key in ('text_sha256','date','git_commit','git_blob') if key in info}
                 proof.update(sha256=sha256,mode=mode,representation=info['variants'][sha256])
                 self.results[key]=proof; return proof
+        with self._history_work():
+            return self._historical_source(source,sha256,quote,text_sha256,key,serial)
+
+    def _historical_source(self,source,sha256,quote,text_sha256,key,serial):
         for info in self._versions(source):
             if sha256 not in info['variants'] or quote is not None and normalized(quote) not in info['text'] or text_sha256 is not None and text_sha256!=info['text_sha256']: continue
             proof={key:info[key] for key in ('text_sha256','date','git_commit','git_blob') if key in info}
@@ -1592,10 +1613,14 @@ class _EvidenceHistory:
         if proof: return proof
         key=(page['path'],_claim_hash(claim))
         if key in self.legacy_proofs: return self.legacy_proofs[key]
+        with self._history_work():
+            return self._legacy_origin(source,claim,key)
+
+    def _legacy_origin(self,source,claim,key):
         if key not in self.topic_origins:
             if not self._active(): return None
             origins=[]; seen=set(); serial=self.failure_serial
-            for old in self._versions(page['path']):
+            for old in self._versions(key[0]):
                 if not self._active(): return None
                 indexed=self._revision_origins(old)
                 if indexed is None: return None
@@ -2084,6 +2109,7 @@ def lint():
     issues=[]; historical=[]; equivalent=[]
     allpages=pages(issues); known={p['path'] for p in allpages}
     history=_EvidenceHistory()
+    history._history_paused_at=history.started
     for p in allpages:
         try: _existing_topic_title(p)
         except WikiIntegrityError: issues.append({'page':p['path'],'issue':'malformed title metadata','field':'title'})
@@ -2160,7 +2186,7 @@ def lint():
             'equivalent_source_revision_count':len(equivalent),'equivalent_source_revisions':equivalent[:100],
             'history_verification':{'max_commits_per_path':64,'max_git_commands':256,'max_git_blob_bytes':16_000_000,
                                     'max_history_seconds':15,'git_commands':history.commands,'git_blob_bytes':history.bytes,
-                                    'elapsed_seconds':round(time.monotonic()-history.started,4),
+                                    'elapsed_seconds':round(history.history_seconds,4),
                                     'incomplete_reason':history.first_failure_reason,
                                     'negative_scope':'not found within at most 64 reachable commits per path'},
             'semantic_review':'exact current/historical evidence checks do not prove factual entailment, chronology or current employment/completion'}

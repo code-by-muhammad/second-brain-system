@@ -734,7 +734,7 @@ def test_self_test_reports_every_step_and_stops_claiming_when_nothing_was_saved(
     class Answer:
         def __init__(self,data):self.data=data
     class Client:
-        def __init__(self,transport,timeout=None):state['started'].append(transport)
+        def __init__(self,transport,timeout=None,init_timeout=None):state['started'].append(transport)
         async def __aenter__(self):return self
         async def __aexit__(self,*args):return False
         async def list_tools(self):return [Tool(name) for name in state['tools']]
@@ -769,11 +769,18 @@ def test_self_test_reports_every_step_and_stops_claiming_when_nothing_was_saved(
         for key in wrong:state.pop(key)
     # A connection that cannot be opened still gives all six lines, each with the reason.
     class Broken(Client):
-        async def __aenter__(self):raise OSError('adapter did not start')
+        async def __aenter__(self):
+            log=state['started'][-1].get('log_file')
+            if log is not None:
+                log.write('brain_process.OwnershipError: synthetic private detail\n')
+                log.flush()
+            raise OSError('adapter did not start')
     monkeypatch.setattr(fastmcp,'Client',Broken)
     report=selftest.run()
     assert [row['check'] for row in report['checks']]==['self-test '+name for name in selftest.STEPS] and report['failed']==6
     assert all('adapter did not start' in row['detail'] for row in report['checks'])
+    assert 'adapter could not verify the local service' in report['checks'][0]['detail']
+    assert all('synthetic private detail' not in row['detail'] for row in report['checks'])
     monkeypatch.setattr(fastmcp,'Client',Client)
     state['capture']=None;state['tools']=set(REQUIRED)-{'brain_capture'}
     report=selftest.run()

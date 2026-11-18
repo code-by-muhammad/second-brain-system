@@ -198,6 +198,37 @@ def test_retained_nonframework_python_has_no_extra_image(framework,tmp_path,fiel
     assert len(mapping)==3
 
 
+@pytest.mark.parametrize('field',['python','controller_python'])
+def test_missing_retained_python_does_not_affect_process_ownership(framework,tmp_path,monkeypatch,field):
+    previous=tmp_path/'retained/bin/python'
+    previous.parent.mkdir(parents=True)
+    bm=previous.with_name('bm');bm.write_bytes(b'not executed')
+    (cfg.ROOT/'state/previous-release.json').write_text(json.dumps({field:str(previous)}),encoding='utf-8')
+    script=cfg.ROOT/'app/brain_server.py'
+    candidates={123:(framework.image,[str(script)]),124:(bm,['reindex','-p','brain'])}
+    def process(pid):
+        executable,args=candidates[pid]
+        return SimpleNamespace(create_time=lambda:100,cmdline=lambda:[str(executable),*args],
+                               exe=lambda:str(executable),ppid=lambda:1)
+    monkeypatch.setattr(processes.psutil,'Process',process)
+    owned=processes.inspect(123,required=True)
+    assert owned.role=='server'
+    owned.close()
+    assert processes.inspect(124) is None
+    assert str(previous) in processes._selected_python()  # Retain the registration's known interpreter.
+
+
+def test_missing_current_python_still_refuses(framework):
+    framework.alias.unlink()
+    with pytest.raises(processes.OwnershipError,match='interpreter is unavailable'):processes._launchers()
+
+
+def test_dangling_retained_python_still_refuses(framework,tmp_path):
+    previous=tmp_path/'python';previous.symlink_to(tmp_path/'absent')
+    (cfg.ROOT/'state/previous-release.json').write_text(json.dumps({'python':str(previous)}),encoding='utf-8')
+    with pytest.raises(processes.OwnershipError,match='interpreter is unavailable'):processes._launchers()
+
+
 def test_relative_retained_python_refuses(framework):
     (cfg.ROOT/'state/previous-release.json').write_text(json.dumps({'controller_python':'relative/bin/python'}),encoding='utf-8')
     with pytest.raises(processes.OwnershipError,match='absolute'):processes._launchers()

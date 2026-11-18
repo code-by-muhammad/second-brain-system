@@ -24,6 +24,57 @@ def initial(tmp_path, monkeypatch):
     return module,root,vault,run
 
 
+@pytest.mark.parametrize('boundary',['device.json','state/access.json','wiki-owner'])
+def test_setup_command_resumes_the_interrupted_install(initial,monkeypatch,boundary):
+    installer,root,vault,run=initial
+    source=installer.REPO
+    spec=importlib.util.spec_from_file_location('fresh_resume_wizard',source/'setup_device.py')
+    wizard=importlib.util.module_from_spec(spec);spec.loader.exec_module(wizard)
+    read_script=wizard.runpy.run_path
+    monkeypatch.setattr(wizard,'runpy',SimpleNamespace(run_path=lambda path:
+        {'verify':lambda path:{'version':installer.VERSION}} if Path(path).name=='update.py' else read_script(path)))
+    atomic=installer.atomic
+
+    control=vault/'02-Areas/AI-Memory/Wiki/Control.md'
+    def interrupted(path,*args,**kwargs):
+        if Path(path)==(control if boundary=='wiki-owner' else root/boundary):raise OSError('Synthetic interruption')
+        return atomic(path,*args,**kwargs)
+
+    monkeypatch.setattr(installer,'atomic',interrupted)
+    with pytest.raises(OSError,match='Synthetic interruption'):
+        run('--timezone','UTC','--role','maintainer','--initialize-wiki-owner')
+    monkeypatch.setattr(installer,'atomic',atomic)
+    journal=root/'state/install-transaction.json'
+    before=json.loads(journal.read_text())
+
+    # Use the interpreter already running this fixture in place of its own retained venv.
+    monkeypatch.setattr(wizard,'retained_python',lambda:Path(sys.executable),raising=False)
+
+    def execute(command,*,capture=False):
+        if Path(command[3]).name=='install.py':
+            monkeypatch.setattr(sys,'argv',[str(arg) for arg in command[3:]])
+            installer.main()
+        return SimpleNamespace(returncode=0,stdout='{"deferred": []}',stderr='')
+
+    monkeypatch.setattr(wizard.shutil,'which',lambda name:sys.executable)
+    monkeypatch.setattr(wizard,'run',execute)
+    args=['setup_device.py','--root',str(root),'--yes','--no-service','--clients','']
+    for extra in (['--check'],['--timezone','Europe/Berlin']):
+        monkeypatch.setattr(sys,'argv',[*args,*extra])
+        with pytest.raises(SystemExit) as refused:wizard.main()
+        assert refused.value.code==2
+        assert json.loads(journal.read_text())==before
+    monkeypatch.setattr(sys,'argv',args)
+    with pytest.raises(SystemExit) as result:wizard.main()
+    assert result.value.code==0
+    after=json.loads(journal.read_text())
+    assert after['stage']=='complete' and after['install_id']==before['install_id']
+    expected=json.loads(before['writes']['device.json'])
+    assert json.loads((root/'device.json').read_text())==expected
+    assert (root/'state/access.json').read_text()==before['writes']['state/access.json']
+    assert 'maintainer_device_id: '+expected['device_id'] in control.read_text()
+
+
 @pytest.mark.parametrize('boundary',['device.json','state/client-access.json','state/access.json','state/config.json','state/.bmignore'])
 def test_public_resume_after_each_published_artifact(initial,monkeypatch,boundary):
     module,root,_,run=initial;original=module.atomic

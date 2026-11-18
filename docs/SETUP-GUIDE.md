@@ -1,4 +1,4 @@
-# Second Brain setup guide (v0.2.11)
+# Second Brain setup guide (v0.2.12)
 
 One guide for a new device and for a device that already runs Second Brain. One command does the setup. This guide tells you what to prepare, what the command asks, and how to read its result.
 
@@ -20,7 +20,7 @@ A chat without terminal access cannot do this.
 
 Release identity. The command in section 3 checks the commit for you. These values let you check by hand:
 
-- Tag `v0.2.11`, commit `{{COMMIT}}`
+- Tag `v0.2.12`, commit `{{COMMIT}}`
 - `release-manifest.json` SHA256 `{{MANIFEST_SHA256}}`
 - Software repository: `https://github.com/code-by-muhammad/second-brain-system` (public, no account needed)
 
@@ -54,13 +54,13 @@ You do not need a GitHub account. Sync is an optional extra (section 6).
 Mac and Linux:
 
 ```text
-curl -fsSLO https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.11/setup.sh && echo "{{SETUP_SH_SHA256}}  setup.sh" | shasum -a 256 -c - && sh setup.sh
+curl -fsSLO https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.12/setup.sh && echo "{{SETUP_SH_SHA256}}  setup.sh" | shasum -a 256 -c - && sh setup.sh
 ```
 
 Windows PowerShell:
 
 ```text
-iwr https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.11/setup.ps1 -OutFile setup.ps1; if ((Get-FileHash setup.ps1 -Algorithm SHA256).Hash -ne '{{SETUP_PS1_SHA256}}') { throw 'setup.ps1 does not match this guide' }; powershell -ExecutionPolicy Bypass -File .\setup.ps1
+iwr https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.12/setup.ps1 -OutFile setup.ps1; if ((Get-FileHash setup.ps1 -Algorithm SHA256).Hash -ne '{{SETUP_PS1_SHA256}}') { throw 'setup.ps1 does not match this guide' }; powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
 The first part downloads a small script and checks it against the hash in this guide. The script then downloads the exact release, checks its commit, and starts the setup. A release folder kept from an earlier run must match that fresh download exactly. If any check fails, nothing runs.
@@ -100,12 +100,14 @@ A runtime folder other than the default: set `SECOND_BRAIN_ROOT` before the comm
 
 Running the same command again is safe. On a device that is already set up it adds whatever is missing, tries to start the service if it is not running, and runs the check.
 
+If an initial setup was interrupted, rerun its original release command with the same options. Setup resumes a matching initial installation using its recorded notes folder, role and client choices. Keep that release and its Python environment until setup finishes.
+
 ## 4. The device is done when this passes
 
 The command ends with a list like this:
 
 ```text
-PASS   service health: status running, version 0.2.11
+PASS   service health: status running, version 0.2.12
 PASS   Claude Code connection: points at this runtime
 PASS   Claude Code instructions: one block matching this release
 PASS   Claude Code skill: ...

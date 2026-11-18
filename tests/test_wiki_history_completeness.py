@@ -25,6 +25,20 @@ def test_slow_page_scan_cannot_spend_the_historical_verification_budget(brain,tm
     assert (source.read_bytes(),topic.read_bytes())==before
 
 
+def test_lint_current_source_reads_do_not_spend_history_budget(brain,tmp_path,monkeypatch):
+    _,_,_,old_sha,_,_,_=legacy_history(brain,tmp_path)
+    clock=[w.time.monotonic()];original=w._EvidenceHistory._current
+    def slow_current(self,source):
+        if source not in self.current: clock[0]+=16
+        return original(self,source)
+    monkeypatch.setattr(w.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(w._EvidenceHistory,'_current',slow_current)
+    report=w.lint()
+    assert not report['issues'] and report['historical_evidence_count']==1
+    assert report['verified_historical_evidence'][0]['source_sha256']==old_sha
+    assert report['history_verification']['incomplete_reason'] is None
+
+
 def test_publication_page_scan_precedes_history_budget(brain,monkeypatch):
     source,packet,result=fixture(brain);clock=[w.time.monotonic()];observed=[]
     original_pages=w._checked_pages;original_render=w._render_topic

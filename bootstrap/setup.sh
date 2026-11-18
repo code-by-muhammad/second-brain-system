@@ -4,7 +4,7 @@
 # Extra arguments go to setup_device.py, for example: sh setup.sh --yes
 set -eu
 
-TAG="${SECOND_BRAIN_REF:-v0.2.11}"
+TAG="${SECOND_BRAIN_REF:-v0.2.12}"
 COMMIT="${SECOND_BRAIN_COMMIT:-__COMMIT__}"
 ROOT="${SECOND_BRAIN_ROOT:-$HOME/.local/share/second-brain}"
 SOURCE="https://github.com/code-by-muhammad/second-brain-system.git"

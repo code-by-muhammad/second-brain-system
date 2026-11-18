@@ -73,33 +73,36 @@ def control_path(vault):
     return control
 
 
-def own_the_notes(vault,device_id):
+def own_the_notes(vault,device_id,*,write=None):
     """Name this device as the one maintainer. Never through a link, never over an existing owner."""
     control=control_path(vault)
     control.parent.mkdir(parents=True,exist_ok=True)
     text='---\nmaintainer_device_id: '+device_id+'\n---\n\n# Shared writer ownership\n\nThis device links saved milestones into daily notes. Additional devices are installed with the capture role.\n'
     # The whole note appears at once or not at all, and never over a file that is already there.
-    try:runpy.run_path(str(REPO/'install.py'))['atomic'](control,text,expected_sha256=None)
+    write=write or runpy.run_path(str(REPO/'install.py'))['atomic']
+    try:write(control,text,expected_sha256=None)
     except ValueError as error:
         if type(error).__name__!='ConcurrentWriteError':raise
         raise SystemExit(CONTROL+' appeared while this was running. Another device may own these notes; check it before starting the service.') from None
 
 
+def owned_by_another(control,device_id):
+    if not control.exists():return False
+    # A new claim needs an absent control file or the same recorded owner.
+    try:
+        with control.open('rb') as stream:raw=stream.read(2_000_001)
+        text=raw.decode('utf-8').replace('\r\n','\n').replace('\r','\n')
+    except (OSError,UnicodeError):return True
+    if len(raw)>2_000_000:return True
+    owner=re.search(r'(?m)^maintainer_device_id: ([a-z0-9-]+)$',text)
+    return owner is None or owner.group(1)!=device_id
+
+
 def make_maintainer(device,root,vault,service):
     """Turn an installed capture device into the one maintainer of notes that have none yet."""
     control=control_path(vault);existed=control.exists()
-    def owned_by_another():
-        if not control.exists():return False
-        # The same reading as the running service (brain_settings): one exact line, or the note is not this device's.
-        try:
-            with control.open('rb') as stream:raw=stream.read(2_000_001)
-            text=raw.decode('utf-8').replace('\r\n','\n').replace('\r','\n')
-        except (OSError,UnicodeError):return True
-        if len(raw)>2_000_000:return True  # The service refuses a note of that size.
-        owner=re.search(r'(?m)^maintainer_device_id: ([a-z0-9-]+)$',text)
-        return owner is None or owner.group(1)!=device['device_id']
     refusal='These notes already name another device as maintainer in '+CONTROL+'. Only one device may be; nothing was changed.'
-    if owned_by_another():raise SystemExit(refusal)
+    if owned_by_another(control,device['device_id']):raise SystemExit(refusal)
     if (root/'state/service-transaction.json').exists():raise SystemExit('An update is in progress on this device; nothing was changed.')
     record=json.loads((root/'device.json').read_text(encoding='utf-8-sig'))
     if record.get('device_id')!=device['device_id'] or record.get('role')!='capture':raise SystemExit('The device record is not a capture device; nothing was changed.')
@@ -118,7 +121,7 @@ def make_maintainer(device,root,vault,service):
             if result.returncode:
                 raise SystemExit('The service could not be stopped cleanly: '+((result.stderr or '').strip().splitlines() or [''])[-1][:300]+'\nThe role was not changed.')
         # Another device may have claimed the notes while the service was stopping.
-        if owned_by_another():raise SystemExit(refusal)
+        if owned_by_another(control,device['device_id']):raise SystemExit(refusal)
         if not control.exists():own_the_notes(vault,device['device_id'])
         write(root/'device.json',json.dumps({**record,'role':'maintainer'},indent=2)+'\n')
     except BaseException:
@@ -244,6 +247,29 @@ def start_service(device,version,root,registered=False):
         raise SystemExit('The service did not report running within four minutes. Check with: "'+device['python']+'" "'+str(root/'app/brain_cli.py')+'" health')
 
 
+def retained_python():
+    return REPO/('.venv/Scripts/python.exe' if os.name=='nt' else '.venv/bin/python')
+
+
+def pending_install(root,version):
+    journal=root/'state/install-transaction.json'
+    if not os.path.lexists(journal):return None
+    support=runpy.run_path(str(REPO/'setup_runtime.py'))
+    support['runtime_paths'](root)
+    record=support['json_object'](support['read'](journal))
+    if record.get('stage')=='complete':return None
+    options=record.get('identity')
+    if (record.get('format')!=1 or record.get('stage') not in ('prepared','deploying','deployed','model')
+            or not re.fullmatch('[a-f0-9]{32}',str(record.get('install_id','')))
+            or not isinstance(options,dict) or options.get('root')!=str(root)
+            or options.get('release_root')!=str(REPO) or options.get('version')!=version
+            or options.get('python')!=os.path.normcase(str(retained_python()))
+            or options.get('install_service') is not False or options.get('desktop_config') is not None
+            or options.get('skip_desktop_refresh') is not False):
+        raise SystemExit('An initial install needs recovery with its original verified release and options. Preserve the runtime and see Initial install recovery in DEVICE-SETUP.md.')
+    return record['install_id'],options
+
+
 def main():
     # A path may hold characters the console's own encoding lacks; printing it must never end the run.
     for stream in (sys.stdout,sys.stderr):
@@ -273,8 +299,44 @@ def main():
     if 'claude-code' in selected and not args.no_hooks:client_flags.append('--include-hooks')
     device=json.loads((root/'device.json').read_text(encoding='utf-8-sig')) if (root/'device.json').is_file() else None
 
+    pending=pending_install(root,version)
+    if pending and args.check:parser.error('Initial install is incomplete. Run setup again without --check to resume it.')
     if device is None and args.check:parser.error('Nothing is installed at '+str(root))
-    if device is None:
+    if pending:
+        install_id,options=pending
+        vault=Path(options['vault'])
+        role=options['role']
+        recorded=options['clients'] or []
+        if ((args.vault and Path(args.vault).expanduser().resolve()!=vault)
+                or (args.role and args.role!=role) or (args.timezone and args.timezone!=options['timezone'])
+                or (args.clients is not None and set(selected)!=set(recorded))
+                or (args.no_hooks and options['include_hooks']) or (args.no_model and options['download_model'])):
+            parser.error('Resume with the original install options before changing this device.')
+        if args.local_only and remotes(vault)!=[]:
+            parser.error('--local-only was given, but the recorded notes folder has a Git remote or could not be checked.')
+        say('Interrupted initial install.\n  Notes:   '+str(vault)+'\n  Role:    '+role
+            +'\n  Assistants: '+(', '.join(recorded) or 'none'))
+        if ask('Resume?','yes',args.yes).lower() not in ('y','yes'):raise SystemExit('Nothing was changed.')
+        selected=recorded
+        args.no_hooks=not options['include_hooks']
+        python=retained_python()
+        support=runpy.run_path(str(REPO/'setup_runtime.py'))
+        support['host_context']()
+        if (not python.is_file() or python.parent.resolve()!=python.parent
+                or (windows and python.resolve()!=python)):
+            raise SystemExit('The retained Python for this initial install is missing or linked. Preserve the runtime for recovery.')
+        support['service_python'](python)
+        command=[python,'-I','-B',REPO/'install.py','--root',root,'--vault',vault,'--role',role,
+                 '--reuse-python',python,'--resume-install',install_id]
+        if options['timezone']:command+=['--timezone',options['timezone']]
+        if options['download_model']:command.append('--download-model')
+        if options['configure_clients']:command.append('--configure-clients')
+        for name in selected:command+=['--client',name]
+        if options['include_hooks']:command.append('--include-hooks')
+        if options.get('initialize_wiki_owner'):command.append('--initialize-wiki-owner')
+        if run(command).returncode:
+            raise SystemExit('The initial install could not resume. Keep the runtime and use its recorded recovery information.')
+    elif device is None:
         default='C:/Second-Brain' if windows else str(home/'Documents/Second-Brain')
         vault=Path(args.vault or ask('Notes folder (created if it does not exist)',default,args.yes)).expanduser().resolve()
         created=not vault.exists()
@@ -295,14 +357,14 @@ def main():
         if args.timezone:command+=['--timezone',args.timezone]
         if not args.no_model:command.append('--download-model')
         if selected:command+=['--configure-clients',*client_flags]
+        if role=='maintainer':command.append('--initialize-wiki-owner')
         if run(command).returncode:
             # The installer keeps its child's output private; its last error line is the reason and names no secret.
             reports=sorted((root/'logs').glob('bootstrap-failure-*.json'),key=lambda path:path.stat().st_mtime)
             reason=(json.loads(reports[-1].read_text(encoding='utf-8')).get('stderr_tail','').strip().splitlines() or [''])[-1] if reports else ''
             raise SystemExit('The installer stopped'+(': '+reason[:400] if reason else '.')+'\nKeep the folders as they are and see the troubleshooting section of the setup guide.')
+    if pending or device is None:
         device=json.loads((root/'device.json').read_text(encoding='utf-8-sig'))
-        # The one device allowed to link captures and write shared summaries names itself before the first start.
-        if role=='maintainer' and not (vault/CONTROL).exists():own_the_notes(vault,device['device_id'])
         device['root']=str(root)
         if not args.no_service:start_service(device,version,root)
     elif not args.check:
