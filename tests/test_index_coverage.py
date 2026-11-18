@@ -339,7 +339,29 @@ def test_repair_that_outlives_its_budget_ends_its_process_and_says_so(brain, mon
     ended = []
     monkeypatch.setattr(reconcile.os, '_exit', lambda code: ended.append(code))
     reconcile._save({'status': 'needs review', 'cursors': {'files': 'a' * 64}})
+    import threading
+    armed = []
+
+    class Last:
+        def __init__(self, seconds, action, arguments=()):
+            armed.append((seconds, action, arguments))
+        daemon = False
+
+        def start(self):
+            armed.append('started')
+
+    monkeypatch.setattr(threading, 'Timer', Last)
     reconcile._deadline_exit()
+    # Before the receipt is attempted, a second timer is armed that ends the process without any file access.
+    assert armed == [(reconcile.RECEIPT_GRACE_SECONDS, reconcile.os._exit, (75,)), 'started']
+    # A receipt that cannot be written does not keep the process: the exit still happens.
+    ended.clear()
+    def stalled(report):raise OSError('storage unavailable')
+    saved = reconcile._save
+    monkeypatch.setattr(reconcile, '_save', stalled)
+    with pytest.raises(OSError):reconcile._deadline_exit()
+    assert ended == [75]
+    monkeypatch.setattr(reconcile, '_save', saved);ended[:] = [75]
     report = json.loads((cfg.STATE / reconcile.RECEIPT).read_text())
     assert ended == [75] and report['repair_error_type'] == 'RepairDeadline' and report['status'] == 'needs review'
     assert report['cursors'] == {'files': 'a' * 64}  # The next pass continues where this one was.
@@ -370,6 +392,12 @@ def test_repair_that_outlives_its_budget_ends_its_process_and_says_so(brain, mon
     monkeypatch.setattr(index, 'status', lambda **kwargs: (order.append(list(started)), scan(**kwargs))[1])
     reconcile.main()
     assert order[0] == [(reconcile.PASS_SECONDS, reconcile._deadline_exit), 'started'] and cancelled == [True]
+    # And it stays armed until the final receipt has been written.
+    cancelled.clear();at_save = []
+    save = reconcile._save
+    monkeypatch.setattr(reconcile, '_save', lambda report: (at_save.append(list(cancelled)), save(report))[1])
+    reconcile.main()
+    assert at_save == [[]] and cancelled == [True]
 
 
 def test_repair_keeps_an_upstream_exit_message_out_of_the_log_and_bounds_its_own_scan(brain, monkeypatch, capfd):

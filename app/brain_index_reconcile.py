@@ -22,6 +22,7 @@ EXIT_GRACE_SECONDS = 60
 # One pass is two coverage scans, one inventory and the repair. The scans carry their own limit; this is
 # the sum, after which the process ends itself whatever it is waiting on, so its locks cannot stay held.
 PASS_SECONDS = 3 * index.MAX_STATUS_SECONDS + REPAIR_SECONDS + EXIT_GRACE_SECONDS
+RECEIPT_GRACE_SECONDS = 5
 RECEIPT = 'index-reconcile-status.json'
 
 
@@ -157,6 +158,12 @@ def _deadline_exit():
     # Reached only when a pass is still running past everything it may take: a scan that does not return, or a
     # repair past its budget and grace. The receipt says so, the process ends at once, and the operating
     # system releases the locks it held.
+    # The exit itself depends on nothing: a second timer ends the process a few seconds later even if writing
+    # the receipt never returns. The receipt is best effort.
+    import threading
+    last = threading.Timer(RECEIPT_GRACE_SECONDS, os._exit, (75,))
+    last.daemon = True
+    last.start()
     try:
         _save({'status': 'needs review', 'checked_at': None, 'reason': 'repair_deadline', 'counts': {},
                'repair_error_type': 'RepairDeadline', 'cursors': _previous_cursors(),
@@ -228,13 +235,15 @@ def main():
                         # SystemExit and a message that can quote the configuration; that message is not passed on.
                         error = type(exc).__name__
                     current = index.status()
+                # The receipt is written while the watchdog is still armed: storage that stalls here ends the
+                # process like anything else in the pass.
+                _save({
+                    'status': current['status'], 'checked_at': current['checked_at'],
+                    'reason': current['reason'], 'counts': counts, 'repair_error_type': error,
+                    'cursors': {} if current['status'] == 'verified' else cursors,
+                    'elapsed_seconds': round(time.monotonic() - started, 2),
+                })
             finally:
                 watchdog.cancel()
-            _save({
-                'status': current['status'], 'checked_at': current['checked_at'],
-                'reason': current['reason'], 'counts': counts, 'repair_error_type': error,
-                'cursors': {} if current['status'] == 'verified' else cursors,
-                'elapsed_seconds': round(time.monotonic() - started, 2),
-            })
     except Timeout:
         return  # The initial/manual indexer owns the lock.
