@@ -190,6 +190,21 @@ def test_stable_coverage_selects_only_affected_index_entries(brain, monkeypatch)
     assert plan == index.RepairPlan()
 
 
+def test_persistent_repair_candidates_do_not_starve_later_entries(brain, monkeypatch):
+    import brain_index_reconcile as reconcile
+    monkeypatch.setattr(reconcile, 'BATCH_FILES', 2)
+    candidates = {'A.md', 'B.md', 'C.md', 'D.md', 'E.md'}
+    cursors = {}
+    first = reconcile._batch(candidates, cursors, 'files')
+    reconcile._save({'cursors': cursors})
+    cursors = reconcile._previous_cursors()
+    second = reconcile._batch(candidates, cursors, 'files')
+    third = reconcile._batch(candidates, cursors, 'files')
+    assert [len(first), len(second), len(third)] == [2, 2, 1]
+    assert set(first + second + third) == candidates
+    assert reconcile._batch(candidates, cursors, 'files') == first
+
+
 @pytest.mark.parametrize('raw,stored',[
     (b'# Source\n\nPayload.\n','# Source\r\n\r\nPayload.\r\n'),
     (b'# Source\r\n\r\nPayload.\r\n','# Source\n\nPayload.\n'),

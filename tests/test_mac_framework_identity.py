@@ -94,14 +94,20 @@ def test_framework_bm_inside_app_bundle_is_not_adopted(framework,monkeypatch):
     assert processes.inspect(123) is None
 
 
-def test_framework_owned_venv_bm_is_an_index_worker(framework,monkeypatch):
+@pytest.mark.parametrize('extra,expected',[
+    ([],True),(['--full','--search'],True),(['--search','--full'],False),
+    (['--full','--search','--embeddings'],False),
+])
+def test_framework_owned_venv_bm_is_an_index_worker(framework,monkeypatch,extra,expected):
     bm=framework.alias.parent/'bm';bm.write_bytes(b'fake entry point, never executed')
     monkeypatch.setattr(processes.psutil,'Process',lambda _:SimpleNamespace(
-        create_time=lambda:100,cmdline=lambda:[str(framework.image),str(bm),'reindex','-p','brain'],
+        create_time=lambda:100,cmdline=lambda:[str(framework.image),str(bm),'reindex','-p','brain',*extra],
         exe=lambda:str(framework.image),ppid=lambda:1))
     owned=processes.inspect(123)
-    assert owned.role=='index_worker' and owned.kind=='direct'
-    owned.close()
+    if expected:
+        assert owned is not None and owned.role=='index_worker' and owned.kind=='direct'
+        owned.close()
+    else:assert owned is None
 
 
 @pytest.mark.parametrize('change',['exact','extra','duplicate-flag','reordered-flags','changed-code','server','no-flags'])

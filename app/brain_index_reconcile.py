@@ -1,5 +1,7 @@
 """Repair bounded local search drift from current Markdown, without a rebuild."""
 import asyncio
+from bisect import bisect_right
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,6 +17,21 @@ BATCH_FILES = 32
 VECTOR_PASSES = 3
 REPAIR_SECONDS = 240
 RECEIPT = 'index-reconcile-status.json'
+
+
+def _batch(values, cursors, kind):
+    """Keep persistent defects from monopolizing subsequent passes."""
+    if not values:
+        cursors.pop(kind, None)
+        return ()
+    ordered = sorted((hashlib.sha256(str(value).encode('utf-8', 'surrogatepass')).hexdigest(), value)
+                     for value in values)
+    previous = cursors.get(kind)
+    start = bisect_right(ordered, previous, key=lambda item: item[0]) if isinstance(previous, str) else 0
+    start %= len(ordered)
+    selected = ordered[start:start+BATCH_FILES]
+    cursors[kind] = selected[-1][0]
+    return tuple(value for _, value in selected)
 
 
 def _permitted(relative):
@@ -34,7 +51,7 @@ def _permitted(relative):
     return candidate.resolve().is_relative_to(cfg.VAULT)
 
 
-async def _repair(plan, counts):
+async def _repair(plan, counts, cursors):
     from basic_memory import db
     from basic_memory.config import ConfigManager
     from basic_memory.ignore_utils import should_ignore_path
@@ -62,8 +79,8 @@ async def _repair(plan, counts):
             raise index.IndexAttention('database_project_mismatch')
         runtime = await build_local_index_project_dependencies(project)
 
-        removed = tuple(path for path in sorted(plan.removed)[:BATCH_FILES] if _permitted(path))
-        vector_ids = set(sorted(plan.vectors)[:BATCH_FILES])
+        removed = tuple(path for path in _batch(plan.removed, cursors, 'removed') if _permitted(path))
+        vector_ids = set(plan.vectors)
         if removed:
             # The upstream store re-probes absence and compares accepted note
             # lineage in its transaction. It skips unsynchronized DB content.
@@ -81,7 +98,7 @@ async def _repair(plan, counts):
             vector_ids.update(deleted.relation_cleanup_entity_ids)
 
         patterns = index._patterns()
-        for path in sorted(plan.files)[:BATCH_FILES]:
+        for path in _batch(plan.files, cursors, 'files'):
             try:
                 if not _permitted(path) or should_ignore_path(cfg.VAULT / path, cfg.VAULT, patterns):
                     continue
@@ -92,9 +109,10 @@ async def _repair(plan, counts):
             except Exception:
                 counts['file_failures'] += 1
 
-        if config.semantic_search_enabled and vector_ids:
+        selected_vectors = list(_batch(vector_ids, cursors, 'vectors'))
+        if config.semantic_search_enabled and selected_vectors:
             for _ in range(VECTOR_PASSES):
-                result = await runtime.search_service.sync_entity_vectors_batch(sorted(vector_ids)[:BATCH_FILES])
+                result = await runtime.search_service.sync_entity_vectors_batch(selected_vectors)
                 counts['vector_passes'] += 1
                 counts['vector_failures'] = result.entities_failed
                 if not result.entities_deferred or not result.embedding_jobs_total:
@@ -103,9 +121,18 @@ async def _repair(plan, counts):
         await db.shutdown_db()
 
 
-async def _bounded_repair(plan, counts):
+async def _bounded_repair(plan, counts, cursors):
     async with asyncio.timeout(REPAIR_SECONDS):
-        await _repair(plan, counts)
+        await _repair(plan, counts, cursors)
+
+
+def _previous_cursors():
+    try:
+        cursors = index._json(cfg.STATE / RECEIPT, limit=8192).get('cursors')
+    except (OSError, ValueError, RecursionError):
+        return {}
+    return {kind: cursors[kind] for kind in ('removed', 'files', 'vectors')
+            if isinstance(cursors.get(kind), str)} if isinstance(cursors, dict) else {}
 
 
 def _save(report):
@@ -131,6 +158,7 @@ def main():
             started = time.monotonic()
             plan = index.RepairPlan()
             current = index.status(repair=plan)
+            cursors = _previous_cursors()
             counts = dict(refreshed=0, removed=0, file_failures=0, vector_passes=0, vector_failures=0)
             error = None
             if current.get('inventory_stable') and current['coverage']['eligible'] and (plan.files or plan.removed or plan.vectors):
@@ -139,7 +167,7 @@ def main():
                     os.environ['LOGFIRE_IGNORE_NO_CONFIG'] = '1'
                     from loguru import logger
                     logger.disable('basic_memory')
-                    asyncio.run(_bounded_repair(plan, counts))
+                    asyncio.run(_bounded_repair(plan, counts, cursors))
                 except Exception as exc:
                     # Only controlled classifications reach the service receipt.
                     error = type(exc).__name__
@@ -147,6 +175,7 @@ def main():
             _save({
                 'status': current['status'], 'checked_at': current['checked_at'],
                 'reason': current['reason'], 'counts': counts, 'repair_error_type': error,
+                'cursors': {} if current['status'] == 'verified' else cursors,
                 'elapsed_seconds': round(time.monotonic() - started, 2),
             })
     except Timeout:

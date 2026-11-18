@@ -295,17 +295,19 @@ def inspect(pid,*,required=False):
             if tokens==['-I','-B','-c',SERVICE_ENTRY,supervisor]:tokens=[supervisor]
         while tokens and tokens[0] in ('-I','-B'):tokens=tokens[1:]
         role=None;script=None
-        if len(tokens)==1:
+        if len(tokens)==1 or tokens[1:]==['--reconcile']:
             for name,filename in SCRIPTS.items():
+                if len(tokens)>1 and name!='index_bootstrap':continue
                 expected=cfg.ROOT/'app'/filename
                 if expected.is_symlink() or expected.is_junction():raise OwnershipError('Linked runtime script cannot establish ownership.')
                 if _path(tokens[0])==_path(expected):role=name;script=_path(tokens[0]);break
         # The index entry point is beside the selected venv alias, not the
         # canonical base interpreter or its framework exec-replacement image.
         bm_paths=_bm_paths()
-        bm_arguments=(['reindex','-p','brain'],['reindex','-p','brain','--full'])
+        bm_arguments=(['reindex','-p','brain'],['reindex','-p','brain','--full'],
+                      ['reindex','-p','brain','--full','--search'])
         bm=exe in bm_paths and args[1:] in bm_arguments
-        child_bm=len(tokens) in (4,5) and _path(tokens[0]) in bm_paths and tokens[1:] in bm_arguments
+        child_bm=tokens[1:] in bm_arguments and _path(tokens[0]) in bm_paths
         if bm or child_bm:role='index_worker';script=exe if bm else _path(tokens[0])
         if role is None:
             if required:raise OwnershipError('Listener is not this runtime\'s exact server process.')
