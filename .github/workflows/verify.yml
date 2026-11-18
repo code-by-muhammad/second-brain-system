@@ -190,7 +190,10 @@ jobs:
           export SECOND_BRAIN_ROOT="$RUNNER_TEMP/second-brain-runtime"
           setup() { sh bootstrap/setup.sh "$@"; }
           # The Mac prerequisite from the setup guide.
-          if [ "$RUNNER_OS" = macOS ]; then brew list python@3.12 >/dev/null 2>&1 || brew install python@3.12; fi
+          if [ "$RUNNER_OS" = macOS ]; then
+            brew list python@3.12 >/dev/null 2>&1 || brew install --skip-link python@3.12
+            export PATH="$(brew --prefix python@3.12)/bin:$PATH"
+          fi
           # This Linux runner has no desktop login session, and the unchanged Linux service code
           # refuses its user manager. Install and assistant wiring are still exercised there.
           service=""; if [ "$RUNNER_OS" = Linux ]; then service="--no-service"; fi

@@ -249,7 +249,12 @@ class Process:
         if not self.alive():return
         if self.api is not None:
             if _birth(self.api,self.handle)!=self.birth:raise OwnershipError('Retained process identity changed.')
-            if not self.api.TerminateProcess(self.handle,1) and self.alive():raise OwnershipError('Owned process did not terminate.')
+            if self.api.TerminateProcess(self.handle,1):return
+            error=ctypes.get_last_error()
+            # ERROR_ACCESS_DENIED can mean native End or Job teardown is already
+            # terminating this process. Only the retained handle proves exit.
+            if self.api.WaitForSingleObject(self.handle,1000 if error==5 else 0)!=0:
+                raise OwnershipError(f'Owned process did not terminate (Win32 error {error}).')
         else:
             if sys.platform in ('linux','darwin'):
                 raise OwnershipError('POSIX process signals require the verified native unit or manager; cached PIDs cannot authorize termination.')

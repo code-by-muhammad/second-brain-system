@@ -39,7 +39,7 @@ If this copy still shows `{{...}}` placeholders, it is the source file. Use the 
 ## 2. Before you start
 
 - [ ] Git is installed. Mac: `xcode-select --install`. Windows: `winget install --id Git.Git -e`.
-- [ ] Mac only: Homebrew Python 3.12 is installed: `brew install python@3.12`. Other Python builds on a Mac cannot run both the service and the search index, and setup refuses them.
+- [ ] Mac only: install Homebrew Python 3.12 with `brew install --skip-link python@3.12`. Setup can use the installed formula from its Homebrew path.
 - [ ] uv 0.9.16 or newer is installed. Mac and Linux: see https://docs.astral.sh/uv/getting-started/installation/. Windows: `winget install --id astral-sh.uv -e`.
 - [ ] Open a new terminal after installing either tool. Windows: ordinary PowerShell, not Git Bash.
 - [ ] Windows: run every command in this guide from ordinary PowerShell, never from a terminal inside the Claude desktop app. That app is packaged, and what is installed from inside it lands in a private copy that the background service cannot see.

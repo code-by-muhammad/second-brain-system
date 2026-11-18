@@ -252,6 +252,37 @@ def test_base_that_cannot_run_the_index_is_replaced(tmp_path,monkeypatch,platfor
     assert [command[1:3] for command in calls]==expected and calls[-1][-2:]==['--python',str(better)]
 
 
+@pytest.mark.parametrize('prefix',['/usr/local','/opt/homebrew'])
+def test_mac_provision_uses_unlinked_homebrew_python(tmp_path,monkeypatch,prefix):
+    repo=tmp_path/'checkout';repo.mkdir();root=tmp_path/'runtime'
+    uv=tmp_path/'uv';uv.touch();system=tmp_path/'system-python';system.touch()
+    keg=tmp_path/'python3.12';keg.touch()
+    keg_path=prefix+'/opt/python@3.12/bin/python3.12'
+    monkeypatch.setattr(helpers,'host_context',lambda:None)
+    monkeypatch.setattr(helpers,'service_python',lambda value:None)
+    monkeypatch.setattr(helpers.sys,'platform','darwin')
+    class HostPath:
+        cwd=staticmethod(Path.cwd)
+
+        def __new__(cls,value):
+            if isinstance(value,str) and value.startswith(('/usr/local/','/opt/homebrew/')):
+                return keg if value==keg_path else tmp_path/'missing'
+            return Path(value)
+    monkeypatch.setattr(helpers,'Path',HostPath)
+    selected=[]
+    def run(command,**kwargs):
+        if command[1:3]==['python','find']:
+            return subprocess.CompletedProcess(command,0,str(system)+'\n')
+        if command[1:3]==['-I','-c']:
+            return subprocess.CompletedProcess(command,int(command[0]!=keg_path))
+        if command[1]=='sync':
+            selected.append(command[-1])
+        return subprocess.CompletedProcess(command,0)
+    monkeypatch.setattr(helpers,'run',run)
+    helpers.provision(repo,root,str(uv))
+    assert selected==[str(keg)]
+
+
 def test_planted_uv_refused(tmp_path):
     repo=tmp_path/'checkout';repo.mkdir();uv=repo/'uv.exe';uv.touch()
     with pytest.raises(ValueError,match='Refusing'):helpers.executable('uv',uv,tmp_path/'runtime',repo)

@@ -33,6 +33,25 @@ def test_real_launcher_pair_and_birth_mismatch_refuse_before_signal(brain):
     assert seen and result.returncode!=0
 
 
+
+@pytest.mark.parametrize('error,exit_state,exits',[(5,0,True),(5,258,False),(5,0xffffffff,False),(6,0,False)])
+def test_windows_termination_requires_signaled_retained_handle(monkeypatch,error,exit_state,exits):
+    handle=99
+    def wait(candidate,timeout):
+        assert candidate==handle
+        assert 0<=timeout<=1000
+        return exit_state if timeout else 258
+    api=SimpleNamespace(WaitForSingleObject=wait,TerminateProcess=lambda *_:False)
+    monkeypatch.setattr(processes,'_birth',lambda *_:100)
+    monkeypatch.setattr(processes.ctypes,'get_last_error',lambda:error,raising=False)
+    owned=processes.Process(77,api,handle,100,'server','python.exe',None,42,'interpreter')
+    if exits:
+        owned.terminate()
+    else:
+        with pytest.raises(processes.OwnershipError,match=f'Win32 error {error}'):
+            owned.terminate()
+
+
 @pytest.mark.skipif(os.name!='nt',reason='Windows identity API fake.')
 @pytest.mark.parametrize('name,args',[('brain_client.py',[]),('brain_hooks.py',[]),('brain_server.py',['--pilot']),('prefix-brain_server.py',[])])
 def test_adapters_pilot_and_substrings_never_owned(brain,monkeypatch,name,args):

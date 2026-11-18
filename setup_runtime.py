@@ -149,7 +149,8 @@ END='<!-- END SECOND-BRAIN -->'
 CLIENTS=('claude-code','claude-desktop','codex','hooks')
 BASE_PROBE=('import sqlite3,sys,sysconfig;sqlite3.connect(":memory:").enable_load_extension(True);'
             'sys.exit(0 if sys.platform!="darwin" or sysconfig.get_config_var("PYTHONFRAMEWORK") else 1)')
-MAC_FRAMEWORK_PYTHONS=('/opt/homebrew/bin/python3.12','/usr/local/bin/python3.12')
+MAC_FRAMEWORK_PYTHONS=('/opt/homebrew/bin/python3.12','/usr/local/bin/python3.12',
+                       '/opt/homebrew/opt/python@3.12/bin/python3.12','/usr/local/opt/python@3.12/bin/python3.12')
 
 class ConcurrentWriteError(ValueError):
     """Destination changed while a private replacement was being prepared."""
