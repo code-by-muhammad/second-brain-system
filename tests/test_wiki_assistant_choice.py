@@ -472,7 +472,8 @@ def test_supervisor_starts_the_pass_with_only_its_error_output_kept_and_never_to
     class Process:
         def __init__(self,command,**kwargs):
             self.pid=4321;self.returncode=None
-            started.append((Path(command[1]).name,kwargs['stdout'],kwargs['stderr'].name))
+            if Path(command[1]).name=='brain_maintenance.py':
+                started.append((Path(command[1]).name,kwargs['stdout'],kwargs['stderr'].name))
         def poll(self):return self.returncode
     class Socket:
         def __enter__(self):return self
@@ -486,7 +487,8 @@ def test_supervisor_starts_the_pass_with_only_its_error_output_kept_and_never_to
     monkeypatch.setattr(cfg,'environment',lambda:{});monkeypatch.setattr(cfg,'child_options',lambda:{})
     with pytest.raises(End):supervisor.main({})
     assert started==[('brain_maintenance.py',supervisor.subprocess.DEVNULL,str(logs/'service-upkeep.log'))]
-    assert old.stat().st_size==5_000_001 and sorted(path.name for path in logs.iterdir())==['service-maintenance.log','service-upkeep.log']
+    assert old.stat().st_size==5_000_001
+    assert {path.name for path in logs.iterdir()}=={'service-bootstrap.log','service-maintenance.log','service-upkeep.log'}
 
 
 def test_retired_maintenance_log_no_longer_keeps_a_device_in_attention_but_any_other_large_log_does(brain,monkeypatch):

@@ -5,7 +5,9 @@
 - macOS setup finds Homebrew Python 3.12 in its formula directory even if another installation owns the global links. Process inspection tolerates an absent previous-release Python. The retained checkout is still needed for recovery.
 - Windows service cleanup verifies exit on its retained handle when Task Scheduler and the controller stop the same process concurrently.
 - Wiki lint spends its existing historical-evidence time budget on Git history work.
+- The local service checks for missed Markdown changes and unfinished vector work on startup and every 15 minutes after an index worker completes. It repairs bounded sets of affected entries and verifies current coverage afterward. A clean index needs no embedding work. This applies to maintainer and capture devices.
+- Initial and manual indexing count committed vector shards even when a pass finishes between samples. A manual full rebuild continues with incremental passes so a second full reset cannot discard that progress.
 
-The setup matrix covers fresh and repeated setup, adding a client to a partial configuration, a capture-to-maintainer transition, and a v0.2.11 upgrade on Windows and macOS. Native service jobs run the six-step MCP self-test. The hosted Ubuntu setup job exercises client configuration with service registration disabled.
+The setup matrix covers fresh and repeated setup, adding a client to a partial configuration, a capture-to-maintainer transition, and a v0.2.11 upgrade on Windows and macOS. Native service jobs exercise offline edits with preserved size and timestamps, file moves, and a note that needs more than one vector shard. They also run the six-step MCP self-test. The hosted Ubuntu setup job exercises client configuration with service registration disabled.
 
 Use the [setup guide](SETUP-GUIDE.md) for commands. Qualification applies to the tested commit and platform. Owner-device acceptance, fresh named assistant sessions and reboot checks have separate receipts.

@@ -39,6 +39,7 @@ def lifecycle(brain, monkeypatch):
     class Process:
         def __init__(self, command, **kwargs):
             self.name = Path(command[1]).name
+            self.arguments = command[2:]
             assert self.name in ('brain_server.py', 'brain_index_bootstrap.py', 'brain_maintenance.py')
             assert kwargs['env'] == {} and 'timeout' not in kwargs
             h.on_spawn(self.name)
@@ -163,6 +164,51 @@ def test_next_maintenance_waits_after_observed_completion_even_across_retry(life
     h.observe()
     assert len(h.named('brain_maintenance.py')) == 2
     assert h.registry()['maintenance'] == h.named('brain_maintenance.py')[1].pid
+
+
+@pytest.mark.parametrize('returncode', [0, 1])
+def test_index_reconciliation_uses_completion_cadence_and_respects_hold(lifecycle, returncode):
+    h = lifecycle
+    (h.state / 'index-bootstrap-status.json').write_text('{"status":"verified"}', encoding='utf-8')
+    script = 'brain_index_bootstrap.py'
+    hold = h.state / 'service-transaction.json'
+    held = {'hold_id': 'a' * 32, 'root': str(cfg.ROOT), 'stage': 'stopped'}
+    hold.write_text(json.dumps(held), encoding='utf-8')
+    h.observe()
+    assert not h.named(script)
+
+    hold.unlink()
+    h.listening = False
+    h.observe()
+    assert not h.named(script)
+
+    h.listening = True
+    h.observe()
+    first, = h.named(script)
+    assert first.arguments == ['--reconcile']
+    assert h.registry()['bootstrap'] == first.pid
+
+    h.now += 3600
+    h.observe()
+    assert h.named(script) == [first]
+    assert h.registry()['bootstrap'] == first.pid
+    first.returncode = returncode
+    h.observe()
+    assert h.registry()['bootstrap'] is None
+
+    h.now += 899
+    h.observe()
+    assert h.named(script) == [first]
+    hold.write_text(json.dumps(held), encoding='utf-8')
+    h.now += 1
+    h.observe()
+    assert h.named(script) == [first]
+
+    hold.unlink()
+    h.observe()
+    _, second = h.named(script)
+    assert second.arguments == ['--reconcile']
+    assert h.registry()['bootstrap'] == second.pid
 
 
 def test_spawn_failure_retries_without_inventing_maintenance_handle(lifecycle):

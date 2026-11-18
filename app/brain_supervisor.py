@@ -5,6 +5,8 @@ import brain_settings as cfg
 import brain_process as processes
 import brain_service as service
 
+INDEX_RECONCILE_SECONDS=900
+
 
 def _bootstrap_admitted():
     """Read/update interruption state under the same nonblocking writer lock."""
@@ -58,11 +60,21 @@ def main(owned=None):
                                 child=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_server.py')],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
                                 owned['server']=child
                                 _publish_owned(owned)
-                        if listening and (bootstrap is None or bootstrap.poll() is not None) and _bootstrap_admitted():
-                            with (cfg.ROOT/'logs/service-bootstrap.log').open('ab') as log:
-                                bootstrap=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_index_bootstrap.py')],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
-                                owned['bootstrap']=bootstrap
-                                _publish_owned(owned)
+                        if bootstrap is not None and bootstrap.poll() is not None:
+                            owned['_index_finished']=time.monotonic()
+                            owned.pop('bootstrap',None)
+                            bootstrap=None
+                        if listening and bootstrap is None:
+                            arguments=None
+                            if _bootstrap_admitted():
+                                arguments=[]
+                            elif time.monotonic()-owned.get('_index_finished',float('-inf'))>=INDEX_RECONCILE_SECONDS:
+                                arguments=['--reconcile']
+                            if arguments is not None:
+                                with (cfg.ROOT/'logs/service-bootstrap.log').open('ab') as log:
+                                    bootstrap=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_index_bootstrap.py'),*arguments],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
+                                    owned['bootstrap']=bootstrap
+                                    _publish_owned(owned)
                         if maintenance is not None and maintenance.poll() is not None:
                             owned['_maintenance_finished']=time.monotonic()
                             owned.pop('maintenance',None)

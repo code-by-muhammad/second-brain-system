@@ -153,6 +153,43 @@ def test_current_entity_checksum_cannot_hide_stale_search_body(brain):
     assert result['vectors']['stale_search_sources']==1
 
 
+def test_stable_coverage_selects_only_affected_index_entries(brain, monkeypatch):
+    import brain_index as index
+    config()
+    with closing(database()) as connection:
+        stale = add_note(connection, 1, 'Stale.md')
+        stale.write_bytes(b'New bytes.')
+        full_text = add_note(connection, 2, 'Stale full text.md')
+        full_text.write_bytes(b'Current bytes.')
+        connection.execute('UPDATE entity SET checksum=? WHERE id=2', (hashlib.sha256(full_text.read_bytes()).hexdigest(),))
+        add_note(connection, 3, 'Vectors.md')
+        connection.execute("UPDATE search_vector_chunks SET embedding_status='pending' WHERE entity_id=3")
+        add_note(connection, 4, 'Removed.md').unlink()
+        add_note(connection, 5, 'Current.md')
+        connection.commit()
+    (cfg.VAULT / 'New.md').write_bytes(b'New source.')
+    plan = index.RepairPlan()
+    result = index.status(repair=plan)
+    assert result['status'] == 'needs review' and result['inventory_stable']
+    assert plan.files == {'Stale.md', 'Stale full text.md', 'New.md'}
+    assert plan.vectors == {3}
+    assert plan.removed == {'Removed.md'}
+    current = index.status()
+    assert {key: value for key, value in result.items() if key != 'checked_at'} == {
+        key: value for key, value in current.items() if key != 'checked_at'
+    }
+    inventory = index.inventory
+
+    def change_after_snapshot(check, scope_counts=None):
+        if scope_counts is None:
+            (cfg.VAULT / 'New.md').write_bytes(b'Changed while verifying.')
+        return inventory(check, scope_counts)
+
+    monkeypatch.setattr(index, 'inventory', change_after_snapshot)
+    assert index.status(repair=plan)['inventory_stable'] is False
+    assert plan == index.RepairPlan()
+
+
 @pytest.mark.parametrize('raw,stored',[
     (b'# Source\n\nPayload.\n','# Source\r\n\r\nPayload.\r\n'),
     (b'# Source\r\n\r\nPayload.\r\n','# Source\n\nPayload.\n'),

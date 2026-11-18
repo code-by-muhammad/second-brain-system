@@ -247,6 +247,7 @@ jobs:
             done
             echo "$result" | grep "search index"
             echo "$result" | grep -q "PASS   search index: verified"
+            uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py
             setup --check --selftest --clients claude-code,codex | tee "$RUNNER_TEMP/selftest.txt"
             test "$(grep -c '^PASS   self-test ' "$RUNNER_TEMP/selftest.txt")" -eq 6
           fi
@@ -308,6 +309,8 @@ jobs:
           }
           $result | Select-String 'search index'
           if (-not $verified) { exit 1 }
+          & uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $result = Invoke-Setup --check --selftest --clients 'claude-code,codex'
           $selftestExit = $LASTEXITCODE
           $result
