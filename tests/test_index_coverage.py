@@ -283,3 +283,83 @@ def test_empty_ignore_uses_upstream_defaults_and_hidden_files_excluded(brain):
     (cfg.STATE / '.bmignore').write_bytes(b'')
     (cfg.VAULT / '.hidden.md').write_text('Not eligible.', encoding='utf-8')
     assert index.status()['coverage']['eligible'] == 1
+
+
+def _reconcile_with(monkeypatch, *, status, manifest='m1', eligible=('A.md',)):
+    """The repair entry point with a fixed scan; returns the module and the list of repairs it attempted."""
+    import brain_index as index
+    import brain_index_reconcile as reconcile
+    attempted = []
+
+    def scan(*, deadline=None, repair=None):
+        if repair is not None:
+            repair.files.update(status.get('_files', ()))
+            repair.removed.update(status.get('_removed', ()))
+        return {'status': 'needs review', 'checked_at': 'now', 'reason': 'coverage_or_vector_review_required',
+                'inventory_stable': True, 'coverage': {'eligible': status['eligible'], 'manifest_sha256': 'm1'}}
+
+    async def repair(plan, counts, cursors, eligible, manifest):
+        attempted.append((sorted(plan.files), sorted(plan.removed), sorted(eligible), manifest))
+
+    monkeypatch.setattr(index, 'status', scan)
+    monkeypatch.setattr(index, 'inventory', lambda check=lambda: None, scope_counts=None: ({name: {} for name in eligible}, manifest))
+    monkeypatch.setattr(reconcile, '_bounded_repair', repair)
+    monkeypatch.setattr(cfg, 'require_local_search_runtime', lambda: None, raising=False)
+    monkeypatch.setattr(cfg, 'write_admission', lambda: None)
+    return reconcile, attempted
+
+
+def test_repair_takes_turns_with_maintenance_and_acts_only_on_a_folder_that_still_matches_its_scan(brain, monkeypatch):
+    from filelock import FileLock
+    reconcile, attempted = _reconcile_with(monkeypatch, status={'eligible': 1, '_files': {'A.md'}})
+    receipt = cfg.STATE / reconcile.RECEIPT
+    # A maintenance pass that is running owns the notes: the repair does nothing at all, not even a scan.
+    with FileLock(str(cfg.STATE / 'maintenance.lock')):
+        reconcile.main()
+    assert attempted == [] and not receipt.exists()
+    reconcile.main()
+    assert attempted == [(['A.md'], [], ['A.md'], 'm1')]
+    assert json.loads(receipt.read_text())['counts']['inventory_changed'] == 0
+    # The folder changed between the scan and the repair: nothing is repaired from the old plan.
+    attempted.clear()
+    reconcile, attempted = _reconcile_with(monkeypatch, status={'eligible': 1, '_files': {'A.md'}}, manifest='m2')
+    reconcile.main()
+    assert attempted == [] and json.loads(receipt.read_text())['counts']['inventory_changed'] == 1
+
+
+def test_repair_never_empties_the_index_of_a_folder_that_shows_no_notes(brain, monkeypatch):
+    """An unavailable notes folder also shows no notes; removing every entry on that evidence costs a rebuild."""
+    reconcile, attempted = _reconcile_with(monkeypatch, status={'eligible': 0, '_removed': {'A.md', 'B.md'}}, eligible=())
+    reconcile.main()
+    assert attempted == []
+
+
+def test_repair_that_outlives_its_budget_ends_its_process_and_says_so(brain, monkeypatch):
+    import brain_index_reconcile as reconcile
+    ended = []
+    monkeypatch.setattr(reconcile.os, '_exit', lambda code: ended.append(code))
+    reconcile._save({'status': 'needs review', 'cursors': {'files': 'a' * 64}})
+    reconcile._deadline_exit()
+    report = json.loads((cfg.STATE / reconcile.RECEIPT).read_text())
+    assert ended == [75] and report['repair_error_type'] == 'RepairDeadline' and report['status'] == 'needs review'
+    assert report['cursors'] == {'files': 'a' * 64}  # The next pass continues where this one was.
+    # The watchdog is armed for every repair and disarmed when it returns in time.
+    started = [];cancelled = []
+
+    class Timer:
+        def __init__(self, seconds, action):
+            started.append((seconds, action))
+        daemon = False
+
+        def start(self):
+            started.append('started')
+
+        def cancel(self):
+            cancelled.append(True)
+
+    import threading
+    monkeypatch.setattr(threading, 'Timer', Timer)
+    reconcile, attempted = _reconcile_with(monkeypatch, status={'eligible': 1, '_files': {'A.md'}})
+    reconcile.main()
+    assert started == [(reconcile.REPAIR_SECONDS + reconcile.EXIT_GRACE_SECONDS, reconcile._deadline_exit), 'started']
+    assert cancelled == [True] and len(attempted) == 1

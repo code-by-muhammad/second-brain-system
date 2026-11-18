@@ -101,7 +101,7 @@ def main():
     parser.add_argument('--root', default=str(Path.home() / '.local/share/second-brain'))
     parser.add_argument('--home', default=str(Path.home()))
     parser.add_argument('--clients', default='', help='Comma-separated: ' + ', '.join(CLIENTS))
-    parser.add_argument('--expect-version', help='For example 0.2.12')
+    parser.add_argument('--expect-version', help='For example 0.2.13')
     parser.add_argument('--release', help='Verified release checkout; compares the protocol block and skill with it')
     parser.add_argument('--no-hooks', action='store_true', help='The owner declined Claude Code hooks')
     parser.add_argument('--local-only', action='store_true', help='Notes must have no Git remote on this device')

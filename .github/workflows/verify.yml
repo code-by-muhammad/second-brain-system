@@ -219,17 +219,17 @@ jobs:
               SECOND_BRAIN_REF=v0.2.11 SECOND_BRAIN_COMMIT=f162d670b9e29b46215a7542860a8a083fcdf7eb \
                 setup --yes --vault "$RUNNER_TEMP/second brain notes" --role capture --clients claude-code
             fi
-            if [ "$SECOND_BRAIN_REF" != v0.2.12 ]; then
+            if [ "$SECOND_BRAIN_REF" != v0.2.13 ]; then
               # A pull request has no release tag. Bind this disposable checkout to the exact CI commit.
-              release="$SECOND_BRAIN_ROOT/releases/v0.2.12"
+              release="$SECOND_BRAIN_ROOT/releases/v0.2.13"
               git clone -q -c core.autocrlf=false --branch "$SECOND_BRAIN_REF" --single-branch \
                 https://github.com/code-by-muhammad/second-brain-system.git "$release"
               test "$(git -C "$release" rev-parse HEAD)" = "$SECOND_BRAIN_COMMIT"
-              git -C "$release" tag v0.2.12 "$SECOND_BRAIN_COMMIT"
+              git -C "$release" tag v0.2.13 "$SECOND_BRAIN_COMMIT"
               setup() { uv run --no-project --python 3.12 python -I -B "$release/setup_device.py" --root "$SECOND_BRAIN_ROOT" "$@"; }
             fi
             setup --yes --clients claude-code,codex | tee "$RUNNER_TEMP/upgrade.txt"
-            grep -q 'PASS   installed version: 0.2.12' "$RUNNER_TEMP/upgrade.txt"
+            grep -q 'PASS   installed version: 0.2.13' "$RUNNER_TEMP/upgrade.txt"
           else
             setup --yes --vault "$RUNNER_TEMP/second brain notes" --role capture --clients claude-code $service
           fi
@@ -276,19 +276,19 @@ jobs:
               $env:SECOND_BRAIN_REF = $candidateRef
               $env:SECOND_BRAIN_COMMIT = $candidateCommit
             }
-            if ($candidateRef -ne 'v0.2.12') {
-              $release = Join-Path $env:SECOND_BRAIN_ROOT 'releases/v0.2.12'
+            if ($candidateRef -ne 'v0.2.13') {
+              $release = Join-Path $env:SECOND_BRAIN_ROOT 'releases/v0.2.13'
               git clone -q -c core.autocrlf=false --branch $candidateRef --single-branch https://github.com/code-by-muhammad/second-brain-system.git $release
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
               $head = git -C $release rev-parse HEAD
               if ($LASTEXITCODE -ne 0 -or $head -ne $candidateCommit) { exit 1 }
-              git -C $release tag v0.2.12 $candidateCommit
+              git -C $release tag v0.2.13 $candidateCommit
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             }
             $upgraded = Invoke-Setup --yes --clients 'claude-code,codex'
             $upgradeExit = $LASTEXITCODE
             $upgraded
-            if ($upgradeExit -ne 0 -or -not ($upgraded -match 'PASS   installed version: 0.2.12')) { exit 1 }
+            if ($upgradeExit -ne 0 -or -not ($upgraded -match 'PASS   installed version: 0.2.13')) { exit 1 }
           } else {
             Invoke-Setup --yes --vault $notes --role capture --clients 'claude-code'
           }

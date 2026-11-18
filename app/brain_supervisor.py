@@ -26,6 +26,10 @@ def _bootstrap_admitted():
     except Timeout:
         return False
 
+def _maintenance_due(owned):
+    return time.monotonic()-owned.get('_maintenance_finished',0)>900
+
+
 def _publish_owned(owned):
     # Publish only this process's live handles, never adopt cached registry PIDs.
     import os
@@ -44,6 +48,7 @@ def main(owned=None):
     for folder in ('state','logs'): (cfg.ROOT/folder).mkdir(parents=True,exist_ok=True)
     with FileLock(str(cfg.STATE/'supervisor.lock'),timeout=1):
         child=owned.get('server'); bootstrap=owned.get('bootstrap'); maintenance=owned.get('maintenance')
+        reconciling=bool(owned.get('_reconciling')) and bootstrap is not None
         while True:
             try:
                 # Serialize every spawn against stop/update admission. A held service
@@ -63,14 +68,18 @@ def main(owned=None):
                         if bootstrap is not None and bootstrap.poll() is not None:
                             owned['_index_finished']=time.monotonic()
                             owned.pop('bootstrap',None)
-                            bootstrap=None
+                            bootstrap=None;reconciling=owned['_reconciling']=False
                         if listening and bootstrap is None:
                             arguments=None
                             if _bootstrap_admitted():
                                 arguments=[]
-                            elif time.monotonic()-owned.get('_index_finished',float('-inf'))>=INDEX_RECONCILE_SECONDS:
+                            # The repair and the maintenance pass take turns: each holds the maintenance lock, and
+                            # the one that found it taken would only fail. A maintenance pass that is running or due
+                            # goes first; the repair follows when it has finished.
+                            elif (maintenance is None or maintenance.poll() is not None) and not _maintenance_due(owned) and time.monotonic()-owned.get('_index_finished',float('-inf'))>=INDEX_RECONCILE_SECONDS:
                                 arguments=['--reconcile']
                             if arguments is not None:
+                                reconciling=owned['_reconciling']=arguments==['--reconcile']
                                 with (cfg.ROOT/'logs/service-bootstrap.log').open('ab') as log:
                                     bootstrap=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_index_bootstrap.py'),*arguments],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
                                     owned['bootstrap']=bootstrap
@@ -80,7 +89,7 @@ def main(owned=None):
                             owned.pop('maintenance',None)
                             maintenance=None
                             _publish_owned(owned)
-                        if listening and maintenance is None and time.monotonic()-owned.get('_maintenance_finished',0)>900:
+                        if listening and maintenance is None and not reconciling and _maintenance_due(owned):
                             with (cfg.ROOT/'logs/service-upkeep.log').open('ab') as log:
                                 # The pass saves its whole result to maintenance-status.json. What it prints is that
                                 # same result again, tens of kilobytes on a large vault every fifteen minutes, so

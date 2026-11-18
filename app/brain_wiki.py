@@ -1427,7 +1427,7 @@ class _EvidenceHistory:
         self.log_failures={}; self.blob_failures={}; self.result_failures={}; self.legacy_proofs={}
         self.failure_serial=0; self.failure_reason=None; self.first_failure_reason=None
         self.failure_serial_by_reason={}
-        self._history_paused_at=None; self.history_seconds=0
+        self._history_paused_at=None; self.history_seconds=0; self._separate_current=False
 
     @contextmanager
     def _history_work(self):
@@ -1444,6 +1444,19 @@ class _EvidenceHistory:
         finally:
             self._history_paused_at=time.monotonic()
             self.history_seconds+=self._history_paused_at-started
+
+    @contextmanager
+    def _current_work(self):
+        # A current-source read that happens inside history work, as in a legacy fallback, is not history work.
+        if not self._separate_current or self._history_paused_at is not None:
+            yield
+            return
+        started=time.monotonic()
+        try:
+            yield
+        finally:
+            spent=time.monotonic()-started
+            self.deadline+=spent; self.history_seconds-=spent
 
     def _incomplete(self,reason):
         self.failure_serial+=1; self.failure_reason=reason
@@ -1560,7 +1573,7 @@ class _EvidenceHistory:
             for reason in self.result_failures.get(key,()): self._incomplete(reason)
             return self.results[key]
         serial=self.failure_serial
-        current=self._current(source)
+        with self._current_work():current=self._current(source)
         candidates=((current,'current'),) if current else ()
         for info,mode in candidates:
             if sha256 in info['variants'] and (quote is None or normalized(quote) in info['text']) and (text_sha256 is None or text_sha256==info['text_sha256']):
@@ -2109,7 +2122,7 @@ def lint():
     issues=[]; historical=[]; equivalent=[]
     allpages=pages(issues); known={p['path'] for p in allpages}
     history=_EvidenceHistory()
-    history._history_paused_at=history.started
+    history._history_paused_at=history.started; history._separate_current=True
     for p in allpages:
         try: _existing_topic_title(p)
         except WikiIntegrityError: issues.append({'page':p['path'],'issue':'malformed title metadata','field':'title'})

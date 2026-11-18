@@ -308,7 +308,8 @@ def main():
         if ((args.vault and Path(args.vault).expanduser().resolve()!=vault)
                 or (args.role and args.role!=role) or (args.timezone and args.timezone!=options['timezone'])
                 or (args.clients is not None and set(selected)!=set(recorded))
-                or (args.no_hooks and options['include_hooks']) or (args.no_model and options['download_model'])):
+                or (args.no_hooks and options['include_hooks']) or (args.no_model and options['download_model'])
+                or (args.no_service and not options.get('wizard_no_service'))):
             parser.error('Resume with the original install options before changing this device.')
         if args.local_only and remotes(vault)!=[]:
             parser.error('--local-only was given, but the recorded notes folder has a Git remote or could not be checked.')
@@ -317,6 +318,8 @@ def main():
         if ask('Resume?','yes',args.yes).lower() not in ('y','yes'):raise SystemExit('Nothing was changed.')
         selected=recorded
         args.no_hooks=not options['include_hooks']
+        # The first run's choice about the service holds for the whole install.
+        args.no_service=bool(options.get('wizard_no_service'))
         python=retained_python()
         support=runpy.run_path(str(REPO/'setup_runtime.py'))
         support['host_context']()
@@ -332,6 +335,7 @@ def main():
         for name in selected:command+=['--client',name]
         if options['include_hooks']:command.append('--include-hooks')
         if options.get('initialize_wiki_owner'):command.append('--initialize-wiki-owner')
+        if options.get('wizard_no_service'):command.append('--wizard-no-service')
         if run(command).returncode:
             raise SystemExit('The initial install could not resume. Keep the runtime and use its recorded recovery information.')
     elif device is None:
@@ -358,6 +362,7 @@ def main():
         if not args.no_model:command.append('--download-model')
         if selected:command+=['--configure-clients',*client_flags]
         if role=='maintainer':command.append('--initialize-wiki-owner')
+        if args.no_service:command.append('--wizard-no-service')
         if run(command).returncode:
             # The installer keeps its child's output private; its last error line is the reason and names no secret.
             reports=sorted((root/'logs').glob('bootstrap-failure-*.json'),key=lambda path:path.stat().st_mtime)

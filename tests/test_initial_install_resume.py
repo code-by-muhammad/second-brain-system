@@ -45,7 +45,7 @@ def test_setup_command_resumes_the_interrupted_install(initial,monkeypatch,bound
 
     monkeypatch.setattr(installer,'atomic',interrupted)
     with pytest.raises(OSError,match='Synthetic interruption'):
-        run('--timezone','UTC','--role','maintainer','--initialize-wiki-owner')
+        run('--timezone','UTC','--role','maintainer','--initialize-wiki-owner','--wizard-no-service')
     monkeypatch.setattr(installer,'atomic',atomic)
     before=json.loads(journal.read_text())
 
@@ -75,6 +75,47 @@ def test_setup_command_resumes_the_interrupted_install(initial,monkeypatch,bound
     assert json.loads((root/'device.json').read_text())==expected
     assert (root/'state/access.json').read_text()==before['writes']['state/access.json']
     assert 'maintainer_device_id: '+expected['device_id'] in control.read_text()
+
+
+@pytest.mark.parametrize('declined',[True,False])
+def test_resume_keeps_the_service_choice_of_the_interrupted_run(initial,monkeypatch,declined):
+    """A setup begun with --no-service must not start a service when it is resumed with the plain command."""
+    installer,root,vault,run=initial
+    spec=importlib.util.spec_from_file_location('fresh_resume_wizard_service',installer.REPO/'setup_device.py')
+    wizard=importlib.util.module_from_spec(spec);spec.loader.exec_module(wizard)
+    read_script=wizard.runpy.run_path
+    monkeypatch.setattr(wizard,'runpy',SimpleNamespace(run_path=lambda path:
+        {'verify':lambda path:{'version':installer.VERSION}} if Path(path).name=='update.py' else read_script(path)))
+    atomic=installer.atomic;journal=root/'state/install-transaction.json'
+    def interrupted(path,*args,**kwargs):
+        if Path(path)==root/'device.json':raise OSError('Synthetic interruption')
+        return atomic(path,*args,**kwargs)
+    monkeypatch.setattr(installer,'atomic',interrupted)
+    with pytest.raises(OSError,match='Synthetic interruption'):
+        run('--timezone','UTC','--role','capture',*(['--wizard-no-service'] if declined else []))
+    monkeypatch.setattr(installer,'atomic',atomic)
+    before=json.loads(journal.read_text())
+    assert before['identity'].get('wizard_no_service',False) is declined
+    monkeypatch.setattr(wizard,'retained_python',lambda:Path(sys.executable),raising=False)
+    def execute(command,*,capture=False):
+        if Path(command[3]).name=='install.py':
+            monkeypatch.setattr(sys,'argv',[str(arg) for arg in command[3:]])
+            installer.main()
+        return SimpleNamespace(returncode=0,stdout='{"deferred": []}',stderr='')
+    monkeypatch.setattr(wizard.shutil,'which',lambda name:sys.executable)
+    monkeypatch.setattr(wizard,'run',execute)
+    started=[]
+    monkeypatch.setattr(wizard,'start_service',lambda *args,**kwargs:started.append(args))
+    args=['setup_device.py','--root',str(root),'--yes','--clients','']
+    if not declined:
+        # The first run wanted the service: a resume that now declines it is a different install.
+        monkeypatch.setattr(sys,'argv',[*args,'--no-service'])
+        with pytest.raises(SystemExit) as refused:wizard.main()
+        assert refused.value.code==2 and json.loads(journal.read_text())==before and started==[]
+    monkeypatch.setattr(sys,'argv',args)
+    with pytest.raises(SystemExit) as result:wizard.main()
+    assert result.value.code==0 and json.loads(journal.read_text())['stage']=='complete'
+    assert len(started)==(0 if declined else 1)
 
 
 def test_initial_wiki_ownership_preserves_a_competing_owner(initial):

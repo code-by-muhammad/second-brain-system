@@ -16,6 +16,9 @@ import brain_settings as cfg
 BATCH_FILES = 32
 VECTOR_PASSES = 3
 REPAIR_SECONDS = 240
+# Cancelling the repair cannot stop model work already handed to a thread, and the process would wait for it
+# while holding the index lock. Past this grace the process ends itself; SQLite rolls an open write back.
+EXIT_GRACE_SECONDS = 60
 RECEIPT = 'index-reconcile-status.json'
 
 
@@ -51,7 +54,7 @@ def _permitted(relative):
     return candidate.resolve().is_relative_to(cfg.VAULT)
 
 
-async def _repair(plan, counts, cursors):
+async def _repair(plan, counts, cursors, eligible, manifest):
     from basic_memory import db
     from basic_memory.config import ConfigManager
     from basic_memory.ignore_utils import should_ignore_path
@@ -80,6 +83,7 @@ async def _repair(plan, counts, cursors):
         runtime = await build_local_index_project_dependencies(project)
 
         removed = tuple(path for path in _batch(plan.removed, cursors, 'removed') if _permitted(path))
+        followups = []
         vector_ids = set(plan.vectors)
         if removed:
             # The upstream store re-probes absence and compares accepted note
@@ -91,14 +95,19 @@ async def _repair(plan, counts, cursors):
             )
             deleted = await store.apply_project_index_delete_batch(ProjectIndexDeleteBatch(1, removed))
             counts['removed'] = deleted.deleted_entities
-            refresher = RepositoryProjectIndexMovedEntitySearchRefresher(
-                runtime.session_maker, runtime.entity_repository, runtime.search_service,
-            )
-            await refresher.refresh_moved_entities(tuple(deleted.relation_cleanup_entity_ids))
+            # Notes that linked to a removed one need their search rows refreshed. They are refreshed as files
+            # below, so each one passes the same screening, and only if this scan found it eligible: a source
+            # in a folder that is ignored now, linked, offline or over the size limit is never opened.
+            related = sorted(set(deleted.relation_cleanup_entity_ids))
+            if related:
+                async with db.scoped_session(runtime.session_maker) as session:
+                    sources = await runtime.entity_repository.find_by_ids(session, related)
+                followups = [entity.file_path for entity in sources
+                             if isinstance(entity.file_path, str) and entity.file_path in eligible]
             vector_ids.update(deleted.relation_cleanup_entity_ids)
 
         patterns = index._patterns()
-        for path in _batch(plan.files, cursors, 'files'):
+        for path in dict.fromkeys((*_batch(plan.files, cursors, 'files'), *followups)):
             try:
                 if not _permitted(path) or should_ignore_path(cfg.VAULT / path, cfg.VAULT, patterns):
                     continue
@@ -109,6 +118,11 @@ async def _repair(plan, counts, cursors):
             except Exception:
                 counts['file_failures'] += 1
 
+        # Notes that changed while this ran are left to the next pass: no vectors are built from a scan
+        # that no longer describes the folder.
+        if index.inventory()[1] != manifest:
+            counts['inventory_changed'] = 1
+            return
         selected_vectors = list(_batch(vector_ids, cursors, 'vectors'))
         if config.semantic_search_enabled and selected_vectors:
             for _ in range(VECTOR_PASSES):
@@ -121,9 +135,20 @@ async def _repair(plan, counts, cursors):
         await db.shutdown_db()
 
 
-async def _bounded_repair(plan, counts, cursors):
+async def _bounded_repair(plan, counts, cursors, eligible, manifest):
     async with asyncio.timeout(REPAIR_SECONDS):
-        await _repair(plan, counts, cursors)
+        await _repair(plan, counts, cursors, eligible, manifest)
+
+
+def _deadline_exit():
+    # Reached only when the repair is still running past its budget and grace. The receipt says so, the
+    # process ends at once, and the operating system releases the locks it held.
+    try:
+        _save({'status': 'needs review', 'checked_at': None, 'reason': 'repair_deadline', 'counts': {},
+               'repair_error_type': 'RepairDeadline', 'cursors': _previous_cursors(),
+               'elapsed_seconds': REPAIR_SECONDS + EXIT_GRACE_SECONDS})
+    finally:
+        os._exit(75)
 
 
 def _previous_cursors():
@@ -152,25 +177,41 @@ def _save(report):
 
 def main():
     try:
+        # The index lock keeps the initial and manual indexer out. The maintenance lock keeps out the pass that
+        # links milestones and synchronizes with Git, the managed changes to the notes; a pass that is running
+        # owns it, and this repair waits for its next turn.
         lock = FileLock(str(cfg.STATE / 'index-bootstrap.lock'), timeout=0)
-        with lock:
+        with lock, FileLock(str(cfg.STATE / 'maintenance.lock'), timeout=0):
             cfg.write_admission()
             started = time.monotonic()
             plan = index.RepairPlan()
             current = index.status(repair=plan)
             cursors = _previous_cursors()
-            counts = dict(refreshed=0, removed=0, file_failures=0, vector_passes=0, vector_failures=0)
+            counts = dict(refreshed=0, removed=0, file_failures=0, vector_passes=0, vector_failures=0, inventory_changed=0)
             error = None
+            # An empty inventory is never repaired: a notes folder that is unavailable looks the same, and
+            # removing every entry on that evidence would cost a whole rebuild.
             if current.get('inventory_stable') and current['coverage']['eligible'] and (plan.files or plan.removed or plan.vectors):
+                import threading
+                watchdog = threading.Timer(REPAIR_SECONDS + EXIT_GRACE_SECONDS, _deadline_exit)
+                watchdog.daemon = True
                 try:
                     cfg.require_local_search_runtime()
                     os.environ['LOGFIRE_IGNORE_NO_CONFIG'] = '1'
                     from loguru import logger
                     logger.disable('basic_memory')
-                    asyncio.run(_bounded_repair(plan, counts, cursors))
+                    eligible, manifest = index.inventory()
+                    # The plan was made from one scan; it is only acted on while the folder still matches it.
+                    if manifest != current['coverage'].get('manifest_sha256'):
+                        counts['inventory_changed'] = 1
+                    else:
+                        watchdog.start()
+                        asyncio.run(_bounded_repair(plan, counts, cursors, frozenset(eligible), manifest))
                 except Exception as exc:
                     # Only controlled classifications reach the service receipt.
                     error = type(exc).__name__
+                finally:
+                    watchdog.cancel()
                 current = index.status()
             _save({
                 'status': current['status'], 'checked_at': current['checked_at'],

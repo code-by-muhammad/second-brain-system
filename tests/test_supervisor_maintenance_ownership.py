@@ -184,17 +184,26 @@ def test_index_reconciliation_uses_completion_cadence_and_respects_hold(lifecycl
 
     h.listening = True
     h.observe()
+    # The maintenance pass that is due goes first; the repair waits for it and then takes its turn.
+    upkeep, = h.named('brain_maintenance.py')
+    assert not h.named(script)
+    upkeep.returncode = 0
+    h.observe(2)  # One cycle records that the pass ended, the next starts the repair.
     first, = h.named(script)
     assert first.arguments == ['--reconcile']
     assert h.registry()['bootstrap'] == first.pid
 
     h.now += 3600
     h.observe()
-    assert h.named(script) == [first]
+    # A maintenance pass that became due meanwhile is not started beside a running repair.
+    assert h.named(script) == [first] and h.named('brain_maintenance.py') == [upkeep]
     assert h.registry()['bootstrap'] == first.pid
     first.returncode = returncode
     h.observe()
     assert h.registry()['bootstrap'] is None
+    _, later = h.named('brain_maintenance.py')
+    later.returncode = 0
+    h.observe()
 
     h.now += 899
     h.observe()

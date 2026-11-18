@@ -6,7 +6,7 @@ import argparse, hashlib, json, os, re, secrets, shutil, stat, subprocess, tempf
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
-VERSION='0.2.12'
+VERSION='0.2.13'
 INDEX_IGNORE_TEXT='.git/\n.obsidian/\n.trash/\n'+'/02-Areas/AI-Memory/Wiki/Log-Archives/'+'[0-9a-f]'*64+'.md\n'
 _SETUP_CACHE=None
 _SETUP_SHA256=None
@@ -367,6 +367,9 @@ def _fresh_identity(root,vault,python,args):
             'clients':sorted(set(args.client)) if args.client else None,'include_hooks':args.include_hooks,
             'desktop_config':str(Path(args.desktop_config).expanduser().absolute()) if args.desktop_config else None,
             'skip_desktop_refresh':args.skip_desktop_refresh,'source_sha256':_fresh_source()}
+    # Recorded only when chosen, so that a resumed setup neither starts a service the first run declined
+    # nor changes the identity of an install that never had the choice.
+    if getattr(args,'wizard_no_service',False):identity['wizard_no_service']=True
     if getattr(args,'initialize_wiki_owner',False):
         identity['initialize_wiki_owner']=True
         wizard=REPO/'setup_device.py'
@@ -528,6 +531,7 @@ def main():
     parser.add_argument('--abandon-install',help='Abandon a matching incomplete initial setup only if no runtime artifact was published.')
     parser.add_argument('--configure-clients',action='store_true'); parser.add_argument('--install-service',action='store_true')
     parser.add_argument('--initialize-wiki-owner',action='store_true',help=argparse.SUPPRESS)
+    parser.add_argument('--wizard-no-service',action='store_true',help=argparse.SUPPRESS)
     parser.add_argument('--refresh-clients',action='store_true',help='Refresh only existing exact owned entries; create no new client integration or hook.')
     parser.add_argument('--client',action='append',choices=['claude-code','claude-desktop','codex','hooks'])
     parser.add_argument('--include-hooks',action='store_true',help='Explicitly opt into optional Claude hooks during fresh client configuration.')

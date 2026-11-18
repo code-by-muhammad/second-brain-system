@@ -488,7 +488,8 @@ def test_supervisor_starts_the_pass_with_only_its_error_output_kept_and_never_to
     with pytest.raises(End):supervisor.main({})
     assert started==[('brain_maintenance.py',supervisor.subprocess.DEVNULL,str(logs/'service-upkeep.log'))]
     assert old.stat().st_size==5_000_001
-    assert {path.name for path in logs.iterdir()}=={'service-bootstrap.log','service-maintenance.log','service-upkeep.log'}
+    # The index repair waits for this pass, so nothing else was started and no other log was opened.
+    assert {path.name for path in logs.iterdir()}=={'service-maintenance.log','service-upkeep.log'}
 
 
 def test_retired_maintenance_log_no_longer_keeps_a_device_in_attention_but_any_other_large_log_does(brain,monkeypatch):
