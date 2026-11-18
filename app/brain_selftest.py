@@ -69,7 +69,10 @@ def run():
     rows=[]
     def add(ok,detail,*,name):rows.append({'status':'PASS' if ok else 'FAIL','check':'self-test '+name,'detail':str(detail)[:300]})
     with TemporaryFile(mode='w+',encoding='utf-8',errors='replace') as adapter_stderr:
-        try:asyncio.run(_steps(add,adapter_stderr))
+        try:
+            # Basic Memory's migration dependency can patch asyncio.run to reuse the ambient loop.
+            with asyncio.Runner() as runner:
+                runner.run(_steps(add,adapter_stderr))
         except Exception as error:
             # Classify known startup failures without copying arbitrary child stderr into the report.
             adapter_stderr.seek(0)
