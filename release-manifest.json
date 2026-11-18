@@ -13,7 +13,7 @@
   "qualification_status": "candidate_pending_external_receipts",
   "sha256": {
     ".gitattributes": "1885cdcf82264bcd145a089116b45921048b4dd33363b3d10a4ac8c89df25e24",
-    ".github/workflows/verify.yml": "415b7d07879ed7569e47c22979e2af6aa7a381020fec55b47d3a31498a950fb9",
+    ".github/workflows/verify.yml": "6f9a03a5e337daf5b34ccbc13d6e6136e249c27563278ceb2aa858e2648fdaab",
     ".gitignore": "a8310700b84bec5ae67c7e698127aa63f1b7bb6c6994e5fb940cd0f01c8b3f34",
     "README.md": "466b9f906255391591540ca8fd9f9b546b8937fb29fb25303afd6f83e3e0bfe3",
     "SECURITY.md": "7a4fb0c27f884cedb7a1fcc8e8d4e2878f1a9c3da10f4535ac167109e691d635",

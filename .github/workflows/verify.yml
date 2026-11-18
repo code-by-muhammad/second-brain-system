@@ -198,8 +198,27 @@ jobs:
           # refuses its user manager. Install and assistant wiring are still exercised there.
           service=""; if [ "$RUNNER_OS" = Linux ]; then service="--no-service"; fi
           if [ '${{ matrix.scenario }}' = upgrade ]; then
-            SECOND_BRAIN_REF=v0.2.11 SECOND_BRAIN_COMMIT=f162d670b9e29b46215a7542860a8a083fcdf7eb \
-              setup --yes --vault "$RUNNER_TEMP/second brain notes" --role capture --clients claude-code
+            if [ '${{ matrix.os }}' = macos-15-intel ]; then
+              # Seed the prior release with its documented retained interpreter option.
+              # The old wrapper requires global Homebrew links on this runner.
+              previous="$SECOND_BRAIN_ROOT/releases/v0.2.11"
+              notes="$RUNNER_TEMP/second brain notes"
+              git clone -q -c core.autocrlf=false --branch v0.2.11 --single-branch \
+                https://github.com/code-by-muhammad/second-brain-system.git "$previous"
+              test "$(git -C "$previous" rev-parse HEAD)" = f162d670b9e29b46215a7542860a8a083fcdf7eb
+              mkdir "$notes"
+              cp -R "$previous/starter/." "$notes/"
+              uv sync --locked --no-dev --project "$previous" --python "$(brew --prefix python@3.12)/bin/python3.12"
+              prior_python="$previous/.venv/bin/python"
+              "$prior_python" -I -B "$previous/install.py" --root "$SECOND_BRAIN_ROOT" --vault "$notes" \
+                --role capture --reuse-python "$prior_python" --download-model --install-service \
+                --configure-clients --client claude-code --include-hooks
+              "$prior_python" -B "$SECOND_BRAIN_ROOT/app/brain_cli.py" service start
+              "$prior_python" -B "$SECOND_BRAIN_ROOT/app/brain_cli.py" health | grep -q '"version": "0.2.11"'
+            else
+              SECOND_BRAIN_REF=v0.2.11 SECOND_BRAIN_COMMIT=f162d670b9e29b46215a7542860a8a083fcdf7eb \
+                setup --yes --vault "$RUNNER_TEMP/second brain notes" --role capture --clients claude-code
+            fi
             if [ "$SECOND_BRAIN_REF" != v0.2.12 ]; then
               # A pull request has no release tag. Bind this disposable checkout to the exact CI commit.
               release="$SECOND_BRAIN_ROOT/releases/v0.2.12"
