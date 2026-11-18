@@ -67,6 +67,13 @@ def main(owned=None):
                                 child=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_server.py')],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
                                 owned['server']=child
                                 _publish_owned(owned)
+                        # A finished maintenance pass is recorded first, so the repair that waited for it can start
+                        # in this same cycle.
+                        if maintenance is not None and maintenance.poll() is not None:
+                            owned['_maintenance_finished']=time.monotonic()
+                            owned.pop('maintenance',None)
+                            maintenance=None
+                            _publish_owned(owned)
                         if bootstrap is not None and bootstrap.poll() is not None:
                             owned['_index_finished']=time.monotonic()
                             owned.pop('bootstrap',None)
@@ -78,7 +85,7 @@ def main(owned=None):
                             # The repair and the maintenance pass take turns: each holds the maintenance lock, and
                             # the one that found it taken would only fail. A maintenance pass that is running or due
                             # goes first; the repair follows when it has finished.
-                            elif (maintenance is None or maintenance.poll() is not None) and not _maintenance_due(owned) and time.monotonic()-owned.get('_index_finished',float('-inf'))>=INDEX_RECONCILE_SECONDS:
+                            elif maintenance is None and not _maintenance_due(owned) and time.monotonic()-owned.get('_index_finished',float('-inf'))>=INDEX_RECONCILE_SECONDS:
                                 arguments=['--reconcile']
                             if arguments is not None:
                                 reconciling=owned['_reconciling']=arguments==['--reconcile']
@@ -95,11 +102,6 @@ def main(owned=None):
                                 else:
                                     owned['bootstrap']=bootstrap
                                     _publish_owned(owned)
-                        if maintenance is not None and maintenance.poll() is not None:
-                            owned['_maintenance_finished']=time.monotonic()
-                            owned.pop('maintenance',None)
-                            maintenance=None
-                            _publish_owned(owned)
                         if listening and maintenance is None and not reconciling and _maintenance_due(owned):
                             with (cfg.ROOT/'logs/service-upkeep.log').open('ab') as log:
                                 # The pass saves its whole result to maintenance-status.json. What it prints is that

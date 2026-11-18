@@ -188,7 +188,7 @@ def test_index_reconciliation_uses_completion_cadence_and_respects_hold(lifecycl
     upkeep, = h.named('brain_maintenance.py')
     assert not h.named(script)
     upkeep.returncode = 0
-    h.observe(2)  # One cycle records that the pass ended, the next starts the repair.
+    h.observe()  # The cycle that records the end of the pass also starts the repair.
     first, = h.named(script)
     assert first.arguments == ['--reconcile']
     assert h.registry()['bootstrap'] == first.pid
@@ -297,8 +297,7 @@ def test_repair_that_cannot_be_started_waits_an_interval_and_the_cycle_goes_on(l
     (h.state / 'index-bootstrap-status.json').write_text('{"status":"verified"}', encoding='utf-8')
     h.observe()
     upkeep, = h.named('brain_maintenance.py')
-    upkeep.returncode = 0
-    h.observe()  # Records that the pass ended; the repair is due in the next cycle.
+    upkeep.returncode = 0  # The next cycle records that the pass ended and tries to start the repair.
     spawn = supervisor.subprocess.Popen
     attempts = []
 
