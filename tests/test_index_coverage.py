@@ -361,5 +361,30 @@ def test_repair_that_outlives_its_budget_ends_its_process_and_says_so(brain, mon
     monkeypatch.setattr(threading, 'Timer', Timer)
     reconcile, attempted = _reconcile_with(monkeypatch, status={'eligible': 1, '_files': {'A.md'}})
     reconcile.main()
-    assert started == [(reconcile.REPAIR_SECONDS + reconcile.EXIT_GRACE_SECONDS, reconcile._deadline_exit), 'started']
+    assert started == [(reconcile.PASS_SECONDS, reconcile._deadline_exit), 'started']
     assert cancelled == [True] and len(attempted) == 1
+    # It is armed before the first scan, so a scan that never returns cannot keep the locks either.
+    started.clear();cancelled.clear();order = []
+    import brain_index as index
+    scan = index.status
+    monkeypatch.setattr(index, 'status', lambda **kwargs: (order.append(list(started)), scan(**kwargs))[1])
+    reconcile.main()
+    assert order[0] == [(reconcile.PASS_SECONDS, reconcile._deadline_exit), 'started'] and cancelled == [True]
+
+
+def test_repair_keeps_an_upstream_exit_message_out_of_the_log_and_bounds_its_own_scan(brain, monkeypatch, capfd):
+    reconcile, attempted = _reconcile_with(monkeypatch, status={'eligible': 1, '_files': {'A.md'}})
+
+    async def refused(plan, counts, cursors, eligible, manifest):
+        raise SystemExit('1 validation error: cloud_api_key input_value=synthetic-secret-value')
+
+    monkeypatch.setattr(reconcile, '_bounded_repair', refused)
+    reconcile.main()  # Does not end the process.
+    report = json.loads((cfg.STATE / reconcile.RECEIPT).read_text())
+    printed = capfd.readouterr()
+    assert report['repair_error_type'] == 'SystemExit' and 'synthetic-secret-value' not in json.dumps(report) + printed.out + printed.err
+    clock = [100.]
+    monkeypatch.setattr(reconcile.time, 'monotonic', lambda: clock[0])
+    check = reconcile._scan_limit()
+    check();clock[0] += reconcile.index.MAX_STATUS_SECONDS
+    with pytest.raises(reconcile.index.IndexAttention, match='reconcile_scan_time_limit'):check()

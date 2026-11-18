@@ -19,6 +19,9 @@ REPAIR_SECONDS = 240
 # Cancelling the repair cannot stop model work already handed to a thread, and the process would wait for it
 # while holding the index lock. Past this grace the process ends itself; SQLite rolls an open write back.
 EXIT_GRACE_SECONDS = 60
+# One pass is two coverage scans, one inventory and the repair. The scans carry their own limit; this is
+# the sum, after which the process ends itself whatever it is waiting on, so its locks cannot stay held.
+PASS_SECONDS = 3 * index.MAX_STATUS_SECONDS + REPAIR_SECONDS + EXIT_GRACE_SECONDS
 RECEIPT = 'index-reconcile-status.json'
 
 
@@ -120,7 +123,7 @@ async def _repair(plan, counts, cursors, eligible, manifest):
 
         # Notes that changed while this ran are left to the next pass: no vectors are built from a scan
         # that no longer describes the folder.
-        if index.inventory()[1] != manifest:
+        if index.inventory(_scan_limit())[1] != manifest:
             counts['inventory_changed'] = 1
             return
         selected_vectors = list(_batch(vector_ids, cursors, 'vectors'))
@@ -140,13 +143,24 @@ async def _bounded_repair(plan, counts, cursors, eligible, manifest):
         await _repair(plan, counts, cursors, eligible, manifest)
 
 
+def _scan_limit():
+    """A check for one folder scan: it raises once the scan has run as long as a coverage scan may."""
+    deadline = time.monotonic() + index.MAX_STATUS_SECONDS
+
+    def check():
+        if time.monotonic() >= deadline:
+            raise index.IndexAttention('reconcile_scan_time_limit')
+    return check
+
+
 def _deadline_exit():
-    # Reached only when the repair is still running past its budget and grace. The receipt says so, the
-    # process ends at once, and the operating system releases the locks it held.
+    # Reached only when a pass is still running past everything it may take: a scan that does not return, or a
+    # repair past its budget and grace. The receipt says so, the process ends at once, and the operating
+    # system releases the locks it held.
     try:
         _save({'status': 'needs review', 'checked_at': None, 'reason': 'repair_deadline', 'counts': {},
                'repair_error_type': 'RepairDeadline', 'cursors': _previous_cursors(),
-               'elapsed_seconds': REPAIR_SECONDS + EXIT_GRACE_SECONDS})
+               'elapsed_seconds': PASS_SECONDS})
     finally:
         os._exit(75)
 
@@ -184,35 +198,38 @@ def main():
         with lock, FileLock(str(cfg.STATE / 'maintenance.lock'), timeout=0):
             cfg.write_admission()
             started = time.monotonic()
-            plan = index.RepairPlan()
-            current = index.status(repair=plan)
-            cursors = _previous_cursors()
-            counts = dict(refreshed=0, removed=0, file_failures=0, vector_passes=0, vector_failures=0, inventory_changed=0)
-            error = None
-            # An empty inventory is never repaired: a notes folder that is unavailable looks the same, and
-            # removing every entry on that evidence would cost a whole rebuild.
-            if current.get('inventory_stable') and current['coverage']['eligible'] and (plan.files or plan.removed or plan.vectors):
-                import threading
-                watchdog = threading.Timer(REPAIR_SECONDS + EXIT_GRACE_SECONDS, _deadline_exit)
-                watchdog.daemon = True
-                try:
-                    cfg.require_local_search_runtime()
-                    os.environ['LOGFIRE_IGNORE_NO_CONFIG'] = '1'
-                    from loguru import logger
-                    logger.disable('basic_memory')
-                    eligible, manifest = index.inventory()
-                    # The plan was made from one scan; it is only acted on while the folder still matches it.
-                    if manifest != current['coverage'].get('manifest_sha256'):
-                        counts['inventory_changed'] = 1
-                    else:
-                        watchdog.start()
-                        asyncio.run(_bounded_repair(plan, counts, cursors, frozenset(eligible), manifest))
-                except Exception as exc:
-                    # Only controlled classifications reach the service receipt.
-                    error = type(exc).__name__
-                finally:
-                    watchdog.cancel()
-                current = index.status()
+            # Armed before the first scan and for the whole pass: nothing in it may keep the locks for longer.
+            import threading
+            watchdog = threading.Timer(PASS_SECONDS, _deadline_exit)
+            watchdog.daemon = True
+            watchdog.start()
+            try:
+                plan = index.RepairPlan()
+                current = index.status(repair=plan)
+                cursors = _previous_cursors()
+                counts = dict(refreshed=0, removed=0, file_failures=0, vector_passes=0, vector_failures=0, inventory_changed=0)
+                error = None
+                # An empty inventory is never repaired: a notes folder that is unavailable looks the same, and
+                # removing every entry on that evidence would cost a whole rebuild.
+                if current.get('inventory_stable') and current['coverage']['eligible'] and (plan.files or plan.removed or plan.vectors):
+                    try:
+                        cfg.require_local_search_runtime()
+                        os.environ['LOGFIRE_IGNORE_NO_CONFIG'] = '1'
+                        from loguru import logger
+                        logger.disable('basic_memory')
+                        eligible, manifest = index.inventory(_scan_limit())
+                        # The plan was made from one scan; it is only acted on while the folder still matches it.
+                        if manifest != current['coverage'].get('manifest_sha256'):
+                            counts['inventory_changed'] = 1
+                        else:
+                            asyncio.run(_bounded_repair(plan, counts, cursors, frozenset(eligible), manifest))
+                    except (Exception, SystemExit) as exc:
+                        # Only the kind of failure reaches the receipt. The upstream configuration loader ends with
+                        # SystemExit and a message that can quote the configuration; that message is not passed on.
+                        error = type(exc).__name__
+                    current = index.status()
+            finally:
+                watchdog.cancel()
             _save({
                 'status': current['status'], 'checked_at': current['checked_at'],
                 'reason': current['reason'], 'counts': counts, 'repair_error_type': error,
