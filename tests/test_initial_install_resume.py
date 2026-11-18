@@ -24,7 +24,7 @@ def initial(tmp_path, monkeypatch):
     return module,root,vault,run
 
 
-@pytest.mark.parametrize('boundary',['device.json','state/access.json','wiki-owner'])
+@pytest.mark.parametrize('boundary',['device.json','state/access.json','wiki-owner','before-complete'])
 def test_setup_command_resumes_the_interrupted_install(initial,monkeypatch,boundary):
     installer,root,vault,run=initial
     source=installer.REPO
@@ -36,7 +36,10 @@ def test_setup_command_resumes_the_interrupted_install(initial,monkeypatch,bound
     atomic=installer.atomic
 
     control=vault/'02-Areas/AI-Memory/Wiki/Control.md'
+    journal=root/'state/install-transaction.json'
     def interrupted(path,*args,**kwargs):
+        if boundary=='before-complete' and Path(path)==journal and json.loads(args[0])['stage']=='complete':
+            raise OSError('Synthetic interruption')
         if Path(path)==(control if boundary=='wiki-owner' else root/boundary):raise OSError('Synthetic interruption')
         return atomic(path,*args,**kwargs)
 
@@ -44,7 +47,6 @@ def test_setup_command_resumes_the_interrupted_install(initial,monkeypatch,bound
     with pytest.raises(OSError,match='Synthetic interruption'):
         run('--timezone','UTC','--role','maintainer','--initialize-wiki-owner')
     monkeypatch.setattr(installer,'atomic',atomic)
-    journal=root/'state/install-transaction.json'
     before=json.loads(journal.read_text())
 
     # Use the interpreter already running this fixture in place of its own retained venv.
@@ -73,6 +75,18 @@ def test_setup_command_resumes_the_interrupted_install(initial,monkeypatch,bound
     assert json.loads((root/'device.json').read_text())==expected
     assert (root/'state/access.json').read_text()==before['writes']['state/access.json']
     assert 'maintainer_device_id: '+expected['device_id'] in control.read_text()
+
+
+def test_initial_wiki_ownership_preserves_a_competing_owner(initial):
+    _,root,vault,run=initial
+    control=vault/'02-Areas/AI-Memory/Wiki/Control.md'
+    control.parent.mkdir(parents=True)
+    control.write_bytes(b'---\nmaintainer_device_id: other-device\n---\n')
+    before=control.read_bytes()
+    with pytest.raises(ValueError,match='notes do not confirm this device'):
+        run('--role','maintainer','--initialize-wiki-owner')
+    assert control.read_bytes()==before
+    assert json.loads((root/'state/install-transaction.json').read_text())['stage']!='complete'
 
 
 @pytest.mark.parametrize('boundary',['device.json','state/client-access.json','state/access.json','state/config.json','state/.bmignore'])

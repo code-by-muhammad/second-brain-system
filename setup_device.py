@@ -86,23 +86,21 @@ def own_the_notes(vault,device_id,*,write=None):
         raise SystemExit(CONTROL+' appeared while this was running. Another device may own these notes; check it before starting the service.') from None
 
 
-def owned_by_another(control,device_id):
-    if not control.exists():return False
-    # A new claim needs an absent control file or the same recorded owner.
+def owns_notes(control,device_id):
     try:
         with control.open('rb') as stream:raw=stream.read(2_000_001)
         text=raw.decode('utf-8').replace('\r\n','\n').replace('\r','\n')
-    except (OSError,UnicodeError):return True
-    if len(raw)>2_000_000:return True
+    except (OSError,UnicodeError):return False
+    if len(raw)>2_000_000:return False
     owner=re.search(r'(?m)^maintainer_device_id: ([a-z0-9-]+)$',text)
-    return owner is None or owner.group(1)!=device_id
+    return owner is not None and owner.group(1)==device_id
 
 
 def make_maintainer(device,root,vault,service):
     """Turn an installed capture device into the one maintainer of notes that have none yet."""
     control=control_path(vault);existed=control.exists()
     refusal='These notes already name another device as maintainer in '+CONTROL+'. Only one device may be; nothing was changed.'
-    if owned_by_another(control,device['device_id']):raise SystemExit(refusal)
+    if existed and not owns_notes(control,device['device_id']):raise SystemExit(refusal)
     if (root/'state/service-transaction.json').exists():raise SystemExit('An update is in progress on this device; nothing was changed.')
     record=json.loads((root/'device.json').read_text(encoding='utf-8-sig'))
     if record.get('device_id')!=device['device_id'] or record.get('role')!='capture':raise SystemExit('The device record is not a capture device; nothing was changed.')
@@ -121,8 +119,8 @@ def make_maintainer(device,root,vault,service):
             if result.returncode:
                 raise SystemExit('The service could not be stopped cleanly: '+((result.stderr or '').strip().splitlines() or [''])[-1][:300]+'\nThe role was not changed.')
         # Another device may have claimed the notes while the service was stopping.
-        if owned_by_another(control,device['device_id']):raise SystemExit(refusal)
         if not control.exists():own_the_notes(vault,device['device_id'])
+        elif not owns_notes(control,device['device_id']):raise SystemExit(refusal)
         write(root/'device.json',json.dumps({**record,'role':'maintainer'},indent=2)+'\n')
     except BaseException:
         # Leave one consistent device. If the record was already replaced the change is complete and stays;
@@ -133,7 +131,7 @@ def make_maintainer(device,root,vault,service):
             except (OSError,ValueError):switched=False
             # Only a note that was not there before and names this device is withdrawn; one that another
             # device has put there since stays.
-            if not existed and not switched and not owned_by_another():control.unlink(missing_ok=True)
+            if not existed and not switched and owns_notes(control,device['device_id']):control.unlink(missing_ok=True)
         finally:
             if service:
                 say('The service was started again.' if brain(device,'service','start',capture=True).returncode==0
@@ -345,6 +343,8 @@ def main():
             # Two maintainers on one set of notes would both link captures; only the first device is one.
             role=ask('Role: maintainer for the first device using these notes, capture for every additional device',role,args.yes)
             if role not in ('capture','maintainer'):parser.error('Role must be capture or maintainer.')
+        if role=='maintainer' and control_path(vault).exists():
+            parser.error('These notes already have a maintainer record. Choose capture for this new device.')
         uv=shutil.which('uv')
         if not uv:raise SystemExit('uv is required. Install it from https://docs.astral.sh/uv/ and run this again.')
         say('New device.\n  Runtime: '+str(root)+'\n  Notes:   '+str(vault)+(' (new, from the blank starter)' if created else ' (existing folder, used as it is)')

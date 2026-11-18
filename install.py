@@ -488,9 +488,9 @@ def _run_fresh(root,python,vault,args,client_value,finish):
             wizard=runpy.run_path(str(REPO/'setup_device.py'))
             device_id=json.loads(value['writes']['device.json'])['device_id']
             control=wizard['control_path'](vault)
-            if wizard['owned_by_another'](control,device_id):
-                raise ValueError('These notes already name another maintainer. Initial setup remains incomplete.')
             if not control.exists():wizard['own_the_notes'](vault,device_id,write=atomic)
+            if not wizard['owns_notes'](control,device_id):
+                raise ValueError('The notes do not confirm this device as maintainer. Initial setup remains incomplete.')
         value['stage']='complete'
         value['artifact_sha256']={name:hashlib.sha256(text.encode()).hexdigest() for name,text in value.pop('writes').items()}
         value.pop('client_plan',None)
