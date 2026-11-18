@@ -32,6 +32,6 @@ The setup matrix covers fresh and repeated setup, adding a client to a partial c
   - Its embedding library creates its model cache folder under the runtime (`models`) if that folder is missing.
   Second Brain writes its configuration with one project and no legacy key, and installs the model cache; these cases need a `state` folder that was edited by hand or by another program.
 - **After a deadline exit the receipt is the only record;** the pass that was cut off repeats its batch at the next turn.
-- **At service start the repair waits for the first maintenance pass,** so a device whose index needs repair is repaired a few minutes later than in the v0.2.12 candidate.
+- **When a maintenance pass is due as the service starts, the repair waits for it,** so a device whose index needs repair is repaired a few minutes later than in the v0.2.12 candidate. Maintenance is first due, as before, once the computer has been up for 15 minutes; a service that starts earlier than that runs the repair first and the maintenance pass after it.
 
 Use the [setup guide](SETUP-GUIDE.md) for commands. Qualification applies to the tested commit and platform. Owner-device acceptance, fresh named assistant sessions and reboot checks have separate receipts.

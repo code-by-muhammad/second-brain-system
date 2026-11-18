@@ -27,6 +27,8 @@ def _bootstrap_admitted():
         return False
 
 def _maintenance_due(owned):
+    # Unchanged rule: with no pass recorded yet this compares against the monotonic clock itself, so the
+    # first pass is due once the computer has been up for fifteen minutes.
     return time.monotonic()-owned.get('_maintenance_finished',0)>900
 
 
