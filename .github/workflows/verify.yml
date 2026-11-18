@@ -158,14 +158,18 @@ jobs:
           if-no-files-found: error
           retention-days: 30
   fresh-setup:
-    name: One-command fresh setup (${{ matrix.os }})
+    name: One-command ${{ matrix.scenario }} setup (${{ matrix.os }})
     # Runs the bootstrap script against this exact commit on a disposable machine: download,
     # release check, install, service start, assistant wiring and the acceptance check.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, macos-15, ubuntu-24.04]
+        os: [windows-2025, macos-15, macos-15-intel, ubuntu-24.04]
+        scenario: [fresh, upgrade]
+        exclude:
+          - os: ubuntu-24.04
+            scenario: upgrade
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     env:
@@ -184,26 +188,68 @@ jobs:
         shell: bash
         run: |
           export SECOND_BRAIN_ROOT="$RUNNER_TEMP/second-brain-runtime"
+          setup() { sh bootstrap/setup.sh "$@"; }
           # The Mac prerequisite from the setup guide.
-          if [ "$RUNNER_OS" = macOS ]; then brew list python@3.12 >/dev/null 2>&1 || brew install python@3.12; fi
+          if [ "$RUNNER_OS" = macOS ]; then
+            brew list python@3.12 >/dev/null 2>&1 || brew install --skip-link python@3.12
+            export PATH="$(brew --prefix python@3.12)/bin:$PATH"
+          fi
           # This Linux runner has no desktop login session, and the unchanged Linux service code
           # refuses its user manager. Install and assistant wiring are still exercised there.
           service=""; if [ "$RUNNER_OS" = Linux ]; then service="--no-service"; fi
-          sh bootstrap/setup.sh --yes --vault "$RUNNER_TEMP/second brain notes" --role capture --clients claude-code,codex $service
+          if [ '${{ matrix.scenario }}' = upgrade ]; then
+            if [ '${{ matrix.os }}' = macos-15-intel ]; then
+              # Seed the prior release with its documented retained interpreter option.
+              # The old wrapper requires global Homebrew links on this runner.
+              previous="$SECOND_BRAIN_ROOT/releases/v0.2.11"
+              notes="$RUNNER_TEMP/second brain notes"
+              git clone -q -c core.autocrlf=false --branch v0.2.11 --single-branch \
+                https://github.com/code-by-muhammad/second-brain-system.git "$previous"
+              test "$(git -C "$previous" rev-parse HEAD)" = f162d670b9e29b46215a7542860a8a083fcdf7eb
+              mkdir "$notes"
+              cp -R "$previous/starter/." "$notes/"
+              uv sync --locked --no-dev --project "$previous" --python "$(brew --prefix python@3.12)/bin/python3.12"
+              prior_python="$previous/.venv/bin/python"
+              "$prior_python" -I -B "$previous/install.py" --root "$SECOND_BRAIN_ROOT" --vault "$notes" \
+                --role capture --reuse-python "$prior_python" --download-model --install-service \
+                --configure-clients --client claude-code --include-hooks
+              "$prior_python" -B "$SECOND_BRAIN_ROOT/app/brain_cli.py" service start
+              "$prior_python" -B "$SECOND_BRAIN_ROOT/app/brain_cli.py" health | grep -q '"version": "0.2.11"'
+            else
+              SECOND_BRAIN_REF=v0.2.11 SECOND_BRAIN_COMMIT=f162d670b9e29b46215a7542860a8a083fcdf7eb \
+                setup --yes --vault "$RUNNER_TEMP/second brain notes" --role capture --clients claude-code
+            fi
+            if [ "$SECOND_BRAIN_REF" != v0.2.13 ]; then
+              # A pull request has no release tag. Bind this disposable checkout to the exact CI commit.
+              release="$SECOND_BRAIN_ROOT/releases/v0.2.13"
+              git clone -q -c core.autocrlf=false --branch "$SECOND_BRAIN_REF" --single-branch \
+                https://github.com/code-by-muhammad/second-brain-system.git "$release"
+              test "$(git -C "$release" rev-parse HEAD)" = "$SECOND_BRAIN_COMMIT"
+              git -C "$release" tag v0.2.13 "$SECOND_BRAIN_COMMIT"
+              setup() { uv run --no-project --python 3.12 python -I -B "$release/setup_device.py" --root "$SECOND_BRAIN_ROOT" "$@"; }
+            fi
+            setup --yes --clients claude-code,codex | tee "$RUNNER_TEMP/upgrade.txt"
+            grep -q 'PASS   installed version: 0.2.13' "$RUNNER_TEMP/upgrade.txt"
+          else
+            setup --yes --vault "$RUNNER_TEMP/second brain notes" --role capture --clients claude-code $service
+          fi
           # A single device that was installed as capture becomes the maintainer, with the service stopped and started around it.
-          sh bootstrap/setup.sh --yes --role maintainer --clients claude-code,codex $service | tee "$RUNNER_TEMP/role.txt"
+          setup --yes --role maintainer --clients claude-code,codex $service | tee "$RUNNER_TEMP/role.txt"
           grep -q "role maintainer" "$RUNNER_TEMP/role.txt"
           # A finished device must stay finished.
-          sh bootstrap/setup.sh --yes --clients claude-code,codex $service
+          setup --yes --clients claude-code,codex $service
           # The first index of the starter notes must verify by itself.
           if [ -z "$service" ]; then
             for attempt in $(seq 1 30); do
-              result=$(sh bootstrap/setup.sh --check --clients claude-code,codex) || true
+              result=$(setup --check --clients claude-code,codex) || true
               if echo "$result" | grep -q "PASS   search index: verified"; then break; fi
               sleep 10
             done
             echo "$result" | grep "search index"
             echo "$result" | grep -q "PASS   search index: verified"
+            uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py
+            setup --check --selftest --clients claude-code,codex | tee "$RUNNER_TEMP/selftest.txt"
+            test "$(grep -c '^PASS   self-test ' "$RUNNER_TEMP/selftest.txt")" -eq 6
           fi
       - name: Set up a new device with one command, then run it again (Windows PowerShell 5.1)
         if: runner.os == 'Windows'
@@ -211,24 +257,64 @@ jobs:
         run: |
           $env:SECOND_BRAIN_ROOT = Join-Path $env:RUNNER_TEMP 'second-brain-runtime'
           $notes = Join-Path $env:RUNNER_TEMP 'second brain notes'
-          powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 --yes --vault $notes --role capture --clients 'claude-code,codex'
+          function Invoke-Setup {
+            if ($release) {
+              & uv run --no-project --python 3.12 python -I -B (Join-Path $release 'setup_device.py') --root $env:SECOND_BRAIN_ROOT @args
+            } else {
+              powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 @args
+            }
+          }
+          if ('${{ matrix.scenario }}' -eq 'upgrade') {
+            $candidateRef = $env:SECOND_BRAIN_REF
+            $candidateCommit = $env:SECOND_BRAIN_COMMIT
+            try {
+              $env:SECOND_BRAIN_REF = 'v0.2.11'
+              $env:SECOND_BRAIN_COMMIT = 'f162d670b9e29b46215a7542860a8a083fcdf7eb'
+              Invoke-Setup --yes --vault $notes --role capture --clients 'claude-code'
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            } finally {
+              $env:SECOND_BRAIN_REF = $candidateRef
+              $env:SECOND_BRAIN_COMMIT = $candidateCommit
+            }
+            if ($candidateRef -ne 'v0.2.13') {
+              $release = Join-Path $env:SECOND_BRAIN_ROOT 'releases/v0.2.13'
+              git clone -q -c core.autocrlf=false --branch $candidateRef --single-branch https://github.com/code-by-muhammad/second-brain-system.git $release
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $head = git -C $release rev-parse HEAD
+              if ($LASTEXITCODE -ne 0 -or $head -ne $candidateCommit) { exit 1 }
+              git -C $release tag v0.2.13 $candidateCommit
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+            $upgraded = Invoke-Setup --yes --clients 'claude-code,codex'
+            $upgradeExit = $LASTEXITCODE
+            $upgraded
+            if ($upgradeExit -ne 0 -or -not ($upgraded -match 'PASS   installed version: 0.2.13')) { exit 1 }
+          } else {
+            Invoke-Setup --yes --vault $notes --role capture --clients 'claude-code'
+          }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # A single device that was installed as capture becomes the maintainer, with the service stopped and started around it.
-          $role = powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 --yes --role maintainer --clients 'claude-code,codex'
+          $role = Invoke-Setup --yes --role maintainer --clients 'claude-code,codex'
           if ($LASTEXITCODE -ne 0) { $role; exit $LASTEXITCODE }
           $role
           if (-not ($role -match 'role maintainer')) { exit 1 }
-          powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 --yes --clients 'claude-code,codex'
+          Invoke-Setup --yes --clients 'claude-code,codex'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # The first index of the starter notes must verify by itself.
           $verified = $false
           foreach ($attempt in 1..30) {
-            $result = powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 --check --clients 'claude-code,codex'
+            $result = Invoke-Setup --check --clients 'claude-code,codex'
             if ($result -match 'PASS   search index: verified') { $verified = $true; break }
             Start-Sleep -Seconds 10
           }
           $result | Select-String 'search index'
           if (-not $verified) { exit 1 }
+          & uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $result = Invoke-Setup --check --selftest --clients 'claude-code,codex'
+          $selftestExit = $LASTEXITCODE
+          $result
+          if ($selftestExit -ne 0 -or @($result -match '^PASS   self-test ').Count -ne 6) { exit 1 }
       - name: Show service logs when a step failed (synthetic device only)
         if: failure()
         shell: bash

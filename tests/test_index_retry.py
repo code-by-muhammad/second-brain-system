@@ -1,5 +1,6 @@
 from contextlib import closing
 import json
+import sqlite3
 import subprocess
 from types import SimpleNamespace
 import pytest
@@ -189,13 +190,58 @@ def test_one_large_note_stays_one_defect_while_its_chunks_grow(brain,monkeypatch
     assert len(seen)==7 and result['status']=='verified'
 
 
-def test_retry_stops_when_more_passes_do_not_help(brain,monkeypatch):
+@pytest.mark.parametrize('retry,full',[(False,False),(True,False),(True,True)],ids=['initial','manual','full'])
+def test_fast_first_shard_counts_as_durable_progress(brain,monkeypatch,retry,full):
+    from basic_memory.repository.semantic_vector_sync import OVERSIZED_ENTITY_VECTOR_SHARD_SIZE
+
+    config()
+    shard_size=OVERSIZED_ENTITY_VECTOR_SHARD_SIZE
+    db_path=cfg.STATE/'memory.db'
+    with closing(database()) as connection:
+        target=add_note(connection,1,'01-Projects/Source.md','word ' * 100_000)
+        source=target.read_bytes()
+        rows=connection.execute('SELECT * FROM search_vector_chunks ORDER BY id').fetchall()
+        pending=rows if full else rows[1:]
+        assert 2*shard_size<len(pending)<=3*shard_size
+        retained=rows[shard_size][0] if full else rows[0][0]
+        connection.execute('DELETE FROM search_vector_chunks WHERE id>?',(retained,))
+        connection.execute('DELETE FROM search_vector_embeddings_rowids WHERE rowid>?',(retained,))
+        connection.execute('DELETE FROM search_vector_embeddings_auxiliary WHERE rowid>?',(retained,))
+        connection.commit()
+    assert bootstrap.index.status()['vectors']['invalid']==1
+
+    commands=[]
+    def run(command,log,overall,tick,cleanup):
+        start=len(commands)*shard_size
+        commands.append(command[4:])
+        with closing(sqlite3.connect(db_path)) as connection:
+            if '--full' in command:
+                connection.execute('DELETE FROM search_vector_chunks')
+                connection.execute('DELETE FROM search_vector_embeddings_rowids')
+                connection.execute('DELETE FROM search_vector_embeddings_auxiliary')
+            for row in pending[start:start+shard_size]:
+                connection.execute('INSERT INTO search_vector_chunks VALUES(?,?,?,?,?,?,?,?,?,?)',row)
+                connection.execute('INSERT INTO search_vector_embeddings_rowids(rowid) VALUES(?)',(row[0],))
+                connection.execute('INSERT INTO search_vector_embeddings_auxiliary VALUES(?,?)',(row[0],row[5]))
+            connection.commit()
+        # The child can commit and exit before two progress samples are taken.
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(bootstrap,'_run_reindex',run)
+    result=bootstrap.main(retry=retry,full=full,overall_seconds=20,stall_seconds=5)
+    assert result['status']=='verified'
+    assert commands==[['--full'] if full else [],[],[]]
+    assert target.read_bytes()==source
+
+
+@pytest.mark.parametrize('full',[False,True],ids=['plain','full'])
+def test_retry_stops_when_more_passes_do_not_help(brain,monkeypatch,full):
     ready()
     seen=[]
-    _moving_runner(seen,monkeypatch,embedding=False)
+    _moving_runner(seen,monkeypatch,embedding=False,observed=not full)
     monkeypatch.setattr(bootstrap.index,'status',lambda deadline=None:_coverage('needs review',invalid=4))
-    result=bootstrap.main(overall_seconds=20,stall_seconds=5)
-    assert seen==[[],[]] and result['status']=='needs review'  # Two passes without measured gain end the run.
+    result=bootstrap.main(full=full,overall_seconds=20,stall_seconds=5)
+    assert seen==[['--full'] if full else [],[]] and result['status']=='needs review'
 
 
 def test_search_rows_lost_to_a_lock_are_rebuilt_once_then_embedded(brain,monkeypatch):

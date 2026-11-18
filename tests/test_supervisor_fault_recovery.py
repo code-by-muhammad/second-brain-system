@@ -67,6 +67,7 @@ def test_actual_supervisor_recovery_keeps_owned_children(brain, monkeypatch, lab
             assert kwargs['env'] == {}
             self.pid = 1001 + len(processes)
             self.name = name
+            self.arguments = command[2:]
             processes.append(self)
 
         def poll(self):
@@ -107,11 +108,11 @@ def test_actual_supervisor_recovery_keeps_owned_children(brain, monkeypatch, lab
         runpy.run_path(supervisor.__file__, run_name='__main__')
 
     terminal = label in ('verified-control', 'review-control', 'attention-control')
-    expected = ['brain_server.py'] + ([] if terminal else ['brain_index_bootstrap.py'])
-    assert [process.name for process in processes] == expected
+    assert [process.name for process in processes] == ['brain_server.py', 'brain_index_bootstrap.py']
+    assert processes[1].arguments == (['--reconcile'] if terminal else [])
     registry = json.loads((state / 'service-pids.json').read_text(encoding='utf-8'))
     assert registry['server'] == processes[0].pid
-    assert registry['bootstrap'] == (None if terminal else processes[1].pid)
+    assert registry['bootstrap'] == processes[1].pid
     assert (progress.read_bytes() if progress.exists() else None) == original
     assert failures == ([fault] if fault else [])
     # Ownership now requires publishing this supervisor before looking at a

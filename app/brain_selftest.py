@@ -5,6 +5,7 @@ The milestone has a fixed identity and text per device, so repeating the test ne
 No assistant program and no remote model is called; the search step uses the device's own local embedding
 model, as every search does."""
 import asyncio
+from tempfile import TemporaryFile
 import brain_settings as cfg
 
 TITLE='Second Brain self-test'
@@ -18,13 +19,14 @@ def milestone():
             'source_app':'second-brain-selftest','source_reference':'brain_cli.py selftest on device '+cfg.DEVICE_ID}
 
 
-async def _steps(add):
+async def _steps(add, adapter_stderr):
     from fastmcp import Client
     from fastmcp.client.transports import StdioTransport
     from brain_client import REQUIRED
     # Exactly what an assistant's connection entry runs: the recorded Python and the adapter, nothing else.
-    transport=StdioTransport(command=str(cfg.PYTHON),args=[str(cfg.ROOT/'app/brain_client.py')],keep_alive=False)
-    async with Client(transport,timeout=180) as client:
+    transport=StdioTransport(command=str(cfg.PYTHON),args=[str(cfg.ROOT/'app/brain_client.py')],
+                             keep_alive=False,log_file=adapter_stderr)
+    async with Client(transport,timeout=180,init_timeout=65) as client:
         async def step(name,work):
             try:add(*await work(),name=name);return True
             except Exception as error:
@@ -66,12 +68,24 @@ async def _steps(add):
 def run():
     rows=[]
     def add(ok,detail,*,name):rows.append({'status':'PASS' if ok else 'FAIL','check':'self-test '+name,'detail':str(detail)[:300]})
-    try:asyncio.run(_steps(add))
-    except Exception as error:
-        # Every step that got no result is reported with the reason, so the report always has all six.
-        reason='not run: '+type(error).__name__+': '+str(error)
-        done={row['check'] for row in rows}
-        for name in STEPS:
-            if 'self-test '+name not in done:add(False,reason,name=name)
+    with TemporaryFile(mode='w+',encoding='utf-8',errors='replace') as adapter_stderr:
+        try:
+            # Basic Memory's migration dependency can patch asyncio.run to reuse the ambient loop.
+            with asyncio.Runner() as runner:
+                runner.run(_steps(add,adapter_stderr))
+        except Exception as error:
+            # Classify known startup failures without copying arbitrary child stderr into the report.
+            adapter_stderr.seek(0)
+            lines=adapter_stderr.read(65536).splitlines()
+            if any(line.startswith('brain_process.OwnershipError:') for line in lines):
+                detail=' (adapter could not verify the local service; run brain_cli.py service inspect)'
+            elif any(line.startswith('RuntimeError: Authenticated Second Brain tools are not ready;') for line in lines):
+                detail=' (the local service did not expose the authenticated tools in time)'
+            else:
+                detail=''
+            reason='not run: '+type(error).__name__+': '+str(error)+detail
+            done={row['check'] for row in rows}
+            for name in STEPS:
+                if 'self-test '+name not in done:add(False,reason,name=name)
     failed=sum(row['status']=='FAIL' for row in rows)
     return {'status':'failed' if failed else 'passed','failed':failed,'checks':rows}

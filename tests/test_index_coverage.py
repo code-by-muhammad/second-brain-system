@@ -153,6 +153,58 @@ def test_current_entity_checksum_cannot_hide_stale_search_body(brain):
     assert result['vectors']['stale_search_sources']==1
 
 
+def test_stable_coverage_selects_only_affected_index_entries(brain, monkeypatch):
+    import brain_index as index
+    config()
+    with closing(database()) as connection:
+        stale = add_note(connection, 1, 'Stale.md')
+        stale.write_bytes(b'New bytes.')
+        full_text = add_note(connection, 2, 'Stale full text.md')
+        full_text.write_bytes(b'Current bytes.')
+        connection.execute('UPDATE entity SET checksum=? WHERE id=2', (hashlib.sha256(full_text.read_bytes()).hexdigest(),))
+        add_note(connection, 3, 'Vectors.md')
+        connection.execute("UPDATE search_vector_chunks SET embedding_status='pending' WHERE entity_id=3")
+        add_note(connection, 4, 'Removed.md').unlink()
+        add_note(connection, 5, 'Current.md')
+        connection.commit()
+    (cfg.VAULT / 'New.md').write_bytes(b'New source.')
+    plan = index.RepairPlan()
+    result = index.status(repair=plan)
+    assert result['status'] == 'needs review' and result['inventory_stable']
+    assert plan.files == {'Stale.md', 'Stale full text.md', 'New.md'}
+    assert plan.vectors == {3}
+    assert plan.removed == {'Removed.md'}
+    current = index.status()
+    assert {key: value for key, value in result.items() if key != 'checked_at'} == {
+        key: value for key, value in current.items() if key != 'checked_at'
+    }
+    inventory = index.inventory
+
+    def change_after_snapshot(check, scope_counts=None):
+        if scope_counts is None:
+            (cfg.VAULT / 'New.md').write_bytes(b'Changed while verifying.')
+        return inventory(check, scope_counts)
+
+    monkeypatch.setattr(index, 'inventory', change_after_snapshot)
+    assert index.status(repair=plan)['inventory_stable'] is False
+    assert plan == index.RepairPlan()
+
+
+def test_persistent_repair_candidates_do_not_starve_later_entries(brain, monkeypatch):
+    import brain_index_reconcile as reconcile
+    monkeypatch.setattr(reconcile, 'BATCH_FILES', 2)
+    candidates = {'A.md', 'B.md', 'C.md', 'D.md', 'E.md'}
+    cursors = {}
+    first = reconcile._batch(candidates, cursors, 'files')
+    reconcile._save({'cursors': cursors})
+    cursors = reconcile._previous_cursors()
+    second = reconcile._batch(candidates, cursors, 'files')
+    third = reconcile._batch(candidates, cursors, 'files')
+    assert [len(first), len(second), len(third)] == [2, 2, 1]
+    assert set(first + second + third) == candidates
+    assert reconcile._batch(candidates, cursors, 'files') == first
+
+
 @pytest.mark.parametrize('raw,stored',[
     (b'# Source\n\nPayload.\n','# Source\r\n\r\nPayload.\r\n'),
     (b'# Source\r\n\r\nPayload.\r\n','# Source\n\nPayload.\n'),
@@ -231,3 +283,136 @@ def test_empty_ignore_uses_upstream_defaults_and_hidden_files_excluded(brain):
     (cfg.STATE / '.bmignore').write_bytes(b'')
     (cfg.VAULT / '.hidden.md').write_text('Not eligible.', encoding='utf-8')
     assert index.status()['coverage']['eligible'] == 1
+
+
+def _reconcile_with(monkeypatch, *, status, manifest='m1', eligible=('A.md',)):
+    """The repair entry point with a fixed scan; returns the module and the list of repairs it attempted."""
+    import brain_index as index
+    import brain_index_reconcile as reconcile
+    attempted = []
+
+    def scan(*, deadline=None, repair=None):
+        if repair is not None:
+            repair.files.update(status.get('_files', ()))
+            repair.removed.update(status.get('_removed', ()))
+        return {'status': 'needs review', 'checked_at': 'now', 'reason': 'coverage_or_vector_review_required',
+                'inventory_stable': True, 'coverage': {'eligible': status['eligible'], 'manifest_sha256': 'm1'}}
+
+    async def repair(plan, counts, cursors, eligible, manifest):
+        attempted.append((sorted(plan.files), sorted(plan.removed), sorted(eligible), manifest))
+
+    monkeypatch.setattr(index, 'status', scan)
+    monkeypatch.setattr(index, 'inventory', lambda check=lambda: None, scope_counts=None: ({name: {} for name in eligible}, manifest))
+    monkeypatch.setattr(reconcile, '_bounded_repair', repair)
+    monkeypatch.setattr(cfg, 'require_local_search_runtime', lambda: None, raising=False)
+    monkeypatch.setattr(cfg, 'write_admission', lambda: None)
+    return reconcile, attempted
+
+
+def test_repair_takes_turns_with_maintenance_and_acts_only_on_a_folder_that_still_matches_its_scan(brain, monkeypatch):
+    from filelock import FileLock
+    reconcile, attempted = _reconcile_with(monkeypatch, status={'eligible': 1, '_files': {'A.md'}})
+    receipt = cfg.STATE / reconcile.RECEIPT
+    # A maintenance pass that is running owns the notes: the repair does nothing at all, not even a scan.
+    with FileLock(str(cfg.STATE / 'maintenance.lock')):
+        reconcile.main()
+    assert attempted == [] and not receipt.exists()
+    reconcile.main()
+    assert attempted == [(['A.md'], [], ['A.md'], 'm1')]
+    assert json.loads(receipt.read_text())['counts']['inventory_changed'] == 0
+    # The folder changed between the scan and the repair: nothing is repaired from the old plan.
+    attempted.clear()
+    reconcile, attempted = _reconcile_with(monkeypatch, status={'eligible': 1, '_files': {'A.md'}}, manifest='m2')
+    reconcile.main()
+    assert attempted == [] and json.loads(receipt.read_text())['counts']['inventory_changed'] == 1
+
+
+def test_repair_never_empties_the_index_of_a_folder_that_shows_no_notes(brain, monkeypatch):
+    """An unavailable notes folder also shows no notes; removing every entry on that evidence costs a rebuild."""
+    reconcile, attempted = _reconcile_with(monkeypatch, status={'eligible': 0, '_removed': {'A.md', 'B.md'}}, eligible=())
+    reconcile.main()
+    assert attempted == []
+
+
+def test_repair_that_outlives_its_budget_ends_its_process_and_says_so(brain, monkeypatch):
+    import brain_index_reconcile as reconcile
+    ended = []
+    monkeypatch.setattr(reconcile.os, '_exit', lambda code: ended.append(code))
+    reconcile._save({'status': 'needs review', 'cursors': {'files': 'a' * 64}})
+    import threading
+    armed = []
+
+    class Last:
+        def __init__(self, seconds, action, arguments=()):
+            armed.append((seconds, action, arguments))
+        daemon = False
+
+        def start(self):
+            armed.append('started')
+
+    monkeypatch.setattr(threading, 'Timer', Last)
+    reconcile._deadline_exit()
+    # Before the receipt is attempted, a second timer is armed that ends the process without any file access.
+    assert armed == [(reconcile.RECEIPT_GRACE_SECONDS, reconcile.os._exit, (75,)), 'started']
+    # A receipt that cannot be written does not keep the process: the exit still happens.
+    ended.clear()
+    def stalled(report):raise OSError('storage unavailable')
+    saved = reconcile._save
+    monkeypatch.setattr(reconcile, '_save', stalled)
+    with pytest.raises(OSError):reconcile._deadline_exit()
+    assert ended == [75]
+    monkeypatch.setattr(reconcile, '_save', saved);ended[:] = [75]
+    report = json.loads((cfg.STATE / reconcile.RECEIPT).read_text())
+    assert ended == [75] and report['repair_error_type'] == 'RepairDeadline' and report['status'] == 'needs review'
+    assert report['cursors'] == {'files': 'a' * 64}  # The next pass continues where this one was.
+    # The watchdog is armed for every repair and disarmed when it returns in time.
+    started = [];cancelled = []
+
+    class Timer:
+        def __init__(self, seconds, action):
+            started.append((seconds, action))
+        daemon = False
+
+        def start(self):
+            started.append('started')
+
+        def cancel(self):
+            cancelled.append(True)
+
+    import threading
+    monkeypatch.setattr(threading, 'Timer', Timer)
+    reconcile, attempted = _reconcile_with(monkeypatch, status={'eligible': 1, '_files': {'A.md'}})
+    reconcile.main()
+    assert started == [(reconcile.PASS_SECONDS, reconcile._deadline_exit), 'started']
+    assert cancelled == [True] and len(attempted) == 1
+    # It is armed before the first scan, so a scan that never returns cannot keep the locks either.
+    started.clear();cancelled.clear();order = []
+    import brain_index as index
+    scan = index.status
+    monkeypatch.setattr(index, 'status', lambda **kwargs: (order.append(list(started)), scan(**kwargs))[1])
+    reconcile.main()
+    assert order[0] == [(reconcile.PASS_SECONDS, reconcile._deadline_exit), 'started'] and cancelled == [True]
+    # And it stays armed until the final receipt has been written.
+    cancelled.clear();at_save = []
+    save = reconcile._save
+    monkeypatch.setattr(reconcile, '_save', lambda report: (at_save.append(list(cancelled)), save(report))[1])
+    reconcile.main()
+    assert at_save == [[]] and cancelled == [True]
+
+
+def test_repair_keeps_an_upstream_exit_message_out_of_the_log_and_bounds_its_own_scan(brain, monkeypatch, capfd):
+    reconcile, attempted = _reconcile_with(monkeypatch, status={'eligible': 1, '_files': {'A.md'}})
+
+    async def refused(plan, counts, cursors, eligible, manifest):
+        raise SystemExit('1 validation error: cloud_api_key input_value=synthetic-secret-value')
+
+    monkeypatch.setattr(reconcile, '_bounded_repair', refused)
+    reconcile.main()  # Does not end the process.
+    report = json.loads((cfg.STATE / reconcile.RECEIPT).read_text())
+    printed = capfd.readouterr()
+    assert report['repair_error_type'] == 'SystemExit' and 'synthetic-secret-value' not in json.dumps(report) + printed.out + printed.err
+    clock = [100.]
+    monkeypatch.setattr(reconcile.time, 'monotonic', lambda: clock[0])
+    check = reconcile._scan_limit()
+    check();clock[0] += reconcile.index.MAX_STATUS_SECONDS
+    with pytest.raises(reconcile.index.IndexAttention, match='reconcile_scan_time_limit'):check()

@@ -6,7 +6,7 @@ import argparse, hashlib, json, os, re, secrets, shutil, stat, subprocess, tempf
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
-VERSION='0.2.11'
+VERSION='0.2.13'
 INDEX_IGNORE_TEXT='.git/\n.obsidian/\n.trash/\n'+'/02-Areas/AI-Memory/Wiki/Log-Archives/'+'[0-9a-f]'*64+'.md\n'
 _SETUP_CACHE=None
 _SETUP_SHA256=None
@@ -361,12 +361,21 @@ def _fresh_source():
 
 
 def _fresh_identity(root,vault,python,args):
-    return {'root':str(root),'vault':str(vault),'python':os.path.normcase(str(python)),'release_root':str(REPO),
+    identity={'root':str(root),'vault':str(vault),'python':os.path.normcase(str(python)),'release_root':str(REPO),
             'version':VERSION,'role':args.role,'timezone':args.timezone,'download_model':args.download_model,
             'install_service':args.install_service,'configure_clients':args.configure_clients,
             'clients':sorted(set(args.client)) if args.client else None,'include_hooks':args.include_hooks,
             'desktop_config':str(Path(args.desktop_config).expanduser().absolute()) if args.desktop_config else None,
             'skip_desktop_refresh':args.skip_desktop_refresh,'source_sha256':_fresh_source()}
+    # Recorded only when chosen, so that a resumed setup neither starts a service the first run declined
+    # nor changes the identity of an install that never had the choice.
+    if getattr(args,'wizard_no_service',False):identity['wizard_no_service']=True
+    if getattr(args,'initialize_wiki_owner',False):
+        identity['initialize_wiki_owner']=True
+        wizard=REPO/'setup_device.py'
+        if wizard.is_symlink() or not wizard.is_file():raise ValueError('Setup wizard source is unavailable or linked.')
+        identity['source_sha256']['setup_device.py']=hashlib.sha256(wizard.read_bytes()).hexdigest()
+    return identity
 
 
 def _initial_registration_present(inspected,*,platform=None):
@@ -477,6 +486,14 @@ def _run_fresh(root,python,vault,args,client_value,finish):
         def checkpoint(stage):
             value['stage']=stage;atomic(path,json.dumps(value,indent=2)+'\n')
         finish(result,checkpoint,value['stage'])
+        if value['identity'].get('initialize_wiki_owner'):
+            import runpy
+            wizard=runpy.run_path(str(REPO/'setup_device.py'))
+            device_id=json.loads(value['writes']['device.json'])['device_id']
+            control=wizard['control_path'](vault)
+            if not control.exists():wizard['own_the_notes'](vault,device_id,write=atomic)
+            if not wizard['owns_notes'](control,device_id):
+                raise ValueError('The notes do not confirm this device as maintainer. Initial setup remains incomplete.')
         value['stage']='complete'
         value['artifact_sha256']={name:hashlib.sha256(text.encode()).hexdigest() for name,text in value.pop('writes').items()}
         value.pop('client_plan',None)
@@ -513,6 +530,8 @@ def main():
     parser.add_argument('--inspect-install',action='store_true',help='Show only non-secret initial setup identity/options and its recovery UUID.')
     parser.add_argument('--abandon-install',help='Abandon a matching incomplete initial setup only if no runtime artifact was published.')
     parser.add_argument('--configure-clients',action='store_true'); parser.add_argument('--install-service',action='store_true')
+    parser.add_argument('--initialize-wiki-owner',action='store_true',help=argparse.SUPPRESS)
+    parser.add_argument('--wizard-no-service',action='store_true',help=argparse.SUPPRESS)
     parser.add_argument('--refresh-clients',action='store_true',help='Refresh only existing exact owned entries; create no new client integration or hook.')
     parser.add_argument('--client',action='append',choices=['claude-code','claude-desktop','codex','hooks'])
     parser.add_argument('--include-hooks',action='store_true',help='Explicitly opt into optional Claude hooks during fresh client configuration.')
@@ -524,6 +543,8 @@ def main():
     parser.add_argument('--download-model',action='store_true'); parser.add_argument('--reuse-python')
     parser.add_argument('--validate-only',action='store_true',help='Check configuration without changing runtime, clients or services.')
     args=parser.parse_args(); root=Path(args.root).expanduser().resolve(); vault=Path(args.vault).expanduser().resolve()
+    if args.initialize_wiki_owner and (args.role!='maintainer' or args.install_service or args.refresh_only or args.refresh_clients):
+        parser.error('Initial wiki ownership requires a new maintainer before service registration.')
     if sum(bool(value) for value in (args.resume_install,args.inspect_install,args.abandon_install))>1:
         parser.error('Choose one initial-install recovery action.')
     if args.abandon_install:_qualified_platform()

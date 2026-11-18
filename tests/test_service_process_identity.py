@@ -10,10 +10,14 @@ import brain_process as processes
 
 
 @pytest.mark.skipif(os.name!='nt',reason='Retained native Windows handles.')
-def test_real_launcher_pair_and_birth_mismatch_refuse_before_signal(brain):
+@pytest.mark.parametrize('filename,args,role',[
+    ('brain_server.py',[],'server'),
+    ('brain_index_bootstrap.py',['--reconcile'],'index_bootstrap'),
+])
+def test_real_launcher_pair_and_birth_mismatch_refuse_before_signal(brain,filename,args,role):
     from brain_windows_process import run
     app=cfg.ROOT/'app';app.mkdir()
-    script=app/'brain_server.py';marker=cfg.STATE/'process.json'
+    script=app/filename;marker=cfg.STATE/'process.json'
     script.write_text("import os,time,json\nfrom pathlib import Path\nPath("+repr(str(marker))+").write_text(json.dumps({'pid':os.getpid()}))\ntime.sleep(120)\n",encoding='utf-8')
     seen=[]
     def tick():
@@ -21,20 +25,42 @@ def test_real_launcher_pair_and_birth_mismatch_refuse_before_signal(brain):
         pid=json.loads(marker.read_text())['pid']
         owned=processes.inspect(pid,required=True)
         try:
-            assert owned.role=='server' and owned.kind=='interpreter'
-            assert owned.parents[0].role=='server' and owned.parents[0].birth<owned.birth
+            assert owned.role==role and owned.kind=='interpreter'
+            assert owned.parents[0].role==role and owned.parents[0].birth<owned.birth
             birth=owned.birth;owned.birth-=1
             with pytest.raises(processes.OwnershipError,match='identity changed'):owned.terminate()
             owned.birth=birth
             assert owned.alive()
             seen.append(owned.record());owned.terminate()
         finally:owned.close()
-    result=run([sys.executable,'-I','-B',str(script)],capture_output=True,timeout=15,on_tick=tick,env=cfg.environment())
+    result=run([sys.executable,'-I','-B',str(script),*args],capture_output=True,timeout=15,on_tick=tick,env=cfg.environment())
     assert seen and result.returncode!=0
 
 
+
+@pytest.mark.parametrize('error,exit_state,exits',[(5,0,True),(5,258,False),(5,0xffffffff,False),(6,0,False)])
+def test_windows_termination_requires_signaled_retained_handle(monkeypatch,error,exit_state,exits):
+    handle=99
+    def wait(candidate,timeout):
+        assert candidate==handle
+        assert 0<=timeout<=1000
+        return exit_state if timeout else 258
+    api=SimpleNamespace(WaitForSingleObject=wait,TerminateProcess=lambda *_:False)
+    monkeypatch.setattr(processes,'_birth',lambda *_:100)
+    monkeypatch.setattr(processes.ctypes,'get_last_error',lambda:error,raising=False)
+    owned=processes.Process(77,api,handle,100,'server','python.exe',None,42,'interpreter')
+    if exits:
+        owned.terminate()
+    else:
+        with pytest.raises(processes.OwnershipError,match=f'Win32 error {error}'):
+            owned.terminate()
+
+
 @pytest.mark.skipif(os.name!='nt',reason='Windows identity API fake.')
-@pytest.mark.parametrize('name,args',[('brain_client.py',[]),('brain_hooks.py',[]),('brain_server.py',['--pilot']),('prefix-brain_server.py',[])])
+@pytest.mark.parametrize('name,args',[
+    ('brain_client.py',[]),('brain_hooks.py',[]),('brain_server.py',['--pilot']),('prefix-brain_server.py',[]),
+    ('brain_server.py',['--reconcile']),('brain_index_bootstrap.py',['--reconcile','--extra']),
+])
 def test_adapters_pilot_and_substrings_never_owned(brain,monkeypatch,name,args):
     closed=[]
     api=SimpleNamespace(OpenProcess=lambda *a:99,WaitForSingleObject=lambda *a:258,CloseHandle=lambda value:closed.append(value))

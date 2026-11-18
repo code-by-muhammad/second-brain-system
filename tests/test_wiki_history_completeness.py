@@ -25,6 +25,43 @@ def test_slow_page_scan_cannot_spend_the_historical_verification_budget(brain,tm
     assert (source.read_bytes(),topic.read_bytes())==before
 
 
+def test_lint_current_source_reads_do_not_spend_history_budget(brain,tmp_path,monkeypatch):
+    _,_,_,old_sha,_,_,_=legacy_history(brain,tmp_path)
+    clock=[w.time.monotonic()];original=w._EvidenceHistory._current
+    def slow_current(self,source):
+        if source not in self.current: clock[0]+=16
+        return original(self,source)
+    monkeypatch.setattr(w.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(w._EvidenceHistory,'_current',slow_current)
+    report=w.lint()
+    assert not report['issues'] and report['historical_evidence_count']==1
+    assert report['verified_historical_evidence'][0]['source_sha256']==old_sha
+    assert report['history_verification']['incomplete_reason'] is None
+
+
+def test_lint_current_read_inside_a_legacy_fallback_does_not_spend_history_budget(brain,tmp_path,monkeypatch):
+    """Inside history work, as in the legacy fallback, the first read of a current source is not history work."""
+    source,_,_,old_sha,_,_,_=legacy_history(brain,tmp_path)
+    clock=[w.time.monotonic()];original=w._EvidenceHistory._current;inside=[]
+    def slow_current(self,name):
+        if name not in self.current:
+            inside.append(self._history_paused_at is None);clock[0]+=16
+        return original(self,name)
+    monkeypatch.setattr(w.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(w._EvidenceHistory,'_current',slow_current)
+    relative=source.relative_to(s.VAULT).as_posix()
+    # As lint sets it up: the budget is paused until history work begins.
+    history=w._EvidenceHistory();history._history_paused_at=history.started;history._separate_current=True
+    with history._history_work():
+        proof=history.source(relative,old_sha)
+        assert inside==[True] and history._active()
+    assert proof and proof['mode']!='current' and history.failure_reason is None and history.history_seconds<15
+    # Without that separation the same read exhausts the fifteen seconds before any Git command.
+    plain=w._EvidenceHistory();plain._history_paused_at=plain.started
+    with plain._history_work():
+        assert plain.source(relative,old_sha) is None and plain.failure_reason=='deadline' and plain.commands==0
+
+
 def test_publication_page_scan_precedes_history_budget(brain,monkeypatch):
     source,packet,result=fixture(brain);clock=[w.time.monotonic()];observed=[]
     original_pages=w._checked_pages;original_render=w._render_topic

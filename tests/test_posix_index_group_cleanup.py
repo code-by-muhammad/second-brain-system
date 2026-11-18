@@ -211,7 +211,10 @@ def test_signal_during_counts_is_checked_after_callback(brain,posix_runner,monke
     child=Child([None,None],[-9]);handlers,original,_=posix_runner(child)
     monkeypatch.setattr(bootstrap.time,'monotonic',time.monotonic)
     completed=[]
+    read_counts=bootstrap._counts
     def counts(deadline):
+        if handlers[bootstrap.signal.SIGTERM] is original[bootstrap.signal.SIGTERM]:
+            return read_counts(deadline)
         handlers[bootstrap.signal.SIGTERM](bootstrap.signal.SIGTERM,None)
         completed.append('handler returned')
         if sqlite_error:raise bootstrap.sqlite3.OperationalError('synthetic callback failure after signal')

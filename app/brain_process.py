@@ -176,12 +176,23 @@ def _selected_python():
     return selected
 
 
+def _process_pythons():
+    """Mac process evidence can omit an absent prior-release path."""
+    for value in _selected_python():
+        path=Path(value)
+        if sys.platform=='darwin' and path!=cfg.PYTHON:
+            try:path.lstat()
+            except FileNotFoundError:continue
+            except OSError:raise OwnershipError('Selected Python interpreter is unavailable.') from None
+        yield path
+
+
 def _bm_paths():
     if os.name=='nt':
         return {_path(Path(value).parent/'bm.exe') for value in _launchers()}
     result=set()
-    for value in _selected_python():
-        path=Path(value).parent/'bm'
+    for interpreter in _process_pythons():
+        path=interpreter.parent/'bm'
         try:info=path.lstat()
         except FileNotFoundError:continue
         except OSError:raise OwnershipError('Index executable metadata is unavailable.') from None
@@ -193,9 +204,7 @@ def _bm_paths():
 
 def _launchers():
     result={}
-    selected=_selected_python()
-    for value in selected:
-        path=Path(value)
+    for path in _process_pythons():
         if path.name.lower() not in ('python.exe','pythonw.exe','python','python3'):continue
         config=path.parent.parent/'pyvenv.cfg'
         base=None
@@ -240,7 +249,12 @@ class Process:
         if not self.alive():return
         if self.api is not None:
             if _birth(self.api,self.handle)!=self.birth:raise OwnershipError('Retained process identity changed.')
-            if not self.api.TerminateProcess(self.handle,1) and self.alive():raise OwnershipError('Owned process did not terminate.')
+            if self.api.TerminateProcess(self.handle,1):return
+            error=ctypes.get_last_error()
+            # ERROR_ACCESS_DENIED can mean native End or Job teardown is already
+            # terminating this process. Only the retained handle proves exit.
+            if self.api.WaitForSingleObject(self.handle,1000 if error==5 else 0)!=0:
+                raise OwnershipError(f'Owned process did not terminate (Win32 error {error}).')
         else:
             if sys.platform in ('linux','darwin'):
                 raise OwnershipError('POSIX process signals require the verified native unit or manager; cached PIDs cannot authorize termination.')
@@ -281,17 +295,19 @@ def inspect(pid,*,required=False):
             if tokens==['-I','-B','-c',SERVICE_ENTRY,supervisor]:tokens=[supervisor]
         while tokens and tokens[0] in ('-I','-B'):tokens=tokens[1:]
         role=None;script=None
-        if len(tokens)==1:
+        if len(tokens)==1 or tokens[1:]==['--reconcile']:
             for name,filename in SCRIPTS.items():
+                if len(tokens)>1 and name!='index_bootstrap':continue
                 expected=cfg.ROOT/'app'/filename
                 if expected.is_symlink() or expected.is_junction():raise OwnershipError('Linked runtime script cannot establish ownership.')
                 if _path(tokens[0])==_path(expected):role=name;script=_path(tokens[0]);break
         # The index entry point is beside the selected venv alias, not the
         # canonical base interpreter or its framework exec-replacement image.
         bm_paths=_bm_paths()
-        bm_arguments=(['reindex','-p','brain'],['reindex','-p','brain','--full'])
+        bm_arguments=(['reindex','-p','brain'],['reindex','-p','brain','--full'],
+                      ['reindex','-p','brain','--full','--search'])
         bm=exe in bm_paths and args[1:] in bm_arguments
-        child_bm=len(tokens) in (4,5) and _path(tokens[0]) in bm_paths and tokens[1:] in bm_arguments
+        child_bm=tokens[1:] in bm_arguments and _path(tokens[0]) in bm_paths
         if bm or child_bm:role='index_worker';script=exe if bm else _path(tokens[0])
         if role is None:
             if required:raise OwnershipError('Listener is not this runtime\'s exact server process.')

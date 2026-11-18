@@ -1,4 +1,4 @@
-# Second Brain setup guide (v0.2.11)
+# Second Brain setup guide (v0.2.13)
 
 One guide for a new device and for a device that already runs Second Brain. One command does the setup. This guide tells you what to prepare, what the command asks, and how to read its result.
 
@@ -20,7 +20,7 @@ A chat without terminal access cannot do this.
 
 Release identity. The command in section 3 checks the commit for you. These values let you check by hand:
 
-- Tag `v0.2.11`, commit `{{COMMIT}}`
+- Tag `v0.2.13`, commit `{{COMMIT}}`
 - `release-manifest.json` SHA256 `{{MANIFEST_SHA256}}`
 - Software repository: `https://github.com/code-by-muhammad/second-brain-system` (public, no account needed)
 
@@ -39,7 +39,7 @@ If this copy still shows `{{...}}` placeholders, it is the source file. Use the 
 ## 2. Before you start
 
 - [ ] Git is installed. Mac: `xcode-select --install`. Windows: `winget install --id Git.Git -e`.
-- [ ] Mac only: Homebrew Python 3.12 is installed: `brew install python@3.12`. Other Python builds on a Mac cannot run both the service and the search index, and setup refuses them.
+- [ ] Mac only: install Homebrew Python 3.12 with `brew install --skip-link python@3.12`. Setup can use the installed formula from its Homebrew path.
 - [ ] uv 0.9.16 or newer is installed. Mac and Linux: see https://docs.astral.sh/uv/getting-started/installation/. Windows: `winget install --id astral-sh.uv -e`.
 - [ ] Open a new terminal after installing either tool. Windows: ordinary PowerShell, not Git Bash.
 - [ ] Windows: run every command in this guide from ordinary PowerShell, never from a terminal inside the Claude desktop app. That app is packaged, and what is installed from inside it lands in a private copy that the background service cannot see.
@@ -54,13 +54,13 @@ You do not need a GitHub account. Sync is an optional extra (section 6).
 Mac and Linux:
 
 ```text
-curl -fsSLO https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.11/setup.sh && echo "{{SETUP_SH_SHA256}}  setup.sh" | shasum -a 256 -c - && sh setup.sh
+curl -fsSLO https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.13/setup.sh && echo "{{SETUP_SH_SHA256}}  setup.sh" | shasum -a 256 -c - && sh setup.sh
 ```
 
 Windows PowerShell:
 
 ```text
-iwr https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.11/setup.ps1 -OutFile setup.ps1; if ((Get-FileHash setup.ps1 -Algorithm SHA256).Hash -ne '{{SETUP_PS1_SHA256}}') { throw 'setup.ps1 does not match this guide' }; powershell -ExecutionPolicy Bypass -File .\setup.ps1
+iwr https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.13/setup.ps1 -OutFile setup.ps1; if ((Get-FileHash setup.ps1 -Algorithm SHA256).Hash -ne '{{SETUP_PS1_SHA256}}') { throw 'setup.ps1 does not match this guide' }; powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
 The first part downloads a small script and checks it against the hash in this guide. The script then downloads the exact release, checks its commit, and starts the setup. A release folder kept from an earlier run must match that fresh download exactly. If any check fails, nothing runs.
@@ -100,12 +100,14 @@ A runtime folder other than the default: set `SECOND_BRAIN_ROOT` before the comm
 
 Running the same command again is safe. On a device that is already set up it adds whatever is missing, tries to start the service if it is not running, and runs the check.
 
+If an initial setup was interrupted, rerun its original release command with the same options. Setup resumes a matching initial installation using its recorded notes folder, role and client choices. Keep that release and its Python environment until setup finishes.
+
 ## 4. The device is done when this passes
 
 The command ends with a list like this:
 
 ```text
-PASS   service health: status running, version 0.2.11
+PASS   service health: status running, version 0.2.13
 PASS   Claude Code connection: points at this runtime
 PASS   Claude Code instructions: one block matching this release
 PASS   Claude Code skill: ...
@@ -222,7 +224,7 @@ Who writes the pages. The assistant program you choose, Claude (`claude`) or Cod
 | FAIL on a connection, hooks, instructions or skill line | Close that assistant, run the command again, then open a new chat. |
 | The assistant cannot see the `brain_` tools | It was open during setup. Restart it and open a new chat. |
 | Port 8765 is in use | If Second Brain already holds it, this device is already installed. If another program holds it, stop and ask. |
-| "search index" stays on WARN | Run `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" index retry` and wait; add nothing to it. It runs the indexer again and again while that makes progress and ends with `verified` or with what is still wrong. A first full index of about 4,400 notes took two hours on an M3 Pro; a few changed notes take minutes. Let it end by itself. Judge the result with `index status`. Use `index retry --full` only when `index status` reports `stale` above 0 after a plain retry; it rebuilds everything and takes at least as long as a first index. |
+| "search index" stays on WARN | See the latest background check in `state/index-reconcile-status.json` and run `index status` for current coverage. The running service checks every 15 minutes after the previous index worker finishes, and it can take multiple bounded passes to catch up. If you need to repair the index manually, run `"<DEVICE PYTHON>" "<RUNTIME>/app/brain_cli.py" index retry` with no extra options. Let it end by itself, then check `index status`. Use `index retry --full` only when `stale` stays above 0 after a plain retry. A full build of about 4,400 notes took two hours on an M3 Pro. |
 | "maintenance: needs attention: Operational log rotation is deferred" | A `service-*.log` file in the runtime's `logs` folder is over 5 MB. Before v0.2.9 this was almost always `service-maintenance.log`; since v0.2.9 that file is no longer written or counted, so update and run the command with `--check` again after the next background pass, at most about fifteen minutes later. If the line stays, another log is the large one: keep it and ask the maintainer of this software. |
 | "wiki assistant: none selected" or "Still open: No wiki assistant is selected" | Maintainer only. Both `claude` and `codex` are installed and nobody chose, or neither was found as a program. Run the command with `--wiki claude` or `--wiki codex`. If neither is found, install one first (on Windows the native `.exe`, not a `.cmd` launcher) and check that its `--version` answers in a new ordinary terminal. Wiki pages are optional; everything else works without this. |
 | "wiki assistant: the recorded choice cannot be used (...)" | The text in brackets is the reason; usually the assistant program was moved or removed after it was chosen. Run the command with `--wiki claude` or `--wiki codex`. |

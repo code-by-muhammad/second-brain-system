@@ -237,7 +237,11 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
             # orphan cleanup that is quadratic in chunk count and changes no row. So: repeat while
             # coverage improves, rebuild lost search rows once, and let coverage decide the result.
             best=None;misses=0;repaired=False;passes=0;had=None
-            def embedded(value):return int((value or {}).get('search_vector_embeddings_rowids') or 0)
+            def embedded(value):return int(value.get('search_vector_embeddings_rowids') or 0)
+            # A fast first pass can finish before the runner samples any writes.
+            try:had=embedded(_counts(deadline))
+            except (sqlite3.Error,OSError):
+                if not (cfg.STATE/'memory.db').exists():had=0
             with log_path.open('ab') as log:
                 while True:
                     passes+=1;check()
@@ -261,7 +265,10 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
                     best=defects if best is None else min(best,defects);had=embedded(counts)
                     misses=0 if gained else misses+1
                     lost=vectors.get('zero_chunk_entities') or vectors.get('stale_search_sources')
-                    if arguments==['--full','--search'] or ((moved or gained) and misses<2):arguments=[]
+                    # A full pass resets the vector count. Give its first shard one incremental follow-up.
+                    if passes==1 and full and coverage.get('status')=='needs review':
+                        arguments=[]
+                    elif arguments==['--full','--search'] or ((moved or gained) and misses<2):arguments=[]
                     elif lost and not repaired:repaired=True;misses=0;arguments=['--full','--search']
                     else:break
                     progress['stage']='indexing local notes'
@@ -283,4 +290,10 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
                           'finished_at':_now(),'elapsed_seconds':time.monotonic()-started},terminal=True)
 
 
-if __name__=='__main__': main()
+if __name__=='__main__':
+    import sys
+    if sys.argv[1:]==['--reconcile']:
+        from brain_index_reconcile import main as reconcile
+        reconcile()
+    else:
+        main()

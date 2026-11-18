@@ -32,7 +32,7 @@ async def wait_ready(transport,deadline):
     while time.monotonic()<deadline:
         if processes.listener_identity() is None:raise processes.OwnershipError('Service listener disappeared before authentication.')
         try:
-            async with Client(transport,timeout=5) as client:
+            async with Client(transport,timeout=5,init_timeout=5) as client:
                 if REQUIRED <= {tool.name for tool in await client.list_tools()}: return
         except Exception: pass
         await asyncio.sleep(.25)

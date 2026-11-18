@@ -94,14 +94,20 @@ def test_framework_bm_inside_app_bundle_is_not_adopted(framework,monkeypatch):
     assert processes.inspect(123) is None
 
 
-def test_framework_owned_venv_bm_is_an_index_worker(framework,monkeypatch):
+@pytest.mark.parametrize('extra,expected',[
+    ([],True),(['--full','--search'],True),(['--search','--full'],False),
+    (['--full','--search','--embeddings'],False),
+])
+def test_framework_owned_venv_bm_is_an_index_worker(framework,monkeypatch,extra,expected):
     bm=framework.alias.parent/'bm';bm.write_bytes(b'fake entry point, never executed')
     monkeypatch.setattr(processes.psutil,'Process',lambda _:SimpleNamespace(
-        create_time=lambda:100,cmdline=lambda:[str(framework.image),str(bm),'reindex','-p','brain'],
+        create_time=lambda:100,cmdline=lambda:[str(framework.image),str(bm),'reindex','-p','brain',*extra],
         exe=lambda:str(framework.image),ppid=lambda:1))
     owned=processes.inspect(123)
-    assert owned.role=='index_worker' and owned.kind=='direct'
-    owned.close()
+    if expected:
+        assert owned is not None and owned.role=='index_worker' and owned.kind=='direct'
+        owned.close()
+    else:assert owned is None
 
 
 @pytest.mark.parametrize('change',['exact','extra','duplicate-flag','reordered-flags','changed-code','server','no-flags'])
@@ -196,6 +202,37 @@ def test_retained_nonframework_python_has_no_extra_image(framework,tmp_path,fiel
     mapping=processes._launchers()
     assert mapping[processes._path(previous)]==processes._path(previous)
     assert len(mapping)==3
+
+
+@pytest.mark.parametrize('field',['python','controller_python'])
+def test_missing_retained_python_does_not_affect_process_ownership(framework,tmp_path,monkeypatch,field):
+    previous=tmp_path/'retained/bin/python'
+    previous.parent.mkdir(parents=True)
+    bm=previous.with_name('bm');bm.write_bytes(b'not executed')
+    (cfg.ROOT/'state/previous-release.json').write_text(json.dumps({field:str(previous)}),encoding='utf-8')
+    script=cfg.ROOT/'app/brain_server.py'
+    candidates={123:(framework.image,[str(script)]),124:(bm,['reindex','-p','brain'])}
+    def process(pid):
+        executable,args=candidates[pid]
+        return SimpleNamespace(create_time=lambda:100,cmdline=lambda:[str(executable),*args],
+                               exe=lambda:str(executable),ppid=lambda:1)
+    monkeypatch.setattr(processes.psutil,'Process',process)
+    owned=processes.inspect(123,required=True)
+    assert owned.role=='server'
+    owned.close()
+    assert processes.inspect(124) is None
+    assert str(previous) in processes._selected_python()  # Retain the registration's known interpreter.
+
+
+def test_missing_current_python_still_refuses(framework):
+    framework.alias.unlink()
+    with pytest.raises(processes.OwnershipError,match='interpreter is unavailable'):processes._launchers()
+
+
+def test_dangling_retained_python_still_refuses(framework,tmp_path):
+    previous=tmp_path/'python';previous.symlink_to(tmp_path/'absent')
+    (cfg.ROOT/'state/previous-release.json').write_text(json.dumps({'python':str(previous)}),encoding='utf-8')
+    with pytest.raises(processes.OwnershipError,match='interpreter is unavailable'):processes._launchers()
 
 
 def test_relative_retained_python_refuses(framework):

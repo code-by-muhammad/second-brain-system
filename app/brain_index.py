@@ -5,6 +5,7 @@ Semantic retrieval quality remains a separate acceptance test.
 """
 from __future__ import annotations
 from contextlib import closing
+from dataclasses import dataclass, field
 from datetime import datetime,timezone
 import hashlib
 import json
@@ -28,6 +29,14 @@ MAX_CHUNK_SOURCE_BREAKS = 262_144
 MODEL = 'FastEmbedEmbeddingProvider'
 SCOPE = 'current file/entity SHA256, normalized indexed body and persisted vector coherence; retrieval quality is separate'
 HISTORY_PATTERN='/02-Areas/AI-Memory/Wiki/Log-Archives/'+'[0-9a-f]'*64+'.md'
+
+@dataclass
+class RepairPlan:
+    """Private repair candidates from a stable coverage scan."""
+    files: set[str] = field(default_factory=set)
+    vectors: set[int] = field(default_factory=set)
+    removed: set[str] = field(default_factory=set)
+
 
 def _history_path(relative):
     return bool(re.fullmatch(r'02-Areas/AI-Memory/Wiki/Log-Archives/[a-f0-9]{64}\.md',relative,
@@ -264,7 +273,7 @@ def _planned_chunks(rows,limit,check):
     return planned
 
 
-def _vectors(conn,project,entities,notes,model,check=lambda:None):
+def _vectors(conn,project,entities,notes,model,check=lambda:None,*,repair:RepairPlan|None=None):
     from basic_memory.repository.semantic_chunking import build_entity_fingerprint
     issues=0; total=0; zero=0; stale_sources=0
     grouped=_search_rows(conn,project,entities,check)
@@ -287,29 +296,39 @@ def _vectors(conn,project,entities,notes,model,check=lambda:None):
                 or primary[0]['title']!=(info['title'] or '').replace('\x00','')
                 or primary[0]['permalink']!=info['permalink']):
             stale_sources+=1;issues+=1
+            if repair is not None:repair.files.add(path)
+        before=issues
         planned=_planned_chunks(rows,metadata[0],check)
         if planned is None or len(planned)!=metadata[0]:
             issues+=1
             if not metadata[0]:zero+=1
-            continue
-        fingerprint=build_entity_fingerprint({'chunk_key':key,'source_hash':sha} for key,sha in planned.items())
-        actual=conn.execute('SELECT c.chunk_key,c.source_hash,c.entity_fingerprint,c.embedding_model,c.vector_index,c.embedding_status,r.rowid AS vector_id,a.value00 AS vector_hash FROM search_vector_chunks c LEFT JOIN search_vector_embeddings_rowids r ON r.rowid=c.id LEFT JOIN search_vector_embeddings_auxiliary a ON a.rowid=c.id WHERE c.project_id=? AND c.entity_id=? LIMIT 32769',(project,entity)).fetchall()
-        if not actual:
-            zero+=1
-            if planned or not notes[path]['empty']: issues+=1
-            continue
-        if len(actual)!=len(planned) or len({row['chunk_key'] for row in actual})!=len(actual): issues+=1
-        for row in actual:
-            if (planned.get(row['chunk_key'])!=row['source_hash'] or row['entity_fingerprint']!=fingerprint
-                    or row['embedding_model']!=model or row['vector_index']!='sqlite-vec'
-                    or row['embedding_status']!='ready' or row['vector_id'] is None
-                    or row['vector_hash']!=row['source_hash']): issues+=1
+        else:
+            fingerprint=build_entity_fingerprint({'chunk_key':key,'source_hash':sha} for key,sha in planned.items())
+            actual=conn.execute('SELECT c.chunk_key,c.source_hash,c.entity_fingerprint,c.embedding_model,c.vector_index,c.embedding_status,r.rowid AS vector_id,a.value00 AS vector_hash FROM search_vector_chunks c LEFT JOIN search_vector_embeddings_rowids r ON r.rowid=c.id LEFT JOIN search_vector_embeddings_auxiliary a ON a.rowid=c.id WHERE c.project_id=? AND c.entity_id=? LIMIT 32769',(project,entity)).fetchall()
+            if not actual:
+                zero+=1
+                if planned or not notes[path]['empty']: issues+=1
+            else:
+                if len(actual)!=len(planned) or len({row['chunk_key'] for row in actual})!=len(actual): issues+=1
+                for row in actual:
+                    if (planned.get(row['chunk_key'])!=row['source_hash'] or row['entity_fingerprint']!=fingerprint
+                            or row['embedding_model']!=model or row['vector_index']!='sqlite-vec'
+                            or row['embedding_status']!='ready' or row['vector_id'] is None
+                            or row['vector_hash']!=row['source_hash']): issues+=1
+        if repair is not None and issues>before and path not in repair.files:
+            repair.vectors.add(entity)
     return {'chunks':total,'invalid':issues,'zero_chunk_entities':zero,'stale_search_sources':stale_sources,
             'scope':'persisted derived search rows, chunk fingerprints and vector auxiliary hashes; raw-note semantic interpretation and retrieval quality are separate'}
 
 
-def status(*,deadline=None):
+def status(*,deadline=None,repair:RepairPlan|None=None):
     """No model calls, repair, source writes or DB creation; main DB opened ro."""
+    plan=None
+    if repair is not None:
+        repair.files.clear()
+        repair.vectors.clear()
+        repair.removed.clear()
+        plan=RepairPlan()
     base={'checked_at':datetime.now(timezone.utc).isoformat(timespec='seconds'),
           'verification':SCOPE,'manifest_scope':'platform-local Basic Memory Markdown eligibility (.md/.markdown); configured compiler-history archives and non-Markdown entities outside this scope; existing out-of-scope rows can remain searchable'}
     deadline=min(deadline if deadline is not None else float('inf'),time.monotonic()+MAX_STATUS_SECONDS)
@@ -342,10 +361,15 @@ def status(*,deadline=None):
                 if relative in indexed: duplicates+=1
                 indexed[relative]=row['checksum']
                 if relative in notes: entities[row['id']]={'path':relative,'title':row['title'],'permalink':row['permalink']}
-            coverage.update(indexed=len(indexed),missing=len(notes.keys()-indexed.keys()),extra=len(indexed.keys()-notes.keys()),
-                stale=sum(indexed[key]!=notes[key]['sha256'] for key in notes.keys()&indexed.keys()),
+            missing=notes.keys()-indexed.keys()
+            extra=indexed.keys()-notes.keys()
+            stale={key for key in notes.keys()&indexed.keys() if indexed[key]!=notes[key]['sha256']}
+            coverage.update(indexed=len(indexed),missing=len(missing),extra=len(extra),stale=len(stale),
                 duplicates=duplicates,content_type_mismatches=mismatches,non_markdown_entities=nonmd,
                 excluded_derived_history_entities=excluded_history,**scope_counts)
+            if plan is not None:
+                plan.files.update(missing,stale)
+                plan.removed.update(extra)
             check()
             coverage['orphan_search_rows']=conn.execute(
                 'SELECT count(*) FROM search_index AS child WHERE child.project_id=? AND ('
@@ -360,11 +384,15 @@ def status(*,deadline=None):
                     'SELECT count(*) FROM search_vector_chunks AS child WHERE child.project_id=? '
                     'AND NOT EXISTS (SELECT 1 FROM entity AS parent WHERE parent.project_id=child.project_id AND parent.id=child.entity_id)',
                     (project,)).fetchone()[0]
-                vectors=_vectors(conn,project,entities,notes,_model(config),check)
+                vectors=_vectors(conn,project,entities,notes,_model(config),check,repair=plan)
             else:vectors={'status':'disabled; not verified'}
         _,after=inventory(check)
         complete=not any(coverage.get(key) for key in ('missing','extra','stale','duplicates','content_type_mismatches','orphan_search_rows','orphan_vector_chunks'))
         stable=manifest==after
+        if repair is not None and plan is not None and stable:
+            repair.files.update(plan.files)
+            repair.vectors.update(entity for entity in plan.vectors if entities[entity]['path'] not in plan.files)
+            repair.removed.update(plan.removed)
         verified=bool(notes) and complete and stable and vectors.get('invalid')==0
         return {**base,'status':'verified' if verified else 'needs review','coverage':coverage,'vectors':vectors,
                 'inventory_stable':stable,'reason':'file_body_and_vector_structure_verified' if verified else 'coverage_or_vector_review_required',

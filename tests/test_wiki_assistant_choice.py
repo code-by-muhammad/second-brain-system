@@ -472,7 +472,8 @@ def test_supervisor_starts_the_pass_with_only_its_error_output_kept_and_never_to
     class Process:
         def __init__(self,command,**kwargs):
             self.pid=4321;self.returncode=None
-            started.append((Path(command[1]).name,kwargs['stdout'],kwargs['stderr'].name))
+            if Path(command[1]).name=='brain_maintenance.py':
+                started.append((Path(command[1]).name,kwargs['stdout'],kwargs['stderr'].name))
         def poll(self):return self.returncode
     class Socket:
         def __enter__(self):return self
@@ -486,7 +487,9 @@ def test_supervisor_starts_the_pass_with_only_its_error_output_kept_and_never_to
     monkeypatch.setattr(cfg,'environment',lambda:{});monkeypatch.setattr(cfg,'child_options',lambda:{})
     with pytest.raises(End):supervisor.main({})
     assert started==[('brain_maintenance.py',supervisor.subprocess.DEVNULL,str(logs/'service-upkeep.log'))]
-    assert old.stat().st_size==5_000_001 and sorted(path.name for path in logs.iterdir())==['service-maintenance.log','service-upkeep.log']
+    assert old.stat().st_size==5_000_001
+    # The index repair waits for this pass, so nothing else was started and no other log was opened.
+    assert {path.name for path in logs.iterdir()}=={'service-maintenance.log','service-upkeep.log'}
 
 
 def test_retired_maintenance_log_no_longer_keeps_a_device_in_attention_but_any_other_large_log_does(brain,monkeypatch):
@@ -722,11 +725,17 @@ def test_setup_runs_the_self_test_only_when_asked_and_its_failure_fails_the_run(
     assert code==0 and asked==[] and 'SKIP   self-test' in said
 
 
-def test_self_test_reports_every_step_and_stops_claiming_when_nothing_was_saved(brain,monkeypatch):
+@pytest.mark.parametrize('closed_ambient_loop',[False,True],ids=['normal','closed-ambient-loop'])
+def test_self_test_reports_every_step_and_stops_claiming_when_nothing_was_saved(brain,monkeypatch,closed_ambient_loop):
     """The steps run against a stand-in for the assistant connection; the real one is exercised on a device."""
     import brain_selftest as selftest
     import fastmcp,fastmcp.client.transports as transports
     from brain_client import REQUIRED
+    if closed_ambient_loop:
+        # Basic Memory's migration dependency patches asyncio.run to reuse the current loop.
+        loop=selftest.asyncio.new_event_loop()
+        loop.close()
+        monkeypatch.setattr(selftest.asyncio,'run',loop.run_until_complete)
     monkeypatch.setattr(cfg,'VERSION','0.2.11')
     state={'tools':set(REQUIRED),'capture':{'status':'saved','path':'00-Inbox/AI-Captures/x.md'},'started':[]}
     class Tool:
@@ -734,7 +743,7 @@ def test_self_test_reports_every_step_and_stops_claiming_when_nothing_was_saved(
     class Answer:
         def __init__(self,data):self.data=data
     class Client:
-        def __init__(self,transport,timeout=None):state['started'].append(transport)
+        def __init__(self,transport,timeout=None,init_timeout=None):state['started'].append(transport)
         async def __aenter__(self):return self
         async def __aexit__(self,*args):return False
         async def list_tools(self):return [Tool(name) for name in state['tools']]
@@ -751,7 +760,7 @@ def test_self_test_reports_every_step_and_stops_claiming_when_nothing_was_saved(
     monkeypatch.setattr(fastmcp,'Client',Client)
     monkeypatch.setattr(transports,'StdioTransport',lambda **options:options)
     report=selftest.run()
-    assert report['status']=='passed' and [row['check'] for row in report['checks']]==['self-test '+name for name in ('tools','health','context','save','read','search')]
+    assert report['status']=='passed' and [row['check'] for row in report['checks']]==['self-test '+name for name in ('tools','health','context','save','read','search')],report
     # The connection is the recorded Python with the adapter and nothing else, as in an assistant's settings.
     assert state['started'][0]['command']==str(cfg.PYTHON) and state['started'][0]['args']==[str(cfg.ROOT/'app/brain_client.py')]
     # The milestone is the same every time on one device, so a second run is a duplicate and still a pass.
@@ -769,11 +778,18 @@ def test_self_test_reports_every_step_and_stops_claiming_when_nothing_was_saved(
         for key in wrong:state.pop(key)
     # A connection that cannot be opened still gives all six lines, each with the reason.
     class Broken(Client):
-        async def __aenter__(self):raise OSError('adapter did not start')
+        async def __aenter__(self):
+            log=state['started'][-1].get('log_file')
+            if log is not None:
+                log.write('brain_process.OwnershipError: synthetic private detail\n')
+                log.flush()
+            raise OSError('adapter did not start')
     monkeypatch.setattr(fastmcp,'Client',Broken)
     report=selftest.run()
     assert [row['check'] for row in report['checks']]==['self-test '+name for name in selftest.STEPS] and report['failed']==6
     assert all('adapter did not start' in row['detail'] for row in report['checks'])
+    assert 'adapter could not verify the local service' in report['checks'][0]['detail']
+    assert all('synthetic private detail' not in row['detail'] for row in report['checks'])
     monkeypatch.setattr(fastmcp,'Client',Client)
     state['capture']=None;state['tools']=set(REQUIRED)-{'brain_capture'}
     report=selftest.run()

@@ -10,6 +10,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import filelock
 from filelock import FileLock, Timeout
@@ -94,6 +95,9 @@ def test_maintenance_keeps_lock_while_its_bounded_descendant_is_live(brain, monk
             return 0
 
     def launch(command, **kwargs):
+        if Path(command[1]) == app / 'brain_index_bootstrap.py':
+            assert command[2:] == ['--reconcile']
+            return SimpleNamespace(pid=9001, poll=lambda: None)
         assert Path(command[1]) == app / 'brain_maintenance.py'
         process = real_popen(command, **kwargs)
         parents.append(process)

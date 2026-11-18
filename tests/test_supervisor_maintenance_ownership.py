@@ -39,6 +39,7 @@ def lifecycle(brain, monkeypatch):
     class Process:
         def __init__(self, command, **kwargs):
             self.name = Path(command[1]).name
+            self.arguments = command[2:]
             assert self.name in ('brain_server.py', 'brain_index_bootstrap.py', 'brain_maintenance.py')
             assert kwargs['env'] == {} and 'timeout' not in kwargs
             h.on_spawn(self.name)
@@ -165,6 +166,60 @@ def test_next_maintenance_waits_after_observed_completion_even_across_retry(life
     assert h.registry()['maintenance'] == h.named('brain_maintenance.py')[1].pid
 
 
+@pytest.mark.parametrize('returncode', [0, 1])
+def test_index_reconciliation_uses_completion_cadence_and_respects_hold(lifecycle, returncode):
+    h = lifecycle
+    (h.state / 'index-bootstrap-status.json').write_text('{"status":"verified"}', encoding='utf-8')
+    script = 'brain_index_bootstrap.py'
+    hold = h.state / 'service-transaction.json'
+    held = {'hold_id': 'a' * 32, 'root': str(cfg.ROOT), 'stage': 'stopped'}
+    hold.write_text(json.dumps(held), encoding='utf-8')
+    h.observe()
+    assert not h.named(script)
+
+    hold.unlink()
+    h.listening = False
+    h.observe()
+    assert not h.named(script)
+
+    h.listening = True
+    h.observe()
+    # The maintenance pass that is due goes first; the repair waits for it and then takes its turn.
+    upkeep, = h.named('brain_maintenance.py')
+    assert not h.named(script)
+    upkeep.returncode = 0
+    h.observe()  # The cycle that records the end of the pass also starts the repair.
+    first, = h.named(script)
+    assert first.arguments == ['--reconcile']
+    assert h.registry()['bootstrap'] == first.pid
+
+    h.now += 3600
+    h.observe()
+    # A maintenance pass that became due meanwhile is not started beside a running repair.
+    assert h.named(script) == [first] and h.named('brain_maintenance.py') == [upkeep]
+    assert h.registry()['bootstrap'] == first.pid
+    first.returncode = returncode
+    h.observe()
+    assert h.registry()['bootstrap'] is None
+    _, later = h.named('brain_maintenance.py')
+    later.returncode = 0
+    h.observe()
+
+    h.now += 899
+    h.observe()
+    assert h.named(script) == [first]
+    hold.write_text(json.dumps(held), encoding='utf-8')
+    h.now += 1
+    h.observe()
+    assert h.named(script) == [first]
+
+    hold.unlink()
+    h.observe()
+    _, second = h.named(script)
+    assert second.arguments == ['--reconcile']
+    assert h.registry()['bootstrap'] == second.pid
+
+
 def test_spawn_failure_retries_without_inventing_maintenance_handle(lifecycle):
     h = lifecycle
     failed = []
@@ -235,3 +290,35 @@ def test_observation_cancellation_does_not_kill_owned_maintenance(lifecycle, end
     assert h.owned['maintenance'] is maintenance
     assert h.registry()['maintenance'] == maintenance.pid
     # No native service-stop or abrupt OS-exit containment is inferred here.
+
+
+def test_repair_that_cannot_be_started_waits_an_interval_and_the_cycle_goes_on(lifecycle, monkeypatch):
+    h = lifecycle
+    (h.state / 'index-bootstrap-status.json').write_text('{"status":"verified"}', encoding='utf-8')
+    h.observe()
+    upkeep, = h.named('brain_maintenance.py')
+    upkeep.returncode = 0  # The next cycle records that the pass ended and tries to start the repair.
+    spawn = supervisor.subprocess.Popen
+    attempts = []
+
+    def refuse(command, **kwargs):
+        if Path(command[1]).name == 'brain_index_bootstrap.py':
+            attempts.append(h.now)
+            raise OSError('synthetic launch failure')
+        return spawn(command, **kwargs)
+
+    beats = []
+    monkeypatch.setattr(supervisor.subprocess, 'Popen', refuse)
+    monkeypatch.setattr(supervisor.service, 'write_heartbeat', lambda state: beats.append(state))
+    h.observe(3)
+    # One attempt, not one per cycle; the heartbeat was still written in every cycle.
+    assert attempts == [h.now] and beats == ['ready'] * 3 and h.owned.get('bootstrap') is None
+    assert h.owned['_reconciling'] is False
+    h.now += 899
+    h.observe()
+    assert len(attempts) == 1
+    h.now += 1
+    monkeypatch.setattr(supervisor.subprocess, 'Popen', spawn)
+    h.observe()
+    retried, = h.named('brain_index_bootstrap.py')
+    assert retried.arguments == ['--reconcile']

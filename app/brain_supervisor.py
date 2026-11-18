@@ -5,6 +5,8 @@ import brain_settings as cfg
 import brain_process as processes
 import brain_service as service
 
+INDEX_RECONCILE_SECONDS=900
+
 
 def _bootstrap_admitted():
     """Read/update interruption state under the same nonblocking writer lock."""
@@ -24,6 +26,12 @@ def _bootstrap_admitted():
     except Timeout:
         return False
 
+def _maintenance_due(owned):
+    # Unchanged rule: with no pass recorded yet this compares against the monotonic clock itself, so the
+    # first pass is due once the computer has been up for fifteen minutes.
+    return time.monotonic()-owned.get('_maintenance_finished',0)>900
+
+
 def _publish_owned(owned):
     # Publish only this process's live handles, never adopt cached registry PIDs.
     import os
@@ -42,6 +50,7 @@ def main(owned=None):
     for folder in ('state','logs'): (cfg.ROOT/folder).mkdir(parents=True,exist_ok=True)
     with FileLock(str(cfg.STATE/'supervisor.lock'),timeout=1):
         child=owned.get('server'); bootstrap=owned.get('bootstrap'); maintenance=owned.get('maintenance')
+        reconciling=bool(owned.get('_reconciling')) and bootstrap is not None
         while True:
             try:
                 # Serialize every spawn against stop/update admission. A held service
@@ -58,17 +67,42 @@ def main(owned=None):
                                 child=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_server.py')],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
                                 owned['server']=child
                                 _publish_owned(owned)
-                        if listening and (bootstrap is None or bootstrap.poll() is not None) and _bootstrap_admitted():
-                            with (cfg.ROOT/'logs/service-bootstrap.log').open('ab') as log:
-                                bootstrap=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_index_bootstrap.py')],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
-                                owned['bootstrap']=bootstrap
-                                _publish_owned(owned)
+                        # A finished maintenance pass is recorded first, so the repair that waited for it can start
+                        # in this same cycle.
                         if maintenance is not None and maintenance.poll() is not None:
                             owned['_maintenance_finished']=time.monotonic()
                             owned.pop('maintenance',None)
                             maintenance=None
                             _publish_owned(owned)
-                        if listening and maintenance is None and time.monotonic()-owned.get('_maintenance_finished',0)>900:
+                        if bootstrap is not None and bootstrap.poll() is not None:
+                            owned['_index_finished']=time.monotonic()
+                            owned.pop('bootstrap',None)
+                            bootstrap=None;reconciling=owned['_reconciling']=False
+                        if listening and bootstrap is None:
+                            arguments=None
+                            if _bootstrap_admitted():
+                                arguments=[]
+                            # The repair and the maintenance pass take turns: each holds the maintenance lock, and
+                            # the one that found it taken would only fail. A maintenance pass that is running or due
+                            # goes first; the repair follows when it has finished.
+                            elif maintenance is None and not _maintenance_due(owned) and time.monotonic()-owned.get('_index_finished',float('-inf'))>=INDEX_RECONCILE_SECONDS:
+                                arguments=['--reconcile']
+                            if arguments is not None:
+                                reconciling=owned['_reconciling']=arguments==['--reconcile']
+                                try:
+                                    with (cfg.ROOT/'logs/service-bootstrap.log').open('ab') as log:
+                                        bootstrap=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_index_bootstrap.py'),*arguments],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
+                                except OSError:
+                                    # A repair that cannot be started waits a whole interval like one that ran, and
+                                    # the rest of this cycle, the heartbeat included, goes on. The first index is
+                                    # not optional: its launch failure is raised as before.
+                                    if not reconciling:raise
+                                    reconciling=owned['_reconciling']=False
+                                    owned['_index_finished']=time.monotonic()
+                                else:
+                                    owned['bootstrap']=bootstrap
+                                    _publish_owned(owned)
+                        if listening and maintenance is None and not reconciling and _maintenance_due(owned):
                             with (cfg.ROOT/'logs/service-upkeep.log').open('ab') as log:
                                 # The pass saves its whole result to maintenance-status.json. What it prints is that
                                 # same result again, tens of kilobytes on a large vault every fifteen minutes, so
