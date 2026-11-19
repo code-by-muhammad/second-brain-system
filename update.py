@@ -171,10 +171,13 @@ def snapshot(root,python,plan=None,*,controller_checkout=None,controller_identit
         if manifest.get('version')!=device.get('version'):raise ValueError('Previous app manifest/version disagrees; inspect before stopping.')
         expected={Path(name).name:sha for name,sha in manifest.get('sha256',{}).items() if name.startswith('app/') and len(Path(name).parts)==2 and name.endswith('.py')}
         actual={path.relative_to(installed).as_posix():_digest(path.read_bytes()) for path in installed.rglob('*') if path.is_file() and '__pycache__' not in path.relative_to(installed).parts}
-        if actual!=expected:raise ValueError('Installed app differs from the previous release payload; preserve extras for review before stopping.')
+        # The file set must still be the previous release. The bytes may differ when a same-version
+        # checkout was replaced and the installed runtime was not switched. Snapshot those bytes so
+        # a rollback restores what was running.
+        if set(actual)!=set(expected):raise ValueError('Installed app differs from the previous release payload; preserve extras for review before stopping.')
         shutil.copytree(installed,target/'app',ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
         app_hashes={path.relative_to(target/'app').as_posix():_digest(path.read_bytes()) for path in (target/'app').rglob('*') if path.is_file()}
-        if app_hashes!=expected:raise ValueError('App changed while snapshotting; old service is still healthy.')
+        if app_hashes!=actual:raise ValueError('App changed while snapshotting; old service is still healthy.')
     records=[]
     device=_read(root/'device.json')
     if plan.get('device_before_sha256') and _digest(device)!=plan['device_before_sha256']:raise ValueError('Device configuration changed before stop; re-plan.')

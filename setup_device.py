@@ -11,7 +11,7 @@ the read-only acceptance check. --yes accepts every default. Nothing is sent any
 import sys
 if __name__=='__main__' and not sys.flags.isolated:
     raise SystemExit('Run this with Python -I from the verified release folder.')
-import argparse, json, os, re, runpy, shutil, subprocess, time
+import argparse, hashlib, json, os, re, runpy, shutil, subprocess, time
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
@@ -20,6 +20,39 @@ CLIENTS=('claude-code','codex','claude-desktop','grok')
 
 
 def say(text):print(text,flush=True)
+
+
+def runtime_matches_release(root, release, version):
+    """True when every installed app script matches this release manifest.
+
+    A manifest for another version is not this check. verify() is what refuses that checkout.
+    """
+    installed=Path(root)/'app'
+    manifest_path=Path(release)/'release-manifest.json'
+    if not manifest_path.is_file() or installed.is_symlink():return False
+    if not installed.is_dir():return True
+    try:manifest=json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):return False
+    if manifest.get('version')!=version:return True
+    expected={}
+    for name, sha in (manifest.get('sha256') or {}).items():
+        if not isinstance(name,str) or not isinstance(sha,str):return False
+        if len(Path(name).parts)==2 and name.startswith('app/') and name.endswith('.py'):expected[name]=sha
+    if not expected:return False
+    actual={}
+    try:
+        for path in installed.glob('*.py'):
+            if path.is_symlink():return False
+            actual['app/'+path.name]=hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:return False
+    return actual==expected
+
+
+def refuse_same_version_drift(version, release):
+    raise SystemExit(
+        'This device already reports version '+version+', but the installed runtime does not match this release\'s manifest at '
+        +str(Path(release).resolve())+'. Nothing was switched: app/ and state/config.json were left as they are, and assistant files were not refreshed. '
+        'Install the corrected release as the next version and run that version\'s setup. Re-running this same version does not replace the runtime.')
 
 
 def ask(question,default,assume):
@@ -387,6 +420,8 @@ def main():
             if run(command).returncode:
                 raise SystemExit('The update did not finish. If it said "deferred", nothing was switched and the old version is still running. Read the reason above before trying again.')
             device=json.loads((root/'device.json').read_text(encoding='utf-8-sig'))
+        elif not runtime_matches_release(root, REPO, version):
+            refuse_same_version_drift(version, REPO)
         if selected:
             # An update refreshes only what already existed; this adds whatever a selected assistant still lacks.
             command=[device['python'],'-I','-B',REPO/'install.py','--root',root,'--vault',vault,'--reuse-python',device['python'],'--configure-clients','--clients-only',*client_flags]

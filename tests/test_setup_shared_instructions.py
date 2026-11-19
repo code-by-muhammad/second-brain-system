@@ -151,7 +151,8 @@ def test_clients_only_adds_missing_pieces_to_an_installed_device(owner,monkeypat
     installer.main()
     receipt=json.loads(capsys.readouterr().out)
     assert receipt['status']=='clients refreshed' and not receipt['client_result']['deferred']
-    assert json.loads((home/'.claude.json').read_text())['mcpServers']['second-brain']['args']==[str(root/'app/brain_client.py')]
+    entry=json.loads((home/'.claude.json').read_text())['mcpServers']['second-brain']
+    assert entry=={**entry, **helpers.connection_spec(root,sys.executable)}
     hooks=json.loads((home/'.claude/settings.json').read_text())['hooks']
     assert set(hooks)=={'SessionStart','Stop'}
     assert (home/'.claude/CLAUDE.md').read_text().count(helpers.BEGIN)==1

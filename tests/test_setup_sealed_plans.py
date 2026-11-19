@@ -36,7 +36,26 @@ def test_refresh_preserves_server_options_and_creates_no_integration(owner):
     toml=next(row for row in result['files'] if row['path'].endswith('config.toml'))
     assert any(row['path'].endswith('AGENTS.md') for row in result['files']) and not (home/'.codex/AGENTS.md').exists()
     data=tomllib.loads(toml['after'])['mcp_servers']['second-brain']
-    assert data['env']=={'OWNER':'keep'} and data['startup_timeout_sec']==91 and data['command']==str(python)
+    spec=helpers.connection_spec(root,python)
+    assert data['env']=={'OWNER':'keep'} and data['startup_timeout_sec']==91
+    assert data['command']==spec['command'] and data['args']==spec['args']
+
+
+def test_refresh_migrates_an_owned_connection_to_the_stable_launcher(owner):
+    home,root,python=owner
+    path=home/'.claude.json'
+    path.write_text(json.dumps({'theme':'keep','mcpServers':{'second-brain':{
+        'command':str(python),'args':[str(root/'app/brain_client.py')],'env':{'OWNER':'keep'}}}}))
+    result=plan(owner,selected=['claude-code'],refresh=True)
+    after=json.loads(next(row['after'] for row in result['files'] if row['path'].endswith('.claude.json')))
+    assert list(after['mcpServers'])==['second-brain'] and after['theme']=='keep'
+    server=after['mcpServers']['second-brain']
+    spec=helpers.connection_spec(root,python)
+    assert server['command']==spec['command'] and server['args']==spec['args'] and server['env']=={'OWNER':'keep'}
+    path.write_text(next(row['after'] for row in result['files'] if row['path'].endswith('.claude.json')))
+    again=plan(owner,selected=['claude-code'],refresh=True)
+    assert any(row['path'].endswith('.claude.json') for row in again['files'])
+    assert not any('unknown runtime' in row['reason'] for row in again['skipped'])
 
 
 def test_declined_malformed_client_never_blocks_selected_plan(owner):

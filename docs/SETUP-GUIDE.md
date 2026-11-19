@@ -1,4 +1,4 @@
-# Second Brain setup guide (v0.2.14)
+# Second Brain setup guide (v0.2.15)
 
 One guide for a new device and for a device that already runs Second Brain. One command does the setup. This guide tells you what to prepare, what the command asks, and how to read its result.
 
@@ -18,7 +18,7 @@ A chat without terminal access cannot do this.
 | Grok Bot on its computer | Supported when `~/agent-data/workflows` is present, or with `--clients grok`. |
 | Notes kept on one device, no GitHub | Supported. Sync shows "off" and the check passes. |
 
-Release identity. Tag `v0.2.14`. The setup command checks the commit of the checkout it runs. Software repository: `https://github.com/code-by-muhammad/second-brain-system` (public, no account needed).
+Release identity. Tag `v0.2.15`. The setup command checks the commit of the checkout it runs. Software repository: `https://github.com/code-by-muhammad/second-brain-system` (public, no account needed).
 
 ## 1. Rules
 
@@ -47,19 +47,19 @@ You do not need a GitHub account. Sync is an optional extra (section 6).
 
 Mac and Linux:
 
-When this release is published, download `setup.sh` or `setup.ps1` from the v0.2.14 GitHub release and check its SHA256 against the hash on that release page before running it. Until then, or when the checkout is already on the machine, run its setup directly. `<runtime>` is `~/.local/share/second-brain` unless `SECOND_BRAIN_ROOT` was set; on the Grok Bot computer it is `/home/box/.local/share/second-brain`.
+When this release is published, download `setup.sh` or `setup.ps1` from the v0.2.15 GitHub release and check its SHA256 against the hash on that release page before running it. Until then, or when the checkout is already on the machine, run its setup directly. `<runtime>` is `~/.local/share/second-brain` unless `SECOND_BRAIN_ROOT` was set; on the Grok Bot computer it is `/home/box/.local/share/second-brain`.
 
 ```text
-uv run --no-project --python 3.12 python -I -B "<runtime>/releases/v0.2.14/setup_device.py" --root "<runtime>" --yes --vault "<notes>" --role capture
+uv run --no-project --python 3.12 python -I -B "<runtime>/releases/v0.2.15/setup_device.py" --root "<runtime>" --yes --vault "<notes>" --role capture
 ```
 
 Windows PowerShell, from the published `setup.ps1` or, with the checkout already at the release path:
 
 ```text
-& uv run --no-project --python 3.12 python -I -B "<runtime>\releases\v0.2.14\setup_device.py" --root "<runtime>" --yes --vault "<notes>" --role capture
+& uv run --no-project --python 3.12 python -I -B "<runtime>\releases\v0.2.15\setup_device.py" --root "<runtime>" --yes --vault "<notes>" --role capture
 ```
 
-The command runs the checkout at `<runtime>/releases/v0.2.14` and checks that tag. A release folder kept from an earlier run must match that checkout. If any check fails, nothing runs. Options below are added after `setup_device.py`.
+The command runs the checkout at `<runtime>/releases/v0.2.15` and checks that tag. A release folder kept from an earlier run must match that checkout. If any check fails, nothing runs. Options below are added after `setup_device.py`.
 
 What it asks on a new device:
 
@@ -94,7 +94,7 @@ Options, added after `setup.sh` or `setup.ps1`:
 
 A runtime folder other than the default: set `SECOND_BRAIN_ROOT` before the command. Default: `~/.local/share/second-brain` (Windows `C:\Second-Brain-System`).
 
-Running the same command again is safe. On a device that is already set up it adds whatever is missing, tries to start the service if it is not running, and runs the check.
+Running the same command again is safe when this checkout matches the installed runtime. It adds whatever is missing, tries to start the service if it is not running, and runs the check. If the device already reports this version but `app/` does not match this checkout's manifest, the command stops and says the runtime was not switched. Put the corrected files in the next `releases/vX.Y.Z` folder and run that version's setup.
 
 If an initial setup was interrupted, rerun its original release command with the same options. Setup resumes a matching initial installation using its recorded notes folder, role and client choices. Keep that release and its Python environment until setup finishes.
 
@@ -103,7 +103,7 @@ If an initial setup was interrupted, rerun its original release command with the
 The command ends with a list like this:
 
 ```text
-PASS   service health: status running, version 0.2.14
+PASS   service health: status running, version 0.2.15
 PASS   Claude Code connection: points at this runtime
 PASS   Claude Code instructions: one block matching this release
 PASS   Claude Code skill: ...
@@ -125,7 +125,7 @@ What each piece is, if you need to look:
 
 | Piece | Where it lives |
 |---|---|
-| Connection (`second-brain` MCP entry) | `~/.claude.json`, `~/.codex/config.toml`, Claude Desktop config |
+| Connection (`second-brain` MCP entry) | `~/.claude.json`, `~/.codex/config.toml`, Claude Desktop config. On Linux and macOS the command is `<runtime>/bin/second-brain-mcp` with no arguments. Windows keeps the recorded Python. |
 | Claude Code hooks | `~/.claude/settings.json` |
 | Instruction block (between the two `SECOND-BRAIN` marker lines) | `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, or the shared rules file those load |
 | Skill | `~/.claude/skills/second-brain/`, `~/.codex/skills/second-brain/`, or the shared copy those link to. Grok Bot: `~/agent-data/workflows/second-brain/SKILL.md` |
@@ -138,10 +138,10 @@ If your assistant files are links to one shared rules or skills folder inside yo
 Use the same command, with `-I -B` and `--root`. It finds the installed version, updates it, then adds anything the old setup was missing. A Mac or Windows device on v0.2.13 keeps its existing service definition; the update does not move it onto another backend. An Ubuntu 24.04 device whose PID 1 is systemd keeps its user unit, and still refuses the update when that service is absent or stopped. A Linux device whose PID 1 is not systemd, and whose service was never registered, gets the user-space service on this update. The notes folder is not replaced.
 
 ```text
-uv run --no-project --python 3.12 python -I -B /home/box/.local/share/second-brain/releases/v0.2.14/setup_device.py --root /home/box/.local/share/second-brain --yes --role capture
+uv run --no-project --python 3.12 python -I -B /home/box/.local/share/second-brain/releases/v0.2.15/setup_device.py --root /home/box/.local/share/second-brain --yes --role capture
 ```
 
-Replace both copies of the runtime path on any other device. Then run the same command with `--check --selftest` instead of `--yes --role capture`. Grok Bot's MCP command stays `<runtime>/bin/second-brain-mcp` with no arguments and an empty environment; do not register the Python inside a release folder.
+Replace both copies of the runtime path on any other device. Then run the same command with `--check --selftest` instead of `--yes --role capture`. On Linux and macOS, Claude Code, Codex and Grok Bot each keep one entry whose command is `<runtime>/bin/second-brain-mcp` with no arguments. Do not register the Python inside a release folder. Codex may still have its own timeout and environment keys. Windows keeps the recorded Python.
 
 Before:
 
@@ -236,7 +236,8 @@ Who writes the pages. The assistant program you choose, Claude (`claude`) or Cod
 | "notes sync: needs attention" | Read the text after it. Usual causes: no network, the GitHub sign-in expired, or other uncommitted files in the notes folder. |
 | "notes sync: paused" | The text after it says what blocks the sync: a conflict between two devices, files you staged yourself, or other uncommitted files. Nothing is lost. Clear that in the notes folder with Git and the sync resumes. |
 | After a restart the service is not running | Mac: `launchctl list | grep second-brain`. Windows: the task `SecondBrainLocalService`. Linux with systemd: `systemctl --user status second-brain.service`. Linux without systemd: `~/.config/second-brain/boot-start`, then run the command with `--check`. On a host that runs neither `~/.profile`, crontab, nor an autostart runner, the assistant command `<runtime>/bin/second-brain-mcp` runs that same boot check before it connects. |
-| "The inherited runtime directory is not this user session" or "This native backend requires Ubuntu24.04/systemd255" on v0.2.13 | Update to v0.2.14. Those refusals stay on a host whose PID 1 is systemd. A host whose PID 1 is not systemd uses the user-space service instead. |
+| "The inherited runtime directory is not this user session" or "This native backend requires Ubuntu24.04/systemd255" on v0.2.13 | Update to v0.2.15. Those refusals stay on a host whose PID 1 is systemd. A host whose PID 1 is not systemd uses the user-space service instead. |
+| "already reports version ..., but the installed runtime does not match" | This checkout is the same version as the device, and `app/` is an older build. The command changed nothing. Install it as the next version under `releases/` and run that setup. |
 | "Grok Bot connection" fails, or the bot has no `brain_` tools | The spec at `~/agent-data/workflows/second-brain/mcp-registration.json` must be the only `second-brain` server. Add that command, args and empty env in the Grok Bot account, then open a new chat. Delete that workflow folder only when it points at this runtime and you want the assistant removed; setup writes it again when Grok Bot is selected. |
 
 `<DEVICE PYTHON>` is the `python` value in `<RUNTIME>/device.json`.

@@ -78,7 +78,8 @@ def test_typed_unrelated_owner_values_survive_logical_server_replacement(tmp_pat
     monkeypatch.setattr(installer.subprocess,'run',forbidden)
     before=(tree(home),tree(appdata))
     output=planned(home,root,python);actual=tomllib.loads(output)
-    assert actual['mcp_servers']['second-brain']=={'command':str(python),'args':[str(root/'app/brain_client.py')],'startup_timeout_sec':60,'tool_timeout_sec':120}
+    spec={'command':str(python),'args':[str(root/'app/brain_client.py')]} if os.name=='nt' else {'command':str(root/'bin'/'second-brain-mcp'),'args':[]}
+    assert actual['mcp_servers']['second-brain']=={**spec,'startup_timeout_sec':60,'tool_timeout_sec':120}
     del actual['mcp_servers']
     if kind=='nan':assert math.isnan(actual['owner_nan'])
     elif kind=='nested-nan':
@@ -94,7 +95,9 @@ def test_typed_unrelated_owner_values_survive_logical_server_replacement(tmp_pat
 def test_nonmapping_owner_mcp_parent_is_rejected_without_overwrite(tmp_path,monkeypatch,value):
     home,appdata,_,root,python,forbidden=context(tmp_path,monkeypatch,'mcp_servers = '+value+'\n')
     monkeypatch.setattr(installer.subprocess,'run',forbidden);before=(tree(home),tree(appdata))
-    with pytest.raises(ValueError):planned(home,root,python)
+    result=installer.sealed_client_plan(root,python,home,selected=['codex'])
+    assert all(Path(row['path'])!=home/'.codex/config.toml' for row in result['files'])
+    assert any('MCP' in row['reason'] for row in result['skipped'])
     assert (tree(home),tree(appdata))==before and not root.exists()
 
 
@@ -103,8 +106,9 @@ def test_unknown_scalar_is_refused_but_low_level_parser_preserves_sibling(tmp_pa
     text='mcp_servers.second-brain = '+value+'\nmcp_servers.other.command = "keep"\n'
     home,appdata,_,root,python,forbidden=context(tmp_path,monkeypatch,text)
     monkeypatch.setattr(installer.subprocess,'run',forbidden);before=(tree(home),tree(appdata))
-    with pytest.raises(ValueError,match='another or unknown runtime'):
-        planned(home,root,python)
+    result=installer.sealed_client_plan(root,python,home,selected=['codex'])
+    assert all(Path(row['path'])!=home/'.codex/config.toml' for row in result['files'])
+    assert any('Invalid MCP entry' in row['reason'] or 'another or unknown runtime' in row['reason'] for row in result['skipped'])
     specs={'command':str(python),'args':[str(root/'app/brain_client.py')]}
     output=tomllib.loads(installer._codex_toml_plan(text,specs))
     assert output['mcp_servers']['other']=={'command':'keep'}

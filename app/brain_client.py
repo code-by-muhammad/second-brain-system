@@ -49,6 +49,7 @@ def main():
     transport=StreamableHttpTransport(f'http://127.0.0.1:{cfg.PORT}/mcp',headers={'Authorization':'Bearer '+token},httpx_client_factory=owned_http_client)
     asyncio.run(wait_ready(transport,deadline))
     if processes.listener_identity() is None:raise processes.OwnershipError('Service ownership changed during readiness.')
-    create_proxy(Client(transport),name='Second Brain').run(transport='stdio',show_banner=False)
+    # warning hides FastMCP's "Starting MCP server ... stdio" line. Errors still print.
+    create_proxy(Client(transport),name='Second Brain').run(transport='stdio',show_banner=False,log_level='warning')
 
 if __name__=='__main__': main()

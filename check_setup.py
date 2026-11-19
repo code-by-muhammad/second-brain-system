@@ -38,6 +38,9 @@ def same(left, right):
 
 
 def owned(entry, python, root):
+    """Claude Code, Codex and Desktop. Linux and macOS must use the stable launcher."""
+    if os.name != 'nt':
+        return owned_grok(entry, root) and stable_launcher(root, python)
     args = entry.get('args') if isinstance(entry, dict) else None
     return (isinstance(args, list) and len(args) == 1 and same(args[0], root / 'app/brain_client.py')
             and same(entry.get('command', ''), python))

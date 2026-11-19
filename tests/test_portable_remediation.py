@@ -97,7 +97,8 @@ def test_real_main_keeps_venv_interpreter_and_venv_only_import(portable,monkeypa
     base=subprocess.run([str(python.resolve()),'-c','import second_brain_venv_marker'],capture_output=True,text=True)
     assert base.returncode!=0
     claude=json.loads((portable[-1]/'.claude.json').read_text())
-    assert claude['mcpServers']['second-brain']['command']==str(python)
+    assert claude['mcpServers']['second-brain']['command']==str(root/'bin'/'second-brain-mcp')
+    assert claude['mcpServers']['second-brain']['args']==[]
 
 
 @pytest.mark.skipif(os.name=='nt',reason='POSIX file permission bits')

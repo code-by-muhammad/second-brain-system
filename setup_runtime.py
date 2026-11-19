@@ -393,6 +393,25 @@ def _owned(spec,root,script='brain_client.py'):
             and isinstance(spec['args'][0],str) and _path(spec['args'][0])==_path(Path(root)/'app'/script))
 
 
+def connection_spec(root,python):
+    """MCP command for Claude Code, Codex and Claude Desktop.
+
+    Linux and macOS use the stable launcher. It starts the service when PID 1 is
+    not systemd, then runs the client. Windows keeps the recorded Python: the
+    launcher is a shell script, and those assistants start an executable.
+    """
+    root=Path(root)
+    if os.name=='nt':return {'command':str(python),'args':[str(root/'app/brain_client.py')]}
+    return {'command':str(root/'bin'/'second-brain-mcp'),'args':[]}
+
+
+def _connection_owned(spec,root):
+    """An entry this runtime may replace: the old Python adapter, or the stable launcher."""
+    if _owned(spec,root):return True
+    return (isinstance(spec,dict) and spec.get('args')==[] and isinstance(spec.get('command'),str)
+            and _path(spec['command'])==_path(Path(root)/'bin'/'second-brain-mcp'))
+
+
 def _hook_owned(command,root):
     try:tokens=shlex.split(command,posix=os.name!='nt')
     except ValueError:return False
@@ -483,7 +502,7 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
     root=Path(root).resolve();home=Path(home or Path.home());python=Path(python)
     selected=set(CLIENTS if selected is None else selected)
     if not selected<=set(CLIENTS):raise ValueError('Unrecognized client selection.')
-    specs={'command':str(python),'args':[str(root/'app/brain_client.py')]}
+    specs=connection_spec(root,python)
     targets=[];records=[];skipped=[];claimed=set()
     def shared(client,path,kind,locate):
         # An instruction or skill file that cannot be managed safely (it leaves the home folder, or
@@ -534,7 +553,7 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
                 if not isinstance(servers,dict):raise ValueError('Invalid MCP parent object: '+str(path))
                 prior=servers.get('second-brain',{})
                 if not isinstance(prior,dict):raise ValueError('Invalid MCP entry: '+str(path))
-                if 'second-brain' in servers and not _owned(prior,root):
+                if 'second-brain' in servers and not _connection_owned(prior,root):
                     raise ValueError('Existing second-brain entry belongs to another or unknown runtime; preserve it for review: '+str(path))
                 data['mcpServers']={**servers,'second-brain':{**prior,**specs}}
                 after=json.dumps(data,indent=2,ensure_ascii=False)+'\n'
@@ -545,7 +564,7 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
                 if not isinstance(servers,dict):raise ValueError('Invalid TOML MCP parent object: '+str(path))
                 prior=servers.get('second-brain',{})
                 if not isinstance(prior,dict):raise ValueError('Invalid MCP entry: '+str(path))
-                if 'second-brain' in servers and not _owned(prior,root):
+                if 'second-brain' in servers and not _connection_owned(prior,root):
                     raise ValueError('Existing second-brain entry belongs to another or unknown runtime; preserve it for review: '+str(path))
                 after=toml_plan(content,specs)
             elif kind=='protocol':
@@ -602,6 +621,8 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
             encoded=after.encode('utf-8')
             records.append({'client':client,'path':str(path.absolute()),'before_sha256':digest(before),'after_sha256':digest(encoded),'after':after})
         except (ValueError, OSError) as error:
+            # One assistant can be left alone. A missing locked TOML parser means no plan is safe.
+            if 'tomlkit' in str(error):raise
             skipped.append({'client':client,'path':str(path),'reason':str(error)})
     if any(row['client']=='claude-desktop' for row in records) and desktop_busy():raise ValueError('Claude Desktop is open. Close it or explicitly skip its refresh before continuing.')
     return {'format':1,'root':str(root),'python':str(python),'refresh':refresh,'files':records,'skipped':skipped}

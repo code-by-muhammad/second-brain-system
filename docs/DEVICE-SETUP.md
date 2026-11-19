@@ -126,7 +126,7 @@ The defaults allow eight hours overall. Each pass first rebuilds the text index,
 
 Verify a late-imported known source in the indexed arm of search and through an exact read. Fresh-file fallback/read alone is not index or semantic coverage. Record model, counts and hashes without copying note bodies into a team report.
 
-## Forward Windows update: v0.1.7, controlled v0.1.8, v0.2.2, v0.2.3, v0.2.4, v0.2.5, v0.2.6, v0.2.7, v0.2.8, v0.2.9, v0.2.10, v0.2.11 or v0.2.13 to v0.2.14
+## Forward Windows update: v0.1.7, controlled v0.1.8, v0.2.2, v0.2.3, v0.2.4, v0.2.5, v0.2.6, v0.2.7, v0.2.8, v0.2.9, v0.2.10, v0.2.11, v0.2.13 or v0.2.14 to v0.2.15
 
 Keep the existing service healthy during preflight. Read `device.json` and require the retained Python to match the recorded installed source version's `.venv/Scripts/python.exe`: accepted v0.1.7, an independently verified controlled-acceptance v0.1.8 installation, or accepted v0.2.2. Check its host-visible absolute non-Store base and Python 3.12, plus `import filelock, psutil` in isolated mode. If this cannot be established, preserve the installation and obtain a reviewed recovery path; do not substitute a bare host Python, a new unpinned environment or the target venv.
 
@@ -134,18 +134,18 @@ Require no active `state/service-transaction.json` before qualifying any forward
 
 The updater inspects task ownership before creating a hold. A missing or explicitly disabled task is refused; it does not silently override an owner's stop. Inspect and deliberately restore/start the intended existing service before requesting the forward update. A foreign or unreadable transaction remains preserved for inspection, with no guessed recovery UUID.
 
-The following `text` block is a schematic argument template, not a paste-ready command. Place the independently verified new source at EXACTLY `<runtime>/releases/v0.2.14`. Change into it and run its NEW updater with the RETAINED installed Python. The Windows task definition is the same one v0.2.13 installed; this update does not switch Windows or Mac onto another service backend.
+The following `text` block is a schematic argument template, not a paste-ready command. Place the independently verified new source at EXACTLY `<runtime>/releases/v0.2.15`. Change into it and run its NEW updater with the RETAINED installed Python. The Windows task definition is the same one v0.2.13 installed; this update does not switch Windows or Mac onto another service backend.
 
 ```text
-"<retained v0.1.7 Python>" -I -B "<verified v0.2.14 checkout>/update.py" --root "<runtime root>" --version v0.2.14
+"<retained v0.1.7 Python>" -I -B "<verified v0.2.15 checkout>/update.py" --root "<runtime root>" --version v0.2.15
 ```
 
 In ordinary PowerShell, set `$retainedPython` to the inspected `device.json` Python, `$brainRoot` to the inspected runtime and `$brainRelease` to its independently verified new checkout. Execute:
 
 ```powershell
-if ([IO.Path]::GetFullPath($brainRelease) -ne [IO.Path]::GetFullPath((Join-Path $brainRoot 'releases/v0.2.14'))) { throw 'New checkout is not the exact runtime release path.' }
+if ([IO.Path]::GetFullPath($brainRelease) -ne [IO.Path]::GetFullPath((Join-Path $brainRoot 'releases/v0.2.15'))) { throw 'New checkout is not the exact runtime release path.' }
 Set-Location -LiteralPath $brainRelease
-& $retainedPython -I -B (Join-Path $brainRelease 'update.py') --root $brainRoot --version v0.2.14
+& $retainedPython -I -B (Join-Path $brainRelease 'update.py') --root $brainRoot --version v0.2.15
 if ($LASTEXITCODE -ne 0) { throw 'Update did not complete; preserve its transaction and inspect recovery.' }
 ```
 
