@@ -503,7 +503,6 @@ def grok_directory(home):
     When that link is safe, the files are planned at the real path.
     """
     home=Path(home);logical=home/'agent-data'/'workflows'/'second-brain'
-    if os.name!='posix':return logical
     try:return resolve_client_path(logical, home)
     except (ValueError, OSError):return logical
 

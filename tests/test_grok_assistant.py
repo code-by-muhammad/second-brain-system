@@ -82,7 +82,8 @@ def test_home_symlink_is_planned_at_the_real_directory(tmp_path,monkeypatch):
     resolved=helpers.resolve_client_path(home/'agent-data'/'workflows'/'second-brain',home)
     assert resolved==target/'workflows'/'second-brain'
     plan=helpers.plan(root,python,PROTOCOL,installer._codex_toml_plan,home=home,skill='skill\n',selected=['grok'])
-    assert any(row['path']==str(target/'workflows'/'second-brain'/'mcp-registration.json') for row in plan['files'])
+    wanted=target/'workflows'/'second-brain'/'mcp-registration.json'
+    assert any(Path(row['path'])==wanted for row in plan['files'])
     helpers.authorize_plan(plan,selected=['grok'])
 
 
