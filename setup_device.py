@@ -16,7 +16,7 @@ from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
 CONTROL='02-Areas/AI-Memory/Wiki/Control.md'
-CLIENTS=('claude-code','codex','claude-desktop')
+CLIENTS=('claude-code','codex','claude-desktop','grok')
 
 
 def say(text):print(text,flush=True)
@@ -39,6 +39,8 @@ def detected(home):
     found=[]
     if (home/'.claude.json').exists() or (home/'.claude').is_dir() or shutil.which('claude'):found.append('claude-code')
     if (home/'.codex').is_dir() or shutil.which('codex'):found.append('codex')
+    # Grok Bot keeps skills in this directory. It has no local MCP config file to detect.
+    if (home/'agent-data'/'workflows').is_dir():found.append('grok')
     return found
 
 
@@ -426,6 +428,19 @@ def main():
     elif args.selftest:
         say('\nEnd-to-end self-test (the connection an assistant uses; one test milestone per device):')
         failed=selftest(device) or failed
+    if 'grok' in selected:
+        spec=home/'agent-data'/'workflows'/'second-brain'/'mcp-registration.json'
+        try:
+            servers=json.loads(spec.read_text(encoding='utf-8')).get('mcpServers',{})
+            entry=servers.get('second-brain',{}) if isinstance(servers,dict) and set(servers)=={'second-brain'} else {}
+            if entry.get('command') and entry.get('args') and entry.get('env')=={}:
+                say('Grok Bot MCP registration (add this one server in the account; Grok Bot does not read the file by itself):')
+                say('  spec:    '+str(spec))
+                say('  command: '+str(entry['command']))
+                say('  args:    '+json.dumps(entry['args']))
+                say('  env:     {}')
+        except (OSError,ValueError,AttributeError):
+            say('Grok Bot registration spec was not written. The check above shows why.')
     say('\nNext: open a NEW chat in your assistant and ask it to call brain_context. After a restart of this computer, run this again with --check.')
     if open_wiki:say('Still open: '+open_wiki)
     # A requested wiki assistant that could not be selected is a failure of this run, whatever the check says.

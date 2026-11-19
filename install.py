@@ -6,7 +6,7 @@ import argparse, hashlib, json, os, re, secrets, shutil, stat, subprocess, tempf
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
-VERSION='0.2.13'
+VERSION='0.2.14'
 INDEX_IGNORE_TEXT='.git/\n.obsidian/\n.trash/\n'+'/02-Areas/AI-Memory/Wiki/Log-Archives/'+'[0-9a-f]'*64+'.md\n'
 _SETUP_CACHE=None
 _SETUP_SHA256=None
@@ -212,9 +212,11 @@ def setup_helpers():
 
 
 def sealed_client_plan(root,python,home=None,**options):
-    skill=REPO/'skills/second-brain/SKILL.md'  # Part of every verified release; older test releases have none.
-    return setup_helpers().plan(root,python,(REPO/'docs/AI-PROTOCOL.md').read_text(encoding='utf-8'),_codex_toml_plan,
-                                home=home,skill=skill.read_text(encoding='utf-8') if skill.is_file() else None,**options)
+    helpers=setup_helpers()
+    protocol=(REPO/'docs/AI-PROTOCOL.md').read_text(encoding='utf-8')
+    # Older test releases have no protocol file; they also have no skill to compose.
+    skill=helpers.composed_skill(protocol) if (REPO/'docs/AI-PROTOCOL.md').is_file() else None
+    return helpers.plan(root,python,protocol,_codex_toml_plan,home=home,skill=skill,**options)
 
 
 def client_plan(root,python,home=None):
@@ -533,7 +535,7 @@ def main():
     parser.add_argument('--initialize-wiki-owner',action='store_true',help=argparse.SUPPRESS)
     parser.add_argument('--wizard-no-service',action='store_true',help=argparse.SUPPRESS)
     parser.add_argument('--refresh-clients',action='store_true',help='Refresh only existing exact owned entries; create no new client integration or hook.')
-    parser.add_argument('--client',action='append',choices=['claude-code','claude-desktop','codex','hooks'])
+    parser.add_argument('--client',action='append',choices=['claude-code','claude-desktop','codex','hooks','grok'])
     parser.add_argument('--include-hooks',action='store_true',help='Explicitly opt into optional Claude hooks during fresh client configuration.')
     parser.add_argument('--desktop-config');parser.add_argument('--skip-desktop-refresh',action='store_true')
     parser.add_argument('--client-plan');parser.add_argument('--plan-sha256')

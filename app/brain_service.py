@@ -70,8 +70,10 @@ def _mac_registration():
 
 
 def _linux_registration():
-    from brain_linux_registration import LinuxRegistration
-    return LinuxRegistration(LINUX_UNIT,cfg.ROOT,processes._selected_python(),current_python=cfg.PYTHON)
+    # systemd as PID 1 keeps the qualified user-unit backend, including its refusals.
+    # Any other Linux init (tini, a container, a host without systemd) uses the user-space service.
+    from brain_linux_user_service import open_registration
+    return open_registration(LINUX_UNIT,cfg.ROOT,processes._selected_python(),current_python=cfg.PYTHON)
 
 
 def _native_listener_binding(identity,native):

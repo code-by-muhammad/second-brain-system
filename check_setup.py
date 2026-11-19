@@ -19,7 +19,7 @@ from pathlib import Path
 
 BEGIN = '<!-- BEGIN SECOND-BRAIN -->'
 END = '<!-- END SECOND-BRAIN -->'
-CLIENTS = ('claude-code', 'claude-desktop', 'codex')
+CLIENTS = ('claude-code', 'claude-desktop', 'codex', 'grok')
 rows = []
 
 
@@ -75,6 +75,25 @@ def protocol(name, path, release, imports=True):
         if actual != wanted:
             return add('FAIL', name, 'block differs from this release; refresh it')
     add('PASS', name, 'one block' + (' matching this release' if release else ''))
+
+
+def probe_stdio(command, args, env):
+    """Start the registered command and require the six tools. The caller only does this when the service is already up."""
+    import asyncio
+    from fastmcp import Client
+    from fastmcp.client.transports import StdioTransport
+    child = os.environ.copy()
+    child = {key: value for key, value in child.items() if not key.startswith(('BRAIN_', 'BASIC_MEMORY_'))}
+    child.update(env)
+
+    async def once():
+        transport = StdioTransport(command=command, args=args, env=child, keep_alive=False)
+        async with Client(transport, timeout=70, init_timeout=60) as client:
+            return {tool.name for tool in await client.list_tools()}
+
+    names = asyncio.run(once())
+    required = {'brain_context', 'brain_search', 'brain_read', 'brain_capture', 'brain_update_current', 'brain_health'}
+    return required <= names, names
 
 
 def skill(name, candidates, release):
@@ -232,6 +251,42 @@ def main():
             add('FAIL', 'Codex connection', '~/.codex/config.toml unreadable (needs Python 3.11 or newer)')
         protocol('Codex instructions', home / '.codex/AGENTS.md', release, imports=False)
         skill('Codex skill', [home / '.codex/skills/second-brain/SKILL.md', home / '.agents/skills/second-brain/SKILL.md'], release)
+    if 'grok' in clients:
+        # Grok Bot registers MCP servers in the account. This file is the spec it should be given;
+        # Grok Bot does not load it by itself. The skill beside it is the instruction block.
+        spec_path = home / 'agent-data/workflows/second-brain/mcp-registration.json'
+        entry = None
+        try:
+            document = load_json(spec_path)
+            servers = document.get('mcpServers') if isinstance(document, dict) else None
+            if not isinstance(servers, dict) or set(servers) != {'second-brain'}:
+                add('FAIL', 'Grok Bot connection', 'the spec must contain exactly one server, named second-brain')
+            else:
+                entry = servers['second-brain']
+                env = entry.get('env', {}) if isinstance(entry, dict) else None
+                clean = isinstance(env, dict) and all(isinstance(key, str) and isinstance(value, str) and not key.startswith(('BRAIN_', 'BASIC_MEMORY_')) for key, value in env.items())
+                good = owned(entry, python, root) and clean
+                add('PASS' if good else 'FAIL', 'Grok Bot connection',
+                    'one spec for this runtime' if good else 'missing, duplicated, or points somewhere else')
+                if not good:
+                    add('FAIL', 'Grok Bot server', 'not started because the registration spec is not this runtime')
+                elif running:
+                    try:
+                        started, _names = probe_stdio(entry.get('command', ''), list(entry.get('args') or []), env)
+                        add('PASS' if started else 'FAIL', 'Grok Bot server', 'the registered command started and offered the six tools' if started else 'the command started without the six tools')
+                    except Exception as error:
+                        add('FAIL', 'Grok Bot server', type(error).__name__)
+                else:
+                    add('FAIL', 'Grok Bot server', 'the spec is valid and the service is not running, so the command was not started')
+        except (OSError, ValueError, AttributeError):
+            add('FAIL', 'Grok Bot connection', 'agent-data/workflows/second-brain/mcp-registration.json unreadable')
+            add('FAIL', 'Grok Bot server', 'not started because the registration spec is unreadable')
+        skill_path = home / 'agent-data/workflows/second-brain/SKILL.md'
+        protocol('Grok Bot instructions', skill_path, release, imports=False)
+        skill('Grok Bot skill', [skill_path], release)
+        add('PASS' if skill_path.is_file() else 'FAIL', 'Grok Bot hooks',
+            'session start and capture are in the shared instruction block; Grok Bot has no separate hook file'
+            if skill_path.is_file() else 'the shared instruction block is missing')
     if 'claude-desktop' in clients:
         folder = (Path(os.environ.get('APPDATA', home / 'AppData/Roaming')) / 'Claude' if os.name == 'nt'
                   else home / 'Library/Application Support/Claude' if sys.platform == 'darwin' else home / '.config/Claude')

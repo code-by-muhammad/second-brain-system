@@ -146,7 +146,12 @@ def runtime_paths(root):
 MAX_CONFIG=64*1024*1024
 BEGIN='<!-- BEGIN SECOND-BRAIN -->'
 END='<!-- END SECOND-BRAIN -->'
-CLIENTS=('claude-code','claude-desktop','codex','hooks')
+CLIENTS=('claude-code','claude-desktop','codex','hooks','grok')
+SKILL_FRONT='''---
+name: second-brain
+description: Retrieve dated evidence from the user's shared Obsidian Second Brain, or save a meaningful work milestone. Use for prior work, decisions and explicitly confirmed preferences; do not scan the vault for unrelated tasks.
+---
+'''
 BASE_PROBE=('import sqlite3,sys,sysconfig;sqlite3.connect(":memory:").enable_load_extension(True);'
             'sys.exit(0 if sys.platform!="darwin" or sysconfig.get_config_var("PYTHONFRAMEWORK") else 1)')
 MAC_FRAMEWORK_PYTHONS=('/opt/homebrew/bin/python3.12','/usr/local/bin/python3.12',
@@ -396,6 +401,20 @@ def codex_skill(home):
     return common if common.is_file() and not own.exists() else own
 
 
+def composed_skill(protocol):
+    """One instruction text for every assistant. The skill front matter only says when to use it."""
+    return SKILL_FRONT+'\n'+BEGIN+'\n'+protocol.strip()+'\n'+END+'\n'
+
+
+def grok_directory(home):
+    """Grok Bot reads skills from this folder. It does not read an MCP config file from disk."""
+    return Path(home)/'agent-data'/'workflows'/'second-brain'
+
+
+def grok_present(home):
+    return (Path(home)/'agent-data'/'workflows').is_dir()
+
+
 def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,desktop=None,skip_desktop=False,skill=None):
     root=Path(root).resolve();home=Path(home or Path.home());python=Path(python)
     selected=set(CLIENTS if selected is None else selected)
@@ -422,6 +441,10 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
         targets.extend([('codex',home/'.codex/config.toml','toml'),*codex_rows])
         if skill is not None:shared('codex',codex_skill(home),'skill',lambda:_real(codex_skill(home),home))
     if 'hooks' in selected:targets.append(('hooks',home/'.claude/settings.json','hooks'))
+    if 'grok' in selected and skill is not None:
+        folder=grok_directory(home)
+        shared('grok',folder/'SKILL.md','skill',lambda:_real(folder/'SKILL.md',home))
+        targets.append(('grok',folder/'mcp-registration.json','grok'))
     for client,path,kind in targets:
         # One shared rules or skill file can serve several assistants; write it once.
         if _path(path) in claimed:skipped.append({'client':client,'path':str(path),'reason':'shared file already planned'});continue
@@ -472,6 +495,20 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
                 after=content[:first]+block+content[last+len(END):]
             else:after=content.rstrip()+'\n\n'+block+'\n'
         elif kind=='skill':after=skill
+        elif kind=='grok':
+            data=json_object(before);servers=data.get('mcpServers',{})
+            if servers in ({},None):servers={}
+            if not isinstance(servers,dict):raise ValueError('Invalid Grok MCP registration: '+str(path))
+            extra=[name for name in servers if name!='second-brain']
+            if extra:raise ValueError('Grok registration must contain only the second-brain server; remove the other names and run this again: '+', '.join(extra))
+            prior=servers.get('second-brain',{})
+            if refresh and not _owned(prior,root):skipped.append({'client':client,'path':str(path),'reason':'entry not owned'});continue
+            if not refresh and 'second-brain' in servers and not _owned(prior,root):
+                raise ValueError('Existing second-brain entry belongs to another or unknown runtime; preserve it for review: '+str(path))
+            if not isinstance(prior,dict):raise ValueError('Invalid MCP entry: '+str(path))
+            # The account registration is this command and nothing else. No token is stored here.
+            managed={'command':specs['command'],'args':list(specs['args']),'env':{}}
+            after=json.dumps({'mcpServers':{'second-brain':managed}},indent=2,ensure_ascii=False)+'\n'
         else:
             data=json_object(before);hooks=data.get('hooks',{})
             if not isinstance(hooks,dict):raise ValueError('Invalid hooks object: '+str(path))
@@ -533,6 +570,9 @@ def authorize_plan(value,*,selected=None,desktop=None,skip_desktop=False):
     if 'claude-desktop' in selected:
         target=desktop_path(home,desktop,skip_desktop)
         allowed['claude-desktop']={_path(target)} if target is not None else set()
+    if 'grok' in selected:
+        folder=grok_directory(home)
+        allowed['grok']={_path(folder/'SKILL.md'),_path(folder/'mcp-registration.json')}
     for row in value['files']:
         if _path(row['path']) not in allowed.get(row['client'],set()):
             raise ValueError('Sealed client plan target is outside the selected client scope; no writes made.')

@@ -1,4 +1,4 @@
-# Second Brain setup guide (v0.2.13)
+# Second Brain setup guide (v0.2.14)
 
 One guide for a new device and for a device that already runs Second Brain. One command does the setup. This guide tells you what to prepare, what the command asks, and how to read its result.
 
@@ -12,7 +12,9 @@ A chat without terminal access cannot do this.
 
 | Path | Status |
 |---|---|
-| Fresh install, Mac, Windows x64, Ubuntu 24.04 | {{FRESH_STATUS}} |
+| Fresh install, Mac, Windows x64, Ubuntu 24.04 with systemd | {{FRESH_STATUS}} |
+| Linux without systemd (container, tini, no user bus) | Supported by the user-space service in this release. |
+| Grok Bot on its computer | Supported when `~/agent-data/workflows` is present, or with `--clients grok`. |
 | Update an existing Mac on macOS 27 | {{MAC_UPDATE_STATUS}} |
 | Update an existing Windows device | {{WINDOWS_UPDATE_STATUS}} |
 | Wiki pages built with Claude or Codex | {{WIKI_STATUS}} |
@@ -20,7 +22,7 @@ A chat without terminal access cannot do this.
 
 Release identity. The command in section 3 checks the commit for you. These values let you check by hand:
 
-- Tag `v0.2.13`, commit `{{COMMIT}}`
+- Tag `v0.2.14`, commit `{{COMMIT}}`
 - `release-manifest.json` SHA256 `{{MANIFEST_SHA256}}`
 - Software repository: `https://github.com/code-by-muhammad/second-brain-system` (public, no account needed)
 
@@ -54,13 +56,13 @@ You do not need a GitHub account. Sync is an optional extra (section 6).
 Mac and Linux:
 
 ```text
-curl -fsSLO https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.13/setup.sh && echo "{{SETUP_SH_SHA256}}  setup.sh" | shasum -a 256 -c - && sh setup.sh
+curl -fsSLO https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.14/setup.sh && echo "{{SETUP_SH_SHA256}}  setup.sh" | shasum -a 256 -c - && sh setup.sh
 ```
 
 Windows PowerShell:
 
 ```text
-iwr https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.13/setup.ps1 -OutFile setup.ps1; if ((Get-FileHash setup.ps1 -Algorithm SHA256).Hash -ne '{{SETUP_PS1_SHA256}}') { throw 'setup.ps1 does not match this guide' }; powershell -ExecutionPolicy Bypass -File .\setup.ps1
+iwr https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.14/setup.ps1 -OutFile setup.ps1; if ((Get-FileHash setup.ps1 -Algorithm SHA256).Hash -ne '{{SETUP_PS1_SHA256}}') { throw 'setup.ps1 does not match this guide' }; powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
 The first part downloads a small script and checks it against the hash in this guide. The script then downloads the exact release, checks its commit, and starts the setup. A release folder kept from an earlier run must match that fresh download exactly. If any check fails, nothing runs.
@@ -76,8 +78,8 @@ What it does without asking:
 - [ ] Builds its own Python environment. Nothing is installed into your system Python.
 - [ ] Reads the system timezone.
 - [ ] Downloads the local search model (about 130 MB). Search runs on your computer.
-- [ ] Registers a background service that starts at login.
-- [ ] Connects every assistant it finds: the connection, the session hooks, the instruction block and the skill. Claude Code and Codex are found automatically.
+- [ ] Registers a background service that starts at login. On Linux with systemd as PID 1 this is the user unit. On Linux without systemd (PID 1 is tini or another supervisor, and there is no user bus) this is the user-space service, which also comes back after the host restarts.
+- [ ] Connects every assistant it finds: the connection, the session hooks, the instruction block and the skill. Claude Code and Codex are found automatically. Grok Bot is found when `~/agent-data/workflows` exists. The instruction text is one shared protocol, written into each assistant's own file.
 - [ ] On a maintainer with no wiki assistant yet: records the assistant program that builds wiki pages when exactly one of `claude` and `codex` is installed. With both installed it asks you, or, when an assistant runs it, names the command to choose. Recording sends nothing (section 7).
 - [ ] Runs the acceptance check and prints the result.
 
@@ -89,7 +91,7 @@ Options, added after `setup.sh` or `setup.ps1`:
 | `--vault "<folder>"` | The notes folder. |
 | `--role maintainer` or `--role capture` | Set the role yourself. On a device that is already installed as capture, `--role maintainer` makes it the maintainer, provided the notes have no maintainer yet (section 7). |
 | `--wiki claude` or `--wiki codex` | Maintainer only: choose the assistant program that builds the wiki pages (section 7). Needed when both are installed, or to change the choice. Nothing is built by this. |
-| `--clients "claude-code,codex"` | Choose the assistants. Keep the quotes on Windows. Add `claude-desktop` for the Claude Desktop chat app, which must be closed while you run this. |
+| `--clients "claude-code,codex,grok"` | Choose the assistants. Keep the quotes on Windows. Add `claude-desktop` for the Claude Desktop chat app, which must be closed while you run this. `grok` is Grok Bot. |
 | `--no-hooks` | Leave out the Claude Code session hooks. |
 | `--timezone Europe/Berlin` | Use this timezone instead of the system one. |
 | `--local-only` | The owner wants no Git remote for these notes. Setup refuses to start if the notes folder has one, and the check fails if one appears later. |
@@ -107,7 +109,7 @@ If an initial setup was interrupted, rerun its original release command with the
 The command ends with a list like this:
 
 ```text
-PASS   service health: status running, version 0.2.13
+PASS   service health: status running, version 0.2.14
 PASS   Claude Code connection: points at this runtime
 PASS   Claude Code instructions: one block matching this release
 PASS   Claude Code skill: ...
@@ -132,13 +134,14 @@ What each piece is, if you need to look:
 | Connection (`second-brain` MCP entry) | `~/.claude.json`, `~/.codex/config.toml`, Claude Desktop config |
 | Claude Code hooks | `~/.claude/settings.json` |
 | Instruction block (between the two `SECOND-BRAIN` marker lines) | `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, or the shared rules file those load |
-| Skill | `~/.claude/skills/second-brain/`, `~/.codex/skills/second-brain/`, or the shared copy those link to |
+| Skill | `~/.claude/skills/second-brain/`, `~/.codex/skills/second-brain/`, or the shared copy those link to. Grok Bot: `~/agent-data/workflows/second-brain/SKILL.md` |
+| Grok Bot registration spec | `~/agent-data/workflows/second-brain/mcp-registration.json`. Grok Bot does not load this file. The bot adds the one `second-brain` server (`command`, `args`, `env`) to the account. |
 
 If your assistant files are links to one shared rules or skills folder inside your home folder, the setup follows the links and keeps one copy. It does not add a second block. A shared file outside your home folder is never written. Setup tells you it was left alone, and the check shows whether it is current.
 
 ## 5. Updating a device that already runs Second Brain
 
-Use the same command. It finds the installed version, updates it, then adds anything the old setup was missing.
+Use the same command. It finds the installed version, updates it, then adds anything the old setup was missing. A Mac or Windows device on v0.2.13 keeps its existing service definition; the update does not move it onto another backend. An Ubuntu 24.04 device whose PID 1 is systemd keeps its user unit. A Linux device that could not start the service because there is no systemd gets the user-space service on this update. The notes folder is not replaced.
 
 Before:
 
@@ -232,7 +235,9 @@ Who writes the pages. The assistant program you choose, Claude (`claude`) or Cod
 | A `self-test` line says FAIL | The text after it is the reason. "connection" or "tools": the service is not answering; run the command with `--check` and fix what it shows first. "save": the notes folder cannot be written. "search" alone: the note was saved and read but not found; run it once more after a minute, and if it stays, send the full output to the maintainer of this software. |
 | "notes sync: needs attention" | Read the text after it. Usual causes: no network, the GitHub sign-in expired, or other uncommitted files in the notes folder. |
 | "notes sync: paused" | The text after it says what blocks the sync: a conflict between two devices, files you staged yourself, or other uncommitted files. Nothing is lost. Clear that in the notes folder with Git and the sync resumes. |
-| After a restart the service is not running | Mac: `launchctl list | grep second-brain`. Windows: the task `SecondBrainLocalService`. Linux: `systemctl --user status second-brain.service`. Then run the command with `--check`. |
+| After a restart the service is not running | Mac: `launchctl list | grep second-brain`. Windows: the task `SecondBrainLocalService`. Linux with systemd: `systemctl --user status second-brain.service`. Linux without systemd: `~/.config/second-brain/boot-start`, then run the command with `--check`. |
+| "The inherited runtime directory is not this user session" or "This native backend requires Ubuntu24.04/systemd255" on v0.2.13 | Update to v0.2.14. Those refusals stay on a host whose PID 1 is systemd. A host whose PID 1 is not systemd uses the user-space service instead. |
+| "Grok Bot connection" fails, or the bot has no `brain_` tools | The spec at `~/agent-data/workflows/second-brain/mcp-registration.json` must be the only `second-brain` server. Add that command, args and empty env in the Grok Bot account, then open a new chat. Delete that workflow folder only when it points at this runtime and you want the assistant removed; setup writes it again when Grok Bot is selected. |
 
 `<DEVICE PYTHON>` is the `python` value in `<RUNTIME>/device.json`.
 
