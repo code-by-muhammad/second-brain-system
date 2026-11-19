@@ -24,6 +24,7 @@ os.environ['HF_HUB_DISABLE_TELEMETRY']='1'
 os.environ['HF_HUB_OFFLINE']='1'
 os.environ['DO_NOT_TRACK']='1'
 os.environ['LOGFIRE_IGNORE_NO_CONFIG']='1'
+cfg.clamp_search_memory()
 cfg.require_local_search_runtime()
 from basic_memory.config import init_mcp_logging
 init_mcp_logging()

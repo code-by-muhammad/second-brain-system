@@ -552,11 +552,29 @@ def _mac_listeners():
     raise OwnershipError('Socket inventory changed during inspection; no credentials sent.')
 
 
+def _listener_alive(pid):
+    try:
+        proc = psutil.Process(pid)
+        return proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
+    except (psutil.Error, OSError):
+        return False
+
+
 def _listeners():
     try:
         if sys.platform == 'darwin':
             return _mac_listeners()
-        return [row for row in psutil.net_connections(kind='tcp') if row.status==psutil.CONN_LISTEN and row.laddr.port==cfg.PORT]
+        rows = [row for row in psutil.net_connections(kind='tcp') if row.status==psutil.CONN_LISTEN and row.laddr.port==cfg.PORT]
+        # A killed server stays visible until its parent reaps it, and one process
+        # can be listed twice. A dead pid is not a second listener.
+        live = []
+        seen = set()
+        for row in rows:
+            if row.pid is None or row.pid in seen or not _listener_alive(row.pid):
+                continue
+            seen.add(row.pid)
+            live.append(row)
+        return live
     except (psutil.Error,OSError) as error:raise OwnershipError('Local listener ownership is unavailable.') from error
 
 

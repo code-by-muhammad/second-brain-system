@@ -151,6 +151,7 @@ def _archive_previous():
 
 
 def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=False,retry=False):
+    cfg.clamp_search_memory()
     if (type(overall_seconds) is not int or type(stall_seconds) is not int
             or not 1<=stall_seconds<overall_seconds<=86400):
         raise ValueError('Use integer budgets: 1 <= stall-seconds < overall-seconds <= 86400.')

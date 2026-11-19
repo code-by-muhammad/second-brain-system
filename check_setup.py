@@ -50,7 +50,11 @@ def stable_launcher(root, python):
         return False
     text = path.read_text(encoding='utf-8', errors='replace')
     client = str(root / 'app' / 'brain_client.py')
-    return text.startswith('#!/bin/sh\nexec ') and str(python) in text and client in text and text.endswith('\n')
+    py = str(python)
+    if not text.startswith('#!/bin/sh\n') or not text.endswith('\n') or py not in text or client not in text:
+        return False
+    last = text.strip().splitlines()[-1]
+    return last.startswith('exec ') and py in last and client in last
 
 
 def owned_grok(entry, root):
@@ -232,12 +236,19 @@ def main():
                 add('PASS', 'wiki assistant', f"{chosen.get('path')}, model {chosen.get('model')}, effort {chosen.get('effort')}"[:400])
 
     if 'claude-code' in clients:
-        try:
-            entry = (load_json(home / '.claude.json').get('mcpServers') or {}).get('second-brain')
-            add('PASS' if owned(entry, python, root) else 'FAIL', 'Claude Code connection',
-                'points at this runtime' if owned(entry, python, root) else 'missing or points somewhere else')
-        except (OSError, ValueError, AttributeError):
-            add('FAIL', 'Claude Code connection', '~/.claude.json unreadable')
+        claude_json = home / '.claude.json'
+        if not claude_json.is_file():
+            add('FAIL', 'Claude Code connection', 'no second-brain entry')
+        else:
+            try:
+                entry = (load_json(claude_json).get('mcpServers') or {}).get('second-brain')
+                if entry is None:
+                    add('FAIL', 'Claude Code connection', 'no second-brain entry')
+                else:
+                    add('PASS' if owned(entry, python, root) else 'FAIL', 'Claude Code connection',
+                        'points at this runtime' if owned(entry, python, root) else 'points somewhere else')
+            except (OSError, ValueError, AttributeError):
+                add('FAIL', 'Claude Code connection', '~/.claude.json unreadable')
         protocol('Claude Code instructions', home / '.claude/CLAUDE.md', release)
         skill('Claude Code skill', [home / '.claude/skills/second-brain/SKILL.md'], release)
         if args.no_hooks:
@@ -257,13 +268,20 @@ def main():
             except (OSError, ValueError, AttributeError, TypeError):
                 add('FAIL', 'Claude Code hooks', '~/.claude/settings.json unreadable')
     if 'codex' in clients:
-        try:
-            import tomllib
-            entry = tomllib.loads((home / '.codex/config.toml').read_text(encoding='utf-8-sig')).get('mcp_servers', {}).get('second-brain')
-            add('PASS' if owned(entry, python, root) else 'FAIL', 'Codex connection',
-                'points at this runtime' if owned(entry, python, root) else 'missing or points somewhere else')
-        except (OSError, ValueError, ImportError):
-            add('FAIL', 'Codex connection', '~/.codex/config.toml unreadable (needs Python 3.11 or newer)')
+        codex_toml = home / '.codex/config.toml'
+        if not codex_toml.is_file():
+            add('FAIL', 'Codex connection', 'no second-brain entry')
+        else:
+            try:
+                import tomllib
+                entry = tomllib.loads(codex_toml.read_text(encoding='utf-8-sig')).get('mcp_servers', {}).get('second-brain')
+                if entry is None:
+                    add('FAIL', 'Codex connection', 'no second-brain entry')
+                else:
+                    add('PASS' if owned(entry, python, root) else 'FAIL', 'Codex connection',
+                        'points at this runtime' if owned(entry, python, root) else 'points somewhere else')
+            except (OSError, ValueError, ImportError):
+                add('FAIL', 'Codex connection', '~/.codex/config.toml unreadable')
         protocol('Codex instructions', home / '.codex/AGENTS.md', release, imports=False)
         skill('Codex skill', [home / '.codex/skills/second-brain/SKILL.md', home / '.agents/skills/second-brain/SKILL.md'], release)
     if 'grok' in clients:
@@ -271,31 +289,35 @@ def main():
         # Grok Bot does not load it by itself. The skill beside it is the instruction block.
         spec_path = home / 'agent-data/workflows/second-brain/mcp-registration.json'
         entry = None
-        try:
-            document = load_json(spec_path)
-            servers = document.get('mcpServers') if isinstance(document, dict) else None
-            if not isinstance(servers, dict) or set(servers) != {'second-brain'}:
-                add('FAIL', 'Grok Bot connection', 'the spec must contain exactly one server, named second-brain')
-            else:
-                entry = servers['second-brain']
-                env = entry.get('env', {}) if isinstance(entry, dict) else None
-                clean = isinstance(env, dict) and all(isinstance(key, str) and isinstance(value, str) and not key.startswith(('BRAIN_', 'BASIC_MEMORY_')) for key, value in env.items())
-                good = owned_grok(entry, root) and clean and stable_launcher(root, python)
-                add('PASS' if good else 'FAIL', 'Grok Bot connection',
-                    'one stable launcher for this runtime' if good else 'missing, duplicated, stale, or points somewhere else')
-                if not good:
-                    add('FAIL', 'Grok Bot server', 'not started because the registration spec is not this runtime')
-                elif running:
-                    try:
-                        started, _names = probe_stdio(entry.get('command', ''), list(entry.get('args') or []), env)
-                        add('PASS' if started else 'FAIL', 'Grok Bot server', 'the registered command started and offered the six tools' if started else 'the command started without the six tools')
-                    except Exception as error:
-                        add('FAIL', 'Grok Bot server', type(error).__name__)
+        if not spec_path.is_file():
+            add('FAIL', 'Grok Bot connection', 'no second-brain entry')
+            add('FAIL', 'Grok Bot server', 'not started because there is no registration spec')
+        else:
+            try:
+                document = load_json(spec_path)
+                servers = document.get('mcpServers') if isinstance(document, dict) else None
+                if not isinstance(servers, dict) or set(servers) != {'second-brain'}:
+                    add('FAIL', 'Grok Bot connection', 'the spec must contain exactly one server, named second-brain')
                 else:
-                    add('FAIL', 'Grok Bot server', 'the spec is valid and the service is not running, so the command was not started')
-        except (OSError, ValueError, AttributeError):
-            add('FAIL', 'Grok Bot connection', 'agent-data/workflows/second-brain/mcp-registration.json unreadable')
-            add('FAIL', 'Grok Bot server', 'not started because the registration spec is unreadable')
+                    entry = servers['second-brain']
+                    env = entry.get('env', {}) if isinstance(entry, dict) else None
+                    clean = isinstance(env, dict) and all(isinstance(key, str) and isinstance(value, str) and not key.startswith(('BRAIN_', 'BASIC_MEMORY_')) for key, value in env.items())
+                    good = owned_grok(entry, root) and clean and stable_launcher(root, python)
+                    add('PASS' if good else 'FAIL', 'Grok Bot connection',
+                        'one stable launcher for this runtime' if good else 'missing, duplicated, stale, or points somewhere else')
+                    if not good:
+                        add('FAIL', 'Grok Bot server', 'not started because the registration spec is not this runtime')
+                    elif running:
+                        try:
+                            started, _names = probe_stdio(entry.get('command', ''), list(entry.get('args') or []), env)
+                            add('PASS' if started else 'FAIL', 'Grok Bot server', 'the registered command started and offered the six tools' if started else 'the command started without the six tools')
+                        except Exception as error:
+                            add('FAIL', 'Grok Bot server', type(error).__name__)
+                    else:
+                        add('FAIL', 'Grok Bot server', 'the spec is valid and the service is not running, so the command was not started')
+            except (OSError, ValueError, AttributeError):
+                add('FAIL', 'Grok Bot connection', 'agent-data/workflows/second-brain/mcp-registration.json unreadable')
+                add('FAIL', 'Grok Bot server', 'not started because the registration spec is unreadable')
         skill_path = home / 'agent-data/workflows/second-brain/SKILL.md'
         protocol('Grok Bot instructions', skill_path, release, imports=False)
         skill('Grok Bot skill', [skill_path], release)

@@ -57,11 +57,54 @@ def test_a_second_server_or_a_foreign_runtime_is_refused(owner):
     path=home/'agent-data/workflows/second-brain/mcp-registration.json'
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({'mcpServers':{'second-brain':{'command':'/usr/bin/python3','args':['/other/brain_client.py']},'other':{}}}),encoding='utf-8')
-    with pytest.raises(ValueError,match='only the second-brain server'):
-        helpers.plan(root,python,PROTOCOL,installer._codex_toml_plan,home=home,skill='skill\n',selected=['grok'])
+    extra=helpers.plan(root,python,PROTOCOL,installer._codex_toml_plan,home=home,skill='skill\n',selected=['grok','claude-code'])
+    assert any('only the second-brain server' in row['reason'] for row in extra['skipped'])
+    assert any(row['path'].endswith('.claude.json') for row in extra['files'])
+    assert '"other"' in path.read_text(encoding='utf-8')
     path.write_text(json.dumps({'mcpServers':{'second-brain':{'command':'/usr/bin/python3','args':['/other/brain_client.py']}}}),encoding='utf-8')
-    with pytest.raises(ValueError,match='another or unknown runtime'):
-        helpers.plan(root,python,PROTOCOL,installer._codex_toml_plan,home=home,skill='skill\n',selected=['grok'])
+    foreign=helpers.plan(root,python,PROTOCOL,installer._codex_toml_plan,home=home,skill='skill\n',selected=['grok'])
+    assert foreign['files']==[] or all(not row['path'].endswith('mcp-registration.json') for row in foreign['files'])
+    assert any('another or unknown runtime' in row['reason'] for row in foreign['skipped'])
+
+
+def test_home_symlink_is_planned_at_the_real_directory(tmp_path,monkeypatch):
+    home=tmp_path/'home';target=home/'agent-data-real';(target/'workflows').mkdir(parents=True)
+    (home/'agent-data').symlink_to(target,target_is_directory=True)
+    monkeypatch.setattr(Path,'home',classmethod(lambda cls:home))
+    root=tmp_path/'runtime';python=tmp_path/'python'
+    resolved=helpers.resolve_client_path(home/'agent-data'/'workflows'/'second-brain',home)
+    assert resolved==target/'workflows'/'second-brain'
+    plan=helpers.plan(root,python,PROTOCOL,installer._codex_toml_plan,home=home,skill='skill\n',selected=['grok'])
+    assert any(row['path']==str(target/'workflows'/'second-brain'/'mcp-registration.json') for row in plan['files'])
+    helpers.authorize_plan(plan,selected=['grok'])
+
+
+def test_a_link_outside_home_skips_only_grok(tmp_path,monkeypatch):
+    home=tmp_path/'home';home.mkdir();outside=tmp_path/'outside';(outside/'workflows').mkdir(parents=True)
+    (home/'agent-data').symlink_to(outside,target_is_directory=True)
+    monkeypatch.setattr(Path,'home',classmethod(lambda cls:home))
+    root=tmp_path/'runtime';python=tmp_path/'python'
+    plan=helpers.plan(root,python,PROTOCOL,installer._codex_toml_plan,home=home,skill='skill\n',selected=['grok','claude-code'])
+    assert any('leaves the home folder' in row['reason'] for row in plan['skipped'])
+    assert any(row['path'].endswith('.claude.json') for row in plan['files'])
+    assert not (outside/'workflows'/'second-brain'/'mcp-registration.json').exists()
+
+
+def test_world_writable_link_parent_is_refused(tmp_path):
+    home=tmp_path/'home';target=home/'real';(target/'workflows').mkdir(parents=True)
+    link=home/'agent-data';link.symlink_to(target,target_is_directory=True)
+    home.chmod(0o777)
+    with pytest.raises(ValueError,match='not private'):
+        helpers.resolve_client_path(link/'workflows'/'second-brain',home)
+
+
+def test_launcher_runs_the_boot_check_before_the_client(tmp_path):
+    root=tmp_path/'runtime';python=tmp_path/'python'
+    path=installer.write_mcp_launcher(root,python)
+    text=path.read_text(encoding='utf-8')
+    assert 'brain_linux_user_service.py' in text and ' boot ' in text
+    assert text.strip().splitlines()[-1].startswith('exec ')
+    assert 'brain_client.py' in text.splitlines()[-1]
 
 
 def test_check_accepts_one_owned_spec_without_starting_a_service(owner,monkeypatch,capsys):

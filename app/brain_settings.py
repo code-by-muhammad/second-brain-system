@@ -58,6 +58,56 @@ def require_local_search_runtime():
     if find_spec('litellm') is not None or any(Path(sys.executable).with_name(name).exists() for name in ('litellm.exe','litellm-proxy.exe')):
         raise ValueError('This release excludes LiteLLM; preserve the environment and reprovision from the verified locked release.')
 
+# One thread and one note at a time. A few thousand notes otherwise load several
+# ONNX arenas at once; that is what exhausted a 16 GB host during indexing.
+SEARCH_MEMORY_LIMITS = {
+    'semantic_embedding_threads': 1,
+    'semantic_embedding_parallel': 1,
+    'semantic_embedding_batch_size': 1,
+    'semantic_embedding_sync_batch_size': 1,
+    'semantic_embedding_request_concurrency': 1,
+    'index_batch_size': 8,
+    'index_batch_max_bytes': 1_048_576,
+    'index_parse_max_concurrent': 1,
+    'index_entity_max_concurrent': 1,
+    'index_metadata_update_max_concurrent': 1,
+}
+
+
+def clamp_search_memory(state=None):
+    """Lower index memory knobs already stored on a device. Other keys stay."""
+    directory = Path(state) if state is not None else STATE
+    path = directory / 'config.json'
+    if path.is_symlink() or os.path.isjunction(path) or not path.is_file():
+        return False
+    if any(item.is_symlink() or os.path.isjunction(item) for item in path.parents):
+        return False
+    try:
+        raw = path.read_bytes()
+        if len(raw) > 1_000_000:
+            return False
+        value = json.loads(raw)
+    except (OSError, ValueError, UnicodeError):
+        return False
+    if not isinstance(value, dict):
+        return False
+    changed = False
+    for key, cap in SEARCH_MEMORY_LIMITS.items():
+        current = value.get(key)
+        if type(current) is not int or current < 1 or current > cap:
+            value[key] = cap
+            changed = True
+    if not changed:
+        return False
+    temporary = path.with_name('config.json.tmp')
+    if temporary.exists() or temporary.is_symlink():
+        return False
+    temporary.write_text(json.dumps(value, indent=2) + '\n', encoding='utf-8')
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+    return True
+
+
 def environment():
     # Basic Memory environment overrides must not defeat the source-safe file
     # config, change the indexed project or silently select a remote provider.
@@ -68,6 +118,9 @@ def environment():
                HF_HUB_OFFLINE='1', DO_NOT_TRACK='1',BASIC_MEMORY_DISABLE_PERMALINKS='true',
                BASIC_MEMORY_ENSURE_FRONTMATTER_ON_SYNC='false',BASIC_MEMORY_FORMAT_ON_SAVE='false',
                BASIC_MEMORY_AUTO_UPDATE='false')
+    for key in ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
+        env[key] = '1'
+    env['TOKENIZERS_PARALLELISM'] = 'false'
     return env
 
 def require_maintainer():

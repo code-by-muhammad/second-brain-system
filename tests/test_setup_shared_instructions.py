@@ -38,13 +38,16 @@ def test_claude_code_gets_connection_block_and_skill(owner):
     assert files[str(home/'.claude/skills/second-brain/SKILL.md')]['after']=='new skill\n'
 
 
-def test_refresh_adds_no_block_and_no_skill(owner):
+def test_refresh_wires_a_selected_assistant_that_has_no_block_yet(owner):
     home,root,python=owner
     (home/'.claude').mkdir();(home/'.claude/CLAUDE.md').write_text('# My rules\n')
     (home/'.claude.json').write_text(json.dumps({'mcpServers':{'second-brain':{'command':'old','args':[str(root/'app/brain_client.py')]}}}))
     result=plan(owner,selected=['claude-code'],refresh=True)
-    assert [row['path'] for row in result['files']]==[str(home/'.claude.json')]
-    assert {row['reason'] for row in result['skipped']}=={'no managed protocol block','absent; refresh creates no client file'}
+    files=by_path(result)
+    assert set(files)=={str(home/'.claude.json'),str(home/'.claude/CLAUDE.md'),str(home/'.claude/skills/second-brain/SKILL.md')}
+    assert 'new protocol' in files[str(home/'.claude/CLAUDE.md')]['after']
+    assert files[str(home/'.claude/skills/second-brain/SKILL.md')]['after']=='new skill\n'
+    assert result['skipped']==[]
 
 
 def test_block_in_an_imported_rules_file_is_refreshed_there_once(owner):

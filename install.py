@@ -301,7 +301,10 @@ def retrieval_settings(root,vault):
     return {'projects':{'brain':{'path':str(vault),'mode':'local'}},'default_project':'brain','project_root':str(vault),
             'database_backend':'sqlite','semantic_search_enabled':True,'semantic_embedding_provider':'fastembed',
             'semantic_embedding_model':'bge-small-en-v1.5','semantic_embedding_dimensions':384,
-            'semantic_embedding_cache_dir':str(root/'models'),'semantic_embedding_threads':4,'semantic_embedding_batch_size':8,
+            'semantic_embedding_cache_dir':str(root/'models'),'semantic_embedding_threads':1,'semantic_embedding_parallel':1,
+            'semantic_embedding_batch_size':1,'semantic_embedding_sync_batch_size':1,'semantic_embedding_request_concurrency':1,
+            'index_batch_size':8,'index_batch_max_bytes':1048576,'index_parse_max_concurrent':1,
+            'index_entity_max_concurrent':1,'index_metadata_update_max_concurrent':1,
             'auto_update':False,'logfire_enabled':False,'logfire_send_to_logfire':False,'disable_permalinks':True,
             'ensure_frontmatter_on_sync':False,'format_on_save':False}
 
@@ -312,7 +315,20 @@ def write_mcp_launcher(root,python):
     path=Path(root)/'bin'/'second-brain-mcp'
     if path.is_symlink() or path.parent.is_symlink():raise ValueError('Linked MCP launcher is refused.')
     path.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
-    body='#!/bin/sh\nexec '+shlex.quote(str(Path(python)))+' '+shlex.quote(str(Path(root)/'app'/'brain_client.py'))+'\n'
+    py=shlex.quote(str(Path(python)))
+    client=shlex.quote(str(Path(root)/'app'/'brain_client.py'))
+    boot=shlex.quote(str(Path(root)/'app'/'brain_linux_user_service.py'))
+    # On a host that runs neither a login script, crontab, nor an autostart runner,
+    # opening this connection is what starts the enabled service. boot returns at once
+    # when the service is already running or was stopped on purpose.
+    body=('#!/bin/sh\n'
+          'if [ -r /proc/1/comm ]; then\n'
+          '  comm=$(tr -d "\\0" </proc/1/comm)\n'
+          '  if [ "$comm" != systemd ]; then\n'
+          f'    {py} {boot} boot >/dev/null 2>&1 || true\n'
+          '  fi\n'
+          'fi\n'
+          f'exec {py} {client}\n')
     atomic(path,body)
     os.chmod(path,0o700)
     return path
@@ -361,6 +377,13 @@ def deploy(root,python,vault,role='capture',configure_clients=False,client_value
     config=root/'state/config.json'
     if not config.exists():
         atomic(config,json.dumps(retrieval_settings(root,vault),indent=2)+'\n',expected_sha256=None)
+    else:
+        # An older install keeps its config. Lower only the index memory knobs.
+        app=str(root/'app')
+        if app not in sys.path:sys.path.insert(0,app)
+        import brain_settings
+        clamp=getattr(brain_settings,'clamp_search_memory',None)
+        if clamp is not None:clamp(root/'state')
     if not (root/'state/.bmignore').exists():atomic(root/'state/.bmignore',INDEX_IGNORE_TEXT,expected_sha256=None)
     write_mcp_launcher(root,settings['python'])
     client_result=setup_helpers().apply(client_value,atomic,backup,root) if client_value is not None else {'changed':[],'deferred':[],'client_acceptance':'not selected'}

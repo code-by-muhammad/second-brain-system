@@ -33,8 +33,9 @@ def test_refresh_preserves_server_options_and_creates_no_integration(owner):
     path=home/'.codex/config.toml'
     path.write_text('[mcp_servers.second-brain]\ncommand="old"\nargs=['+json.dumps(str(root/'app/brain_client.py'))+']\nstartup_timeout_sec=91\n[mcp_servers.second-brain.env]\nOWNER="keep"\n')
     result=plan(owner,selected=['codex'],refresh=True)
-    assert len(result['files'])==1 and not (home/'.codex/AGENTS.md').exists()
-    data=tomllib.loads(result['files'][0]['after'])['mcp_servers']['second-brain']
+    toml=next(row for row in result['files'] if row['path'].endswith('config.toml'))
+    assert any(row['path'].endswith('AGENTS.md') for row in result['files']) and not (home/'.codex/AGENTS.md').exists()
+    data=tomllib.loads(toml['after'])['mcp_servers']['second-brain']
     assert data['env']=={'OWNER':'keep'} and data['startup_timeout_sec']==91 and data['command']==str(python)
 
 
@@ -53,7 +54,9 @@ def test_fresh_selection_preserves_and_refuses_a_foreign_second_brain_entry(owne
     else:
         path=home/'.codex/config.toml';path.write_text('[mcp_servers.second-brain]\ncommand="foreign"\nargs=["C:/foreign/app/brain_client.py"]\n')
     before=path.read_bytes()
-    with pytest.raises(ValueError,match='another or unknown runtime'):plan(owner,selected=[client])
+    result=plan(owner,selected=[client])
+    assert all(Path(row['path'])!=path for row in result['files'])
+    assert any('another or unknown runtime' in row['reason'] for row in result['skipped'])
     assert path.read_bytes()==before
 
 
@@ -76,15 +79,21 @@ def test_refresh_only_requires_same_release_and_recorded_python_before_provision
 def test_malformed_unowned_refresh_preserved_but_owned_duplicate_json_refused(owner):
     home,root,python=owner;path=home/'.claude.json'
     path.write_text('{unrelated-bad')
-    assert not plan(owner,selected=['claude-code'],refresh=True)['files']
+    preserved=plan(owner,selected=['claude-code'],refresh=True)
+    assert all(not row['path'].endswith('.claude.json') for row in preserved['files'])
+    assert any(row['reason']=='unparseable; ownership not inspected' for row in preserved['skipped'])
     path.write_text('{"root":'+json.dumps(str(root))+',"mcpServers":{},"mcpServers":{}}')
-    with pytest.raises(ValueError,match='Duplicate'):plan(owner,selected=['claude-code'],refresh=True)
+    refused=plan(owner,selected=['claude-code'],refresh=True)
+    assert all(not row['path'].endswith('.claude.json') for row in refused['files'])
+    assert any('Duplicate' in row['reason'] for row in refused['skipped'])
 
 
 @pytest.mark.parametrize('text',[helpers.BEGIN+'\n',helpers.BEGIN+helpers.END+helpers.BEGIN+helpers.END,helpers.END+helpers.BEGIN])
 def test_bad_protocol_markers_refused(owner,text):
     home,root,python=owner;(home/'.codex/AGENTS.md').write_text(text)
-    with pytest.raises(ValueError,match='marker|protocol'):plan(owner,selected=['codex'],refresh=True)
+    refused=plan(owner,selected=['codex'],refresh=True)
+    assert not any(row['path'].endswith('AGENTS.md') for row in refused['files'])
+    assert any('marker' in row['reason'] or 'protocol' in row['reason'] for row in refused['skipped'])
 
 
 def test_refresh_cas_before_stop_and_deferred_concurrent_edit(owner):
@@ -95,11 +104,14 @@ def test_refresh_cas_before_stop_and_deferred_concurrent_edit(owner):
     original=path.read_bytes();path.write_text('{"new owner edit":true}')
     with pytest.raises(ValueError,match='old service is healthy'):helpers.current(value)
     writes=[]
-    receipt=helpers.apply(value,lambda *args:writes.append(args),lambda *args:None,root)
-    assert not writes and len(receipt['deferred'])==1 and path.read_text()=='{"new owner edit":true}'
+    receipt=helpers.apply(value,lambda *args,**kwargs:writes.append(args),lambda *args:None,root)
+    assert not any(str(item[0]).endswith('.claude.json') for item in writes)
+    assert any(item['path'].endswith('.claude.json') for item in receipt['deferred']) and path.read_text()=='{"new owner edit":true}'
     path.write_bytes(original)
-    receipt=helpers.apply(value,lambda path,text,**kwargs:path.write_bytes(text.encode('utf-8')),lambda *args:None,root)
-    assert receipt['changed']==[str(path)] and helpers.after_check(value)==[]
+    def write(path,text,**kwargs):
+        path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(text.encode('utf-8'))
+    receipt=helpers.apply(value,write,lambda *args:None,root)
+    assert str(path) in receipt['changed'] and helpers.after_check(value)==[]
     path.write_text('{"later app edit":true}')
     assert helpers.after_check(value)==[str(path)]
 
@@ -129,9 +141,11 @@ def test_busy_desktop_refuses_preflight_and_reopen_defers_write(owner,monkeypatc
 
 
 def test_oversize_config_fails_instead_of_assuming_unowned(owner,monkeypatch):
-    home,root,python=owner;(home/'.claude.json').write_bytes(b'x'*100)
+    home,root,python=owner;    (home/'.claude.json').write_bytes(b'x'*100)
     monkeypatch.setattr(helpers,'MAX_CONFIG',99)
-    with pytest.raises(ValueError,match='bound'):plan(owner,selected=['claude-code'],refresh=True)
+    refused=plan(owner,selected=['claude-code'],refresh=True)
+    assert all(not row['path'].endswith('.claude.json') for row in refused['files'])
+    assert any('bound' in row['reason'] for row in refused['skipped'])
 
 
 def test_uv_uses_one_absolute_find_result_for_sync(tmp_path,monkeypatch):

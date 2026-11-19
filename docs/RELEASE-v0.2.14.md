@@ -41,13 +41,15 @@ After the host comes back, the service is started again by whichever of these ex
 - `~/.config/autostart/second-brain.desktop` (a desktop login)
 - an `@reboot` user crontab line, when `crontab` works
 
-The Grok Bot computer has no crontab and no systemd. The login script and the MCP command both start the service: the assistant's `second-brain` command calls the service start when the listener is down, and only when the service is enabled. `setup` then `--check --selftest` is the acceptance check. Health must say `running` and the six self-test lines must pass.
+The Grok Bot computer has no crontab, does not run `~/.profile` at boot, and has no autostart runner. `<runtime>/bin/second-brain-mcp` therefore runs the same boot check (`brain_linux_user_service.py boot`) before it connects. That check does nothing when the service is already running or was stopped on purpose, and starts it when it is enabled and down. A host whose PID 1 is systemd is left to systemd. `setup` then `--check --selftest` is the acceptance check. Health must say `running` and the six self-test lines must pass.
+
+Indexing uses one ONNX thread and one note at a time, and an update lowers those knobs in an existing `state/config.json` without changing the other keys. A few thousand notes should stay well under a few gigabytes. A server that was killed is reaped before the supervisor looks at the port, so a leftover listener from that kill is not treated as a second owner.
 
 Removing the boot hooks does not delete the definition. `brain_linux_user_service.py` records them so a later setup can replace the same files. The notes and the runtime are not part of that removal.
 
 ## Grok Bot
 
-Grok Bot does not read a local MCP config file. `~/.grok/config.toml` belongs to a different product and is not written. Setup, when it finds `~/agent-data/workflows` or is given `--clients grok`, writes two files:
+Grok Bot does not read a local MCP config file. `~/.grok/config.toml` belongs to a different product and is not written. `~/agent-data` may be a symlink. Setup follows it when every hop stays inside the home folder, the link is owned by this user or by root, and the directory it names is owned by this user and not world-writable. A link that leaves the home folder is refused for Grok Bot only; the other assistants are still written. Setup, when it finds `~/agent-data/workflows` or is given `--clients grok`, writes two files:
 
 - `~/agent-data/workflows/second-brain/SKILL.md` — the same instruction text Claude and Codex receive, with the skill front matter those assistants already use
 - `~/agent-data/workflows/second-brain/mcp-registration.json` — one server, `second-brain`. `command` is `<runtime>/bin/second-brain-mcp`, `args` is `[]`, and `env` is `{}`. That path stays the same when the release changes; the script it runs is rewritten to the current Python.

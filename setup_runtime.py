@@ -248,8 +248,65 @@ def provision(repo,root,uv=None):
     return python
 
 
+def _posix_uid(info, allow_root):
+    if os.name!='posix':return True
+    if info.st_uid==os.geteuid():return True
+    return bool(allow_root and info.st_uid==0)
+
+
+def _directory_ok(info, allow_root):
+    """A world-writable directory, or a root-owned group-writable one, can host a planted link."""
+    if not _posix_uid(info, allow_root):return False
+    if os.name!='posix':return True
+    if info.st_mode & 0o002:return False
+    if info.st_uid!=os.geteuid() and info.st_mode & 0o020:return False
+    return True
+
+
+def _inside_home(path, home):
+    home_text=os.path.normcase(str(home));path_text=os.path.normcase(str(path))
+    return path_text==home_text or path_text.startswith(home_text+os.sep)
+
+
+def resolve_client_path(path, home):
+    """Follow a client path only when every link stays inside the home folder.
+
+    A root-owned link is accepted when its target is this user's directory.
+    A link into another directory, a loop, or a link planted in a directory
+    other people can write is refused.
+    """
+    home=Path(home).resolve();path=Path(path)
+    if not path.is_absolute():path=home/path
+    cursor=Path(path.anchor);pending=list(path.parts[1:]);hops=0;seen=set()
+    while pending:
+        cursor=cursor/pending.pop(0)
+        linked=cursor.is_symlink() or (hasattr(cursor,'is_junction') and cursor.is_junction())
+        if not linked:continue
+        hops+=1
+        if hops>8:raise ValueError('Client path has too many links: '+str(path))
+        raw=os.readlink(cursor);mark=(str(cursor),raw)
+        if mark in seen:raise ValueError('Client path link loops: '+str(path))
+        seen.add(mark)
+        if not _posix_uid(cursor.lstat(), True):raise ValueError('Client path link is not owned by this user: '+str(path))
+        if not _directory_ok(cursor.parent.stat(), True):raise ValueError('Client path link directory is not private: '+str(path))
+        target=Path(raw)
+        if not target.is_absolute():target=cursor.parent/target
+        target=Path(os.path.normpath(str(target)))
+        if not _inside_home(target, home):raise ValueError('Instruction file leaves the home folder; preserve it and select a regular file there: '+str(path))
+        cursor=Path(target.anchor);pending=list(target.parts[1:])+pending
+    if not _inside_home(cursor, home):raise ValueError('Instruction file leaves the home folder; preserve it and select a regular file there: '+str(path))
+    existing=cursor if cursor.exists() else cursor.parent
+    while not existing.exists() and existing!=existing.parent:existing=existing.parent
+    if existing.exists() and not _directory_ok(existing.stat(), False):raise ValueError('Client path is not owned by this user: '+str(path))
+    return cursor
+
+
 def read(path):
     path=Path(path)
+    if os.name=='posix' and _linked(path):
+        home=Path.home()
+        candidate=path if path.is_absolute() else home/path
+        if _inside_home(candidate, home):path=resolve_client_path(candidate, home)
     if path.is_symlink() or (hasattr(path,'is_junction') and path.is_junction()):raise ValueError('Client file is linked; preserve it and select a regular file: '+str(path))
     for parent in path.parents:
         if parent.is_symlink() or (hasattr(parent,'is_junction') and parent.is_junction()):raise ValueError('Client parent is linked: '+str(path))
@@ -407,8 +464,15 @@ def composed_skill(protocol):
 
 
 def grok_directory(home):
-    """Grok Bot reads skills from this folder. It does not read an MCP config file from disk."""
-    return Path(home)/'agent-data'/'workflows'/'second-brain'
+    """Grok Bot reads skills from this folder. It does not read an MCP config file from disk.
+
+    ``~/agent-data`` may be a link to the real directory inside the home folder.
+    When that link is safe, the files are planned at the real path.
+    """
+    home=Path(home);logical=home/'agent-data'/'workflows'/'second-brain'
+    if os.name!='posix':return logical
+    try:return resolve_client_path(logical, home)
+    except (ValueError, OSError):return logical
 
 
 def grok_present(home):
@@ -447,97 +511,98 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
         targets.append(('grok',folder/'mcp-registration.json','grok'))
     for client,path,kind in targets:
         # One shared rules or skill file can serve several assistants; write it once.
+        # One assistant's refusal is recorded here and the next assistant is planned.
         if _path(path) in claimed:skipped.append({'client':client,'path':str(path),'reason':'shared file already planned'});continue
         claimed.add(_path(path))
-        before=read(path)
-        if refresh and before is None:skipped.append({'client':client,'path':str(path),'reason':'absent; refresh creates no client file'});continue
-        # Declined clients are never opened. Malformed unrelated existing files
-        # without an owned entry remain byte-for-byte untouched in refresh mode.
-        if refresh and kind not in ('protocol','skill'):
-            try:
-                if kind=='toml':
-                    import tomllib
-                    tomllib.loads(before.decode('utf-8-sig'))
-                else:json_object(before)
-            except (ValueError,UnicodeError):
-                literal=str(root).replace('\\','/').casefold()
-                raw=before.decode('utf-8-sig',errors='replace').replace('\\\\','/').replace('\\','/').casefold()
-                if literal in raw:raise
-                skipped.append({'client':client,'path':str(path),'reason':'unparseable; ownership not inspected'});continue
-        if kind=='json':
-            data=json_object(before);servers=data.get('mcpServers',{})
-            if not isinstance(servers,dict):raise ValueError('Invalid MCP parent object: '+str(path))
-            prior=servers.get('second-brain',{})
-            if refresh and not _owned(prior,root):skipped.append({'client':client,'path':str(path),'reason':'entry not owned'});continue
-            if not isinstance(prior,dict):raise ValueError('Invalid MCP entry: '+str(path))
-            if not refresh and 'second-brain' in servers and not _owned(prior,root):
-                raise ValueError('Existing second-brain entry belongs to another or unknown runtime; preserve it for review: '+str(path))
-            data['mcpServers']={**servers,'second-brain':{**prior,**specs}}
-            after=json.dumps(data,indent=2,ensure_ascii=False)+'\n'
-        elif kind=='toml':
-            import tomllib
-            content=(before or b'').decode('utf-8-sig');data=tomllib.loads(content)
-            servers=data.get('mcp_servers',{})
-            if not isinstance(servers,dict):raise ValueError('Invalid TOML MCP parent object: '+str(path))
-            prior=servers.get('second-brain',{})
-            if refresh and not _owned(prior,root):skipped.append({'client':client,'path':str(path),'reason':'entry not owned'});continue
-            if not refresh and 'second-brain' in servers and not _owned(prior,root):
-                raise ValueError('Existing second-brain entry belongs to another or unknown runtime; preserve it for review: '+str(path))
-            after=toml_plan(content,specs)
-        elif kind=='protocol':
-            content=(before or b'').decode('utf-8-sig');starts=content.count(BEGIN);ends=content.count(END)
-            if starts!=ends or starts>1:raise ValueError('Ambiguous/incomplete managed protocol markers: '+str(path))
-            if refresh and starts==0:skipped.append({'client':client,'path':str(path),'reason':'no managed protocol block'});continue
-            block=BEGIN+'\n'+protocol.rstrip()+'\n'+END
-            if starts:
-                first=content.index(BEGIN);last=content.index(END)
-                if last<first:raise ValueError('Managed protocol marker order is invalid: '+str(path))
-                after=content[:first]+block+content[last+len(END):]
-            else:after=content.rstrip()+'\n\n'+block+'\n'
-        elif kind=='skill':after=skill
-        elif kind=='grok':
-            data=json_object(before);servers=data.get('mcpServers',{})
-            if servers in ({},None):servers={}
-            if not isinstance(servers,dict):raise ValueError('Invalid Grok MCP registration: '+str(path))
-            extra=[name for name in servers if name!='second-brain']
-            if extra:raise ValueError('Grok registration must contain only the second-brain server; remove the other names and run this again: '+', '.join(extra))
-            prior=servers.get('second-brain',{})
-            if not isinstance(prior,dict):raise ValueError('Invalid MCP entry: '+str(path))
-            # One stable launcher under the runtime. The release venv changes; this path does not.
-            # A spec that already points at this runtime's client, or at that launcher, is the one we keep.
-            def grok_owned(spec):
-                if _owned(spec,root):return True
-                return (isinstance(spec,dict) and spec.get('args')==[] and isinstance(spec.get('command'),str)
-                        and _path(spec['command'])==_path(root/'bin'/'second-brain-mcp'))
-            if refresh and not grok_owned(prior):skipped.append({'client':client,'path':str(path),'reason':'entry not owned'});continue
-            if not refresh and 'second-brain' in servers and not grok_owned(prior):
-                raise ValueError('Existing second-brain entry belongs to another or unknown runtime; preserve it for review: '+str(path))
-            managed={'command':str(root/'bin'/'second-brain-mcp'),'args':[],'env':{}}
-            after=json.dumps({'mcpServers':{'second-brain':managed}},indent=2,ensure_ascii=False)+'\n'
-        else:
-            data=json_object(before);hooks=data.get('hooks',{})
-            if not isinstance(hooks,dict):raise ValueError('Invalid hooks object: '+str(path))
-            found=False
-            command=('"'+str(python).replace('\\','/')+'" "'+str(root/'app/brain_hooks.py').replace('\\','/')+'"') if os.name=='nt' else shlex.join([str(python),str(root/'app/brain_hooks.py')])
-            for event in ('SessionStart','Stop'):
-                entries=hooks.get(event,[])
-                if not isinstance(entries,list):raise ValueError('Invalid hook event: '+str(path))
-                replacement=[];event_owned=False
-                for entry in entries:
-                    if not isinstance(entry,dict) or not isinstance(entry.get('hooks',[]),list):raise ValueError('Invalid hook entry: '+str(path))
-                    handlers=[]
-                    for handler in entry.get('hooks',[]):
-                        if not isinstance(handler,dict) or not isinstance(handler.get('command',''),str):raise ValueError('Invalid hook command: '+str(path))
-                        if _hook_owned(handler.get('command',''),root):
-                            handlers.append({**handler,'command':command});event_owned=True;found=True
-                        else:handlers.append(handler)
-                    replacement.append({**entry,'hooks':handlers})
-                if not refresh and not event_owned:replacement.append({'hooks':[{'type':'command','command':command,'timeout':10}]})
-                if event in hooks or not refresh:hooks[event]=replacement
-            if refresh and not found:skipped.append({'client':client,'path':str(path),'reason':'no exact owned hook'});continue
-            data['hooks']=hooks;after=json.dumps(data,indent=2,ensure_ascii=False)+'\n'
-        encoded=after.encode('utf-8')
-        records.append({'client':client,'path':str(path.absolute()),'before_sha256':digest(before),'after_sha256':digest(encoded),'after':after})
+        try:
+            before=read(path)
+            # A missing file, or a file with no second-brain entry, is created.
+            # An unrelated malformed file that does not name this runtime stays untouched.
+            if refresh and before is not None and kind not in ('protocol','skill'):
+                try:
+                    if kind=='toml':
+                        import tomllib
+                        tomllib.loads(before.decode('utf-8-sig'))
+                    else:json_object(before)
+                except (ValueError,UnicodeError):
+                    literal=str(root).replace('\\','/').casefold()
+                    raw=before.decode('utf-8-sig',errors='replace').replace('\\\\','/').replace('\\','/').casefold()
+                    if literal in raw:raise
+                    skipped.append({'client':client,'path':str(path),'reason':'unparseable; ownership not inspected'});continue
+            if kind=='json':
+                data=json_object(before);servers=data.get('mcpServers',{})
+                if not isinstance(servers,dict):raise ValueError('Invalid MCP parent object: '+str(path))
+                prior=servers.get('second-brain',{})
+                if not isinstance(prior,dict):raise ValueError('Invalid MCP entry: '+str(path))
+                if 'second-brain' in servers and not _owned(prior,root):
+                    raise ValueError('Existing second-brain entry belongs to another or unknown runtime; preserve it for review: '+str(path))
+                data['mcpServers']={**servers,'second-brain':{**prior,**specs}}
+                after=json.dumps(data,indent=2,ensure_ascii=False)+'\n'
+            elif kind=='toml':
+                import tomllib
+                content=(before or b'').decode('utf-8-sig');data=tomllib.loads(content)
+                servers=data.get('mcp_servers',{})
+                if not isinstance(servers,dict):raise ValueError('Invalid TOML MCP parent object: '+str(path))
+                prior=servers.get('second-brain',{})
+                if not isinstance(prior,dict):raise ValueError('Invalid MCP entry: '+str(path))
+                if 'second-brain' in servers and not _owned(prior,root):
+                    raise ValueError('Existing second-brain entry belongs to another or unknown runtime; preserve it for review: '+str(path))
+                after=toml_plan(content,specs)
+            elif kind=='protocol':
+                content=(before or b'').decode('utf-8-sig');starts=content.count(BEGIN);ends=content.count(END)
+                if starts!=ends or starts>1:raise ValueError('Ambiguous/incomplete managed protocol markers: '+str(path))
+                block=BEGIN+'\n'+protocol.rstrip()+'\n'+END
+                if starts:
+                    first=content.index(BEGIN);last=content.index(END)
+                    if last<first:raise ValueError('Managed protocol marker order is invalid: '+str(path))
+                    after=content[:first]+block+content[last+len(END):]
+                else:after=content.rstrip()+'\n\n'+block+'\n'
+            elif kind=='skill':after=skill
+            elif kind=='grok':
+                data=json_object(before);servers=data.get('mcpServers',{})
+                if servers in ({},None):servers={}
+                if not isinstance(servers,dict):raise ValueError('Invalid Grok MCP registration: '+str(path))
+                extra=[name for name in servers if name!='second-brain']
+                if extra:raise ValueError('Grok registration must contain only the second-brain server; remove the other names and run this again: '+', '.join(extra))
+                prior=servers.get('second-brain',{})
+                if not isinstance(prior,dict):raise ValueError('Invalid MCP entry: '+str(path))
+                # One stable launcher under the runtime. The release venv changes; this path does not.
+                # A spec that already points at this runtime's client, or at that launcher, is the one we keep.
+                def grok_owned(spec):
+                    if _owned(spec,root):return True
+                    return (isinstance(spec,dict) and spec.get('args')==[] and isinstance(spec.get('command'),str)
+                            and _path(spec['command'])==_path(root/'bin'/'second-brain-mcp'))
+                if 'second-brain' in servers and not grok_owned(prior):
+                    raise ValueError('Existing second-brain entry belongs to another or unknown runtime; preserve it for review: '+str(path))
+                managed={'command':str(root/'bin'/'second-brain-mcp'),'args':[],'env':{}}
+                after=json.dumps({'mcpServers':{'second-brain':managed}},indent=2,ensure_ascii=False)+'\n'
+            else:
+                data=json_object(before);hooks=data.get('hooks',{})
+                if not isinstance(hooks,dict):raise ValueError('Invalid hooks object: '+str(path))
+                found=False
+                create=not refresh or before is None
+                command=('"'+str(python).replace('\\','/')+'" "'+str(root/'app/brain_hooks.py').replace('\\','/')+'"') if os.name=='nt' else shlex.join([str(python),str(root/'app/brain_hooks.py')])
+                for event in ('SessionStart','Stop'):
+                    entries=hooks.get(event,[])
+                    if not isinstance(entries,list):raise ValueError('Invalid hook event: '+str(path))
+                    replacement=[];event_owned=False
+                    for entry in entries:
+                        if not isinstance(entry,dict) or not isinstance(entry.get('hooks',[]),list):raise ValueError('Invalid hook entry: '+str(path))
+                        handlers=[]
+                        for handler in entry.get('hooks',[]):
+                            if not isinstance(handler,dict) or not isinstance(handler.get('command',''),str):raise ValueError('Invalid hook command: '+str(path))
+                            if _hook_owned(handler.get('command',''),root):
+                                handlers.append({**handler,'command':command});event_owned=True;found=True
+                            else:handlers.append(handler)
+                        replacement.append({**entry,'hooks':handlers})
+                    if create and not event_owned:replacement.append({'hooks':[{'type':'command','command':command,'timeout':10}]})
+                    if event in hooks or create:hooks[event]=replacement
+                if refresh and before is not None and not found:skipped.append({'client':client,'path':str(path),'reason':'no exact owned hook'});continue
+                data['hooks']=hooks;after=json.dumps(data,indent=2,ensure_ascii=False)+'\n'
+            encoded=after.encode('utf-8')
+            records.append({'client':client,'path':str(path.absolute()),'before_sha256':digest(before),'after_sha256':digest(encoded),'after':after})
+        except (ValueError, OSError) as error:
+            skipped.append({'client':client,'path':str(path),'reason':str(error)})
     if any(row['client']=='claude-desktop' for row in records) and desktop_busy():raise ValueError('Claude Desktop is open. Close it or explicitly skip its refresh before continuing.')
     return {'format':1,'root':str(root),'python':str(python),'refresh':refresh,'files':records,'skipped':skipped}
 

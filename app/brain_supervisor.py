@@ -47,6 +47,7 @@ def _publish_owned(owned):
 def main(owned=None):
     # Keep live handles and completion cadence across unexpected-fault retries.
     owned={} if owned is None else owned
+    cfg.clamp_search_memory()
     for folder in ('state','logs'): (cfg.ROOT/folder).mkdir(parents=True,exist_ok=True)
     with FileLock(str(cfg.STATE/'supervisor.lock'),timeout=1):
         child=owned.get('server'); bootstrap=owned.get('bootstrap'); maintenance=owned.get('maintenance')
@@ -60,9 +61,16 @@ def main(owned=None):
                     if not service.spawn_allowed():
                         service.write_heartbeat('held')
                     else:
+                        # Reap a server that was killed before asking who owns the port.
+                        # Otherwise a zombie still holds the socket and the next check
+                        # reports several listeners and never starts a replacement.
+                        if child is not None and child.poll() is not None:
+                            owned.pop('server', None)
+                            child = None
+                            _publish_owned(owned)
                         identity=processes.listener_identity()
                         listening=identity is not None
-                        if not listening and (child is None or child.poll() is not None):
+                        if not listening and child is None:
                             with (cfg.ROOT/'logs/service-server.log').open('ab') as log:
                                 child=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_server.py')],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
                                 owned['server']=child
