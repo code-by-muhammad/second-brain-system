@@ -433,7 +433,7 @@ def main():
         try:
             servers=json.loads(spec.read_text(encoding='utf-8')).get('mcpServers',{})
             entry=servers.get('second-brain',{}) if isinstance(servers,dict) and set(servers)=={'second-brain'} else {}
-            if entry.get('command') and entry.get('args') and entry.get('env')=={}:
+            if entry.get('command') and isinstance(entry.get('args'),list) and entry.get('env')=={}:
                 say('Grok Bot MCP registration (add this one server in the account; Grok Bot does not read the file by itself):')
                 say('  spec:    '+str(spec))
                 say('  command: '+str(entry['command']))

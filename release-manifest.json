@@ -85,7 +85,7 @@
     "security-exceptions-darwin-x86_64.json": "37f4e61eec53021d82c9f29275a228d1e6d51324970cf4b7b1809305f0a9798e",
     "security-exceptions-linux-x86_64.json": "2bca06be7012480b572c573ec9d745322dc4603ed0322689c074f60d951a9b55",
     "security-exceptions.json": "22cdc8a801a8538543fbd681a0b742ebabb87a7dee2093598c41ee7ae0f09bc7",
-    "setup_device.py": "b5ede67c0c0b2f71d7ab3455121316f4294f7b683e3e3ac072758e3805c44426",
+    "setup_device.py": "9fb810358f33484e81171fa479ada9cc556cbefbac5bb10dde09e1d0257f100e",
     "setup_runtime.py": "77b37a68a4b44c1b47265638caf67b22b44b748316511bd26b7d42906aa28d5f",
     "skills/second-brain/SKILL.md": "b0f8170349bed5c92f0e4915335c95ffcdc7b6dd230ab3bc03ebd414d7563b2e",
     "starter/.gitattributes": "df55e9ca2c16277e700d2316f08aeae29df6f6f87835a138ac13a1519cf553a7",
