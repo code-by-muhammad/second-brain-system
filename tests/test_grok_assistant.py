@@ -68,6 +68,12 @@ def test_a_second_server_or_a_foreign_runtime_is_refused(owner):
     assert any('another or unknown runtime' in row['reason'] for row in foreign['skipped'])
 
 
+def test_an_extended_windows_link_target_is_a_normal_path():
+    assert helpers._link_text('\\\\?\\C:\\home\\agent-data-real')=='C:\\home\\agent-data-real'
+    assert helpers._link_text('\\\\?\\UNC\\server\\share\\agent-data-real')=='\\\\server\\share\\agent-data-real'
+    assert helpers._link_text('/home/box/agent-data-real')=='/home/box/agent-data-real'
+
+
 def test_home_symlink_is_planned_at_the_real_directory(tmp_path,monkeypatch):
     home=tmp_path/'home';target=home/'agent-data-real';(target/'workflows').mkdir(parents=True)
     (home/'agent-data').symlink_to(target,target_is_directory=True)

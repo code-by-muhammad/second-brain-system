@@ -263,10 +263,16 @@ def _directory_ok(info, allow_root):
     return True
 
 
+def _link_text(raw):
+    """Windows readlink can return an extended path. Callers need the normal form."""
+    if isinstance(raw,str) and raw.startswith('\\\\?\\UNC\\'):return '\\\\'+raw[8:]
+    if isinstance(raw,str) and raw.startswith('\\\\?\\'):return raw[4:]
+    return raw
+
+
 def _plain(path):
     """Compare client paths without following a parent junction to another prefix."""
-    text=os.path.abspath(str(path))
-    if os.name=='nt' and text.startswith('\\\\?\\'):text=text[4:]
+    text=_link_text(os.path.abspath(str(path)))
     return os.path.normcase(os.path.normpath(text))
 
 
@@ -291,9 +297,10 @@ def resolve_client_path(path, home):
         if not linked:continue
         hops+=1
         if hops>8:raise ValueError('Client path has too many links: '+str(path))
-        raw=os.readlink(cursor);mark=(str(cursor),raw)
+        raw_link=os.readlink(cursor);mark=(str(cursor),raw_link)
         if mark in seen:raise ValueError('Client path link loops: '+str(path))
         seen.add(mark)
+        raw=_link_text(raw_link)
         if not _posix_uid(cursor.lstat(), True):raise ValueError('Client path link is not owned by this user: '+str(path))
         if not _directory_ok(cursor.parent.stat(), True):raise ValueError('Client path link directory is not private: '+str(path))
         target=Path(raw)
