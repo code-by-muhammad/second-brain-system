@@ -570,9 +570,10 @@ def _listeners():
         live = []
         seen = set()
         for row in rows:
-            if row.pid is None or row.pid in seen or not _listener_alive(row.pid):
+            pid=getattr(row,'pid',None)
+            if pid is None or pid in seen or not _listener_alive(pid):
                 continue
-            seen.add(row.pid)
+            seen.add(pid)
             live.append(row)
         return live
     except (psutil.Error,OSError) as error:raise OwnershipError('Local listener ownership is unavailable.') from error

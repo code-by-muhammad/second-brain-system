@@ -129,10 +129,11 @@ def test_descendant_inheriting_listener_causes_refusal(mac_inventory, monkeypatc
 
 @pytest.mark.parametrize('platform', ['darwin', 'win32', 'linux'])
 def test_platform_route_keeps_global_scan_off_mac(brain, monkeypatch, platform):
-    row = SimpleNamespace(status=processes.psutil.CONN_LISTEN, laddr=SimpleNamespace(port=cfg.PORT))
+    row = SimpleNamespace(pid=123, status=processes.psutil.CONN_LISTEN, laddr=SimpleNamespace(port=cfg.PORT))
     with monkeypatch.context() as patch:
         patch.setattr(processes.sys, 'platform', platform)
         patch.setattr(processes, '_mac_listeners', lambda: ['mac-result'])
+        patch.setattr(processes, '_listener_alive', lambda pid: True)
         patch.setattr(processes.psutil, 'net_connections', lambda **_: [row])
         assert _original_listener_route() == (['mac-result'] if platform == 'darwin' else [row])
 

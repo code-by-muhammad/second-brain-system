@@ -1,6 +1,7 @@
 """Grok Bot gets the same instruction text and one registration spec. Synthetic homes only."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import pytest
@@ -90,6 +91,7 @@ def test_a_link_outside_home_skips_only_grok(tmp_path,monkeypatch):
     assert not (outside/'workflows'/'second-brain'/'mcp-registration.json').exists()
 
 
+@pytest.mark.skipif(os.name!='posix',reason='directory mode bits are checked on POSIX')
 def test_world_writable_link_parent_is_refused(tmp_path):
     home=tmp_path/'home';target=home/'real';(target/'workflows').mkdir(parents=True)
     link=home/'agent-data';link.symlink_to(target,target_is_directory=True)
@@ -113,7 +115,7 @@ def test_check_accepts_one_owned_spec_without_starting_a_service(owner,monkeypat
     (root/'state').mkdir(parents=True)
     (root/'device.json').write_text(json.dumps({'version':'0.2.14','role':'capture','python':str(python),'vault':str(vault)}),encoding='utf-8')
     folder=home/'agent-data/workflows/second-brain';folder.mkdir(parents=True)
-    (folder/'SKILL.md').write_text(helpers.composed_skill(PROTOCOL),encoding='utf-8')
+    (folder/'SKILL.md').write_bytes((SOURCE/'skills/second-brain/SKILL.md').read_bytes())
     launcher=root/'bin'/'second-brain-mcp'
     launcher.parent.mkdir(parents=True)
     launcher.write_text('#!/bin/sh\nexec '+str(python)+' '+str(root/'app'/'brain_client.py')+'\n',encoding='utf-8')

@@ -1,10 +1,14 @@
 """User-space Linux service records. No keeper is spawned and no crontab is edited."""
 import hashlib
 import os
+import sys
 from pathlib import Path
+import pytest
 import brain_linux_user_service as user
 import brain_process as processes
 import brain_settings as cfg
+
+pytestmark=pytest.mark.skipif(sys.platform!='linux',reason='the user-space service runs on Linux')
 
 
 def _service(monkeypatch):

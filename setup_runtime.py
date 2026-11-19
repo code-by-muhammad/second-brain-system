@@ -263,8 +263,15 @@ def _directory_ok(info, allow_root):
     return True
 
 
+def _plain(path):
+    """Compare client paths without following a parent junction to another prefix."""
+    text=os.path.abspath(str(path))
+    if os.name=='nt' and text.startswith('\\\\?\\'):text=text[4:]
+    return os.path.normcase(os.path.normpath(text))
+
+
 def _inside_home(path, home):
-    home_text=os.path.normcase(str(home));path_text=os.path.normcase(str(path))
+    home_text=_plain(home);path_text=_plain(path)
     return path_text==home_text or path_text.startswith(home_text+os.sep)
 
 
@@ -275,7 +282,7 @@ def resolve_client_path(path, home):
     A link into another directory, a loop, or a link planted in a directory
     other people can write is refused.
     """
-    home=Path(home).resolve();path=Path(path)
+    home=Path(os.path.abspath(str(home)));path=Path(path)
     if not path.is_absolute():path=home/path
     cursor=Path(path.anchor);pending=list(path.parts[1:]);hops=0;seen=set()
     while pending:
@@ -543,9 +550,12 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
                         import tomllib
                         tomllib.loads(before.decode('utf-8-sig'))
                     else:json_object(before)
-                except (ValueError,UnicodeError):
+                except (ValueError,UnicodeError) as error:
                     literal=str(root).replace('\\','/').casefold()
                     raw=before.decode('utf-8-sig',errors='replace').replace('\\\\','/').replace('\\','/').casefold()
+                    # Duplicate keys are still a skip. Any other parse error that names this runtime stops the update.
+                    if literal in raw and not str(error).startswith('Duplicate JSON'):
+                        raise ValueError('Unparseable client file names this runtime: '+str(path)) from error
                     if literal in raw:raise
                     skipped.append({'client':client,'path':str(path),'reason':'unparseable; ownership not inspected'});continue
             if kind=='json':
@@ -621,8 +631,9 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
             encoded=after.encode('utf-8')
             records.append({'client':client,'path':str(path.absolute()),'before_sha256':digest(before),'after_sha256':digest(encoded),'after':after})
         except (ValueError, OSError) as error:
-            # One assistant can be left alone. A missing locked TOML parser means no plan is safe.
-            if 'tomlkit' in str(error):raise
+            # One assistant can be left alone. A missing locked TOML parser, or a file that
+            # names this runtime and cannot be parsed, means no plan is safe.
+            if 'tomlkit' in str(error) or str(error).startswith('Unparseable client file names this runtime'):raise
             skipped.append({'client':client,'path':str(path),'reason':str(error)})
     if any(row['client']=='claude-desktop' for row in records) and desktop_busy():raise ValueError('Claude Desktop is open. Close it or explicitly skip its refresh before continuing.')
     return {'format':1,'root':str(root),'python':str(python),'refresh':refresh,'files':records,'skipped':skipped}

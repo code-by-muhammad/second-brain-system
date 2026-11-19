@@ -677,6 +677,12 @@ def main():
                 value['device_before_sha256']=helpers.digest(helpers.read(root/'device.json'))
                 settings=device_settings(existing,vault,python,args.role)
                 value['device_after_sha256']=helpers.digest((json.dumps(settings,indent=2)+'\n').encode('utf-8'))
+    if value is not None and not args.refresh_clients:
+        # A refresh can leave one assistant untouched. A first install stops before any runtime is created.
+        leave=('another or unknown runtime','leaves the home folder','outside the home folder','more than one file',
+               'shared file already planned','unparseable; ownership not inspected','no exact owned hook','only the second-brain server')
+        blocked=next((row for row in value.get('skipped') or [] if not any(piece in str(row.get('reason','')) for piece in leave)),None)
+        if blocked is not None:raise ValueError(str(blocked.get('reason') or 'A selected client file could not be planned.'))
     if args.validate_only:
         if value is not None:helpers.current(value)
         receipt={'status':'validated','client_paths':[row['path'] for row in value['files']] if value else []}
