@@ -4,7 +4,25 @@ v0.2.14 adds a Linux service for hosts that have no systemd, and adds Grok Bot a
 
 ## Upgrade from v0.2.13
 
-Use the same command as any other update. Put this release at `<runtime>/releases/v0.2.14` and run its `setup_device.py` with the Python recorded in `device.json`. The updater stops the service only after its checks pass, then starts it again.
+Put this release at `<runtime>/releases/v0.2.14` and tag that checkout `v0.2.14` (the setup command checks the tag). `<runtime>` is the folder that already contains `device.json`. On the Grok Bot computer that is `/home/box/.local/share/second-brain`. From any directory:
+
+```text
+uv run --no-project --python 3.12 python -I -B /home/box/.local/share/second-brain/releases/v0.2.14/setup_device.py --root /home/box/.local/share/second-brain --yes --role capture
+```
+
+On another device, use that device's runtime in both places:
+
+```text
+uv run --no-project --python 3.12 python -I -B "<runtime>/releases/v0.2.14/setup_device.py" --root "<runtime>" --yes
+```
+
+Then:
+
+```text
+uv run --no-project --python 3.12 python -I -B "<runtime>/releases/v0.2.14/setup_device.py" --root "<runtime>" --check --selftest
+```
+
+A host whose PID 1 is systemd, and every Mac or Windows device, still refuses the update when its service is absent or explicitly stopped. Start that service with the old release first. A Linux host whose PID 1 is not systemd, and whose service file was never written, does not have a service to start: this update registers the user-space service instead of refusing. An explicitly disabled user-space service is still refused.
 
 - **Mac** keeps the same launchd job and the same job definition. Nothing about login or restart changes.
 - **Windows** keeps the same scheduled task and the same task definition. Nothing about login or restart changes.
@@ -32,7 +50,7 @@ Removing the boot hooks does not delete the definition. `brain_linux_user_servic
 Grok Bot does not read a local MCP config file. `~/.grok/config.toml` belongs to a different product and is not written. Setup, when it finds `~/agent-data/workflows` or is given `--clients grok`, writes two files:
 
 - `~/agent-data/workflows/second-brain/SKILL.md` — the same instruction text Claude and Codex receive, with the skill front matter those assistants already use
-- `~/agent-data/workflows/second-brain/mcp-registration.json` — one server, `second-brain`, with `command`, `args` and `env`
+- `~/agent-data/workflows/second-brain/mcp-registration.json` — one server, `second-brain`. `command` is `<runtime>/bin/second-brain-mcp`, `args` is `[]`, and `env` is `{}`. That path stays the same when the release changes; the script it runs is rewritten to the current Python.
 
 The bot adds that one server to the account. The check refuses a second server name and a spec that points at another runtime. It also starts the registered command when the service is already running and requires the six tools. Grok Bot has no hook file; the shared instruction block is the session-start and capture behaviour. Claude Code, Codex and Grok Bot are generated from `docs/AI-PROTOCOL.md`, so the three copies cannot drift.
 

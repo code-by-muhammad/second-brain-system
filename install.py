@@ -306,6 +306,18 @@ def retrieval_settings(root,vault):
             'ensure_frontmatter_on_sync':False,'format_on_save':False}
 
 
+def write_mcp_launcher(root,python):
+    """One executable path for the life of the runtime. Each release rewrites what it runs."""
+    import shlex
+    path=Path(root)/'bin'/'second-brain-mcp'
+    if path.is_symlink() or path.parent.is_symlink():raise ValueError('Linked MCP launcher is refused.')
+    path.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+    body='#!/bin/sh\nexec '+shlex.quote(str(Path(python)))+' '+shlex.quote(str(Path(root)/'app'/'brain_client.py'))+'\n'
+    atomic(path,body)
+    os.chmod(path,0o700)
+    return path
+
+
 def deploy(root,python,vault,role='capture',configure_clients=False,client_value=None,*,device_value=None,auth_value=None,source_sha256=None):
     old=validate(root,vault,python,False)
     if configure_clients and client_value is None:client_value=sealed_client_plan(root,python)
@@ -350,6 +362,7 @@ def deploy(root,python,vault,role='capture',configure_clients=False,client_value
     if not config.exists():
         atomic(config,json.dumps(retrieval_settings(root,vault),indent=2)+'\n',expected_sha256=None)
     if not (root/'state/.bmignore').exists():atomic(root/'state/.bmignore',INDEX_IGNORE_TEXT,expected_sha256=None)
+    write_mcp_launcher(root,settings['python'])
     client_result=setup_helpers().apply(client_value,atomic,backup,root) if client_value is not None else {'changed':[],'deferred':[],'client_acceptance':'not selected'}
     return {'status':'installed','root':str(root),'vault':str(vault),'role':settings['role'],'device_id':settings['device_id'],
             'clients':client_result['changed'],'client_result':client_result}
@@ -692,6 +705,7 @@ def main():
             current_initial=helpers.read(root/'state/install-transaction.json')
             if current_initial is not None and helpers.json_object(current_initial).get('stage')!='complete':
                 raise ValueError('Initial setup is incomplete; client refresh refused.')
+            write_mcp_launcher(root,existing.get('python',python))
             result={'status':'clients refreshed','client_result':helpers.apply(value,atomic,backup,root)}
     else:result=_run_fresh(root,python,vault,args,value,finish)
     print(json.dumps(result,indent=2))

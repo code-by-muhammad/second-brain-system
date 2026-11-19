@@ -502,12 +502,17 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
             extra=[name for name in servers if name!='second-brain']
             if extra:raise ValueError('Grok registration must contain only the second-brain server; remove the other names and run this again: '+', '.join(extra))
             prior=servers.get('second-brain',{})
-            if refresh and not _owned(prior,root):skipped.append({'client':client,'path':str(path),'reason':'entry not owned'});continue
-            if not refresh and 'second-brain' in servers and not _owned(prior,root):
-                raise ValueError('Existing second-brain entry belongs to another or unknown runtime; preserve it for review: '+str(path))
             if not isinstance(prior,dict):raise ValueError('Invalid MCP entry: '+str(path))
-            # The account registration is this command and nothing else. No token is stored here.
-            managed={'command':specs['command'],'args':list(specs['args']),'env':{}}
+            # One stable launcher under the runtime. The release venv changes; this path does not.
+            # A spec that already points at this runtime's client, or at that launcher, is the one we keep.
+            def grok_owned(spec):
+                if _owned(spec,root):return True
+                return (isinstance(spec,dict) and spec.get('args')==[] and isinstance(spec.get('command'),str)
+                        and _path(spec['command'])==_path(root/'bin'/'second-brain-mcp'))
+            if refresh and not grok_owned(prior):skipped.append({'client':client,'path':str(path),'reason':'entry not owned'});continue
+            if not refresh and 'second-brain' in servers and not grok_owned(prior):
+                raise ValueError('Existing second-brain entry belongs to another or unknown runtime; preserve it for review: '+str(path))
+            managed={'command':str(root/'bin'/'second-brain-mcp'),'args':[],'env':{}}
             after=json.dumps({'mcpServers':{'second-brain':managed}},indent=2,ensure_ascii=False)+'\n'
         else:
             data=json_object(before);hooks=data.get('hooks',{})

@@ -553,6 +553,81 @@ def main():
     print(json.dumps(result,indent=2))
 
 
+def _unregistered_user_service(inspected):
+    """A non-systemd host whose service file was never written.
+
+    systemd, macOS and Windows do not match: an absent or stopped task there
+    still refuses the update. An explicitly disabled user-space service does too.
+    """
+    if sys.platform!='linux' or not isinstance(inspected,dict):return False
+    native=inspected.get('native')
+    if not isinstance(native,dict) or native.get('backend')!='user-space':return False
+    return (inspected.get('task_present') is False and inspected.get('task_enabled') is None
+            and inspected.get('registration') is None and native.get('file_present') is False
+            and native.get('enabled') is None and native.get('loaded') is False
+            and native.get('running') is False and native.get('quiescent') is True
+            and native.get('main_pid') is None)
+
+
+def _register_first_user_service(root,release,info,python,plan,device,previous):
+    """Install the user-space service on a host that has never had one.
+
+    There is no old task to stop. A failure restores the previous app and device
+    bytes and removes a definition this attempt wrote. The vault is not touched.
+    """
+    again=controller(python,release,root,'service','inspect')
+    if not _unregistered_user_service(again):
+        raise ValueError('User service state changed before the first registration; nothing was changed.')
+    helpers=installer()
+    app=root/'app';device_path=root/'device.json'
+    saved_device=_read(device_path)
+    saved_files=[(Path(row['path']),_read(Path(row['path']))) for row in plan.get('files',[])]
+    helpers.private_dir(root/'backups')
+    saved_app=Path(tempfile.mkdtemp(prefix='previous-app-',dir=root/'backups'))
+    helpers.private_dir(saved_app)
+    if app.exists():shutil.copytree(app,saved_app/'app',ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
+    def restore_files():
+        if (saved_app/'app').exists():
+            if app.exists():os.replace(app,root/'backups'/('interrupted-app-'+secrets.token_hex(8)))
+            shutil.copytree(saved_app/'app',app)
+        if saved_device is not None:helpers.atomic(device_path,saved_device,expected_sha256=_digest(_read(device_path)))
+        launcher=root/'bin'/'second-brain-mcp'
+        if launcher.is_file() and not launcher.is_symlink():launcher.unlink()
+        for path,data in saved_files:
+            current=_read(path)
+            if current==data:continue
+            if data is None:
+                if path.is_file() and not path.is_symlink():path.unlink()
+            else:helpers.atomic(path,data,expected_sha256=_digest(current))
+    try:
+        installed=helpers.deploy(root,python,Path(device['vault']).resolve(),client_value=plan,source_sha256=info.get('sha256'))
+        if _digest(_read(device_path))!=plan['device_after_sha256']:
+            raise ValueError('Deployed device differs from the sealed update plan.')
+        installed['service']=controller(python,release,root,'service','install')
+        started=controller(python,release,root,'service','start')
+        health=wait_health(python,root,info['version'],checkout=release)
+    except BaseException as error:
+        withdrawn=False
+        try:
+            controller(python,release,root,'service','stop','--wait-seconds','30')
+        except Exception:pass
+        try:
+            controller(python,release,root,'service','withdraw-first');withdrawn=True
+        except Exception:withdrawn=False
+        try:restore_files()
+        except Exception as restore_error:
+            _receipt(root,{'status':'first user-service registration failed; restore incomplete','error_type':type(error).__name__,
+                           'restore_error_type':type(restore_error).__name__,'withdrawn':withdrawn,'pending_work':'preserved'})
+            raise RuntimeError('First user-service registration failed and the previous files could not be restored. Preserve the runtime and do not start another update.') from error
+        _receipt(root,{'status':'first user-service registration failed; previous files restored','error_type':type(error).__name__,
+                       'withdrawn':withdrawn,'pending_work':'preserved'})
+        raise RuntimeError('The user-space service could not be registered. Previous files were restored and no service was left running.') from error
+    return _receipt(root,{'status':'updated','version':info['version'],'release_identity':info.get('git_identity'),
+                          'first_user_service':True,'previous':previous,'health':health,'start':started,
+                          'clients':installed.get('client_result',{}),
+                          'client_acceptance':'configuration checked; named-client verification pending'})
+
+
 def perform(root,version,migrate_wiki=False,requeue_unverified=False,*,uv=None,desktop_config=None,skip_desktop=False):
     _qualified_platform()
     release,info=_forward_release(root,version)
@@ -583,10 +658,13 @@ def perform(root,version,migrate_wiki=False,requeue_unverified=False,*,uv=None,d
                    files=[{key:row.get(key) for key in ('path','client','before_sha256','after_sha256')} for row in plan['files']])
     installer().atomic(plan_path,json.dumps(summary,indent=2)+'\n',expected_sha256=_digest(plan_bytes))
     previous={key:device[key] for key in ('release_root','python','version')}
-    saved=None;stopped=False;switched=False;migration=None
+    saved=None;stopped=False;switched=False;migration=None;first_service=False
     try:
         inspected=controller(python,release,root,'service','inspect')
         if inspected.get('status')!='inspected':raise ValueError('Native ownership preflight did not complete; no hold created.')
+        if _unregistered_user_service(inspected):
+            first_service=True
+            return _register_first_user_service(root,release,info,python,plan,device,previous)
         if inspected.get('task_present') is not True or inspected.get('task_enabled') is not True:
             raise ValueError('The owned task is absent or explicitly stopped; inspect it and explicitly start it before requesting this update.')
         registration=_registration_record(inspected.get('registration'),device)
@@ -622,6 +700,7 @@ def perform(root,version,migrate_wiki=False,requeue_unverified=False,*,uv=None,d
         overwritten=support.after_check(plan)
         finished=controller(python,release,root,'service','finish','--hold-id',hold,'--expected-version',info['version'])
     except BaseException as error:
+        if first_service:raise
         if not stopped:
             if not (root/'state/service-transaction.json').exists():
                 _receipt(root,{'status':'update deferred; no hold created','hold_id':hold,'snapshot':str(saved) if saved is not None else None,

@@ -739,6 +739,31 @@ def install():
     else:raise processes.OwnershipError('Unsupported native service platform.')
     return {'status':'installed','definition':str(target)}
 
+def withdraw_first_registration():
+    """Remove a user-space definition that this release just wrote and never left running.
+
+    systemd, macOS and Windows have no such withdrawal. A running listener is refused.
+    """
+    if sys.platform!='linux':
+        raise processes.OwnershipError('Only an unregistered Linux user service can be withdrawn.')
+    from brain_linux_user_service import systemd_manager_present
+    if systemd_manager_present():
+        raise processes.OwnershipError('systemd owns this host; the user service is not withdrawn.')
+    processes.validate_environment()
+    if processes.listener_identity() is not None:
+        raise processes.OwnershipError('A listener is still owned; the user service was not withdrawn.')
+    registration=_linux_registration()
+    current=registration.inspect(allow_reload=True,prove_main=False)
+    if current.get('backend')!='user-space' or current.get('running') or current.get('quiescent') is not True:
+        raise processes.OwnershipError('The user service is not a stopped first registration; nothing was removed.')
+    if current['file_present']:
+        expected=hashlib.sha256(definition('linux').encode('utf-8')).hexdigest()
+        if current.get('definition_sha256')!=expected:
+            raise processes.OwnershipError('The user service definition is not this release; nothing was removed.')
+        registration.withdraw()
+    return {'status':'withdrawn','file_present':False}
+
+
 def _start_native(*,explicit=False):
     if sys.platform=='win32': command=[_tool('schtasks.exe'),'/Run','/TN',_task_address()]
     elif sys.platform=='darwin':

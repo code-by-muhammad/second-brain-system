@@ -43,6 +43,21 @@ def owned(entry, python, root):
             and same(entry.get('command', ''), python))
 
 
+def stable_launcher(root, python):
+    """The runtime path Grok Bot registers once. Its text names the current Python and client."""
+    path = root / 'bin' / 'second-brain-mcp'
+    if not path.is_file() or path.is_symlink() or not os.access(path, os.X_OK):
+        return False
+    text = path.read_text(encoding='utf-8', errors='replace')
+    client = str(root / 'app' / 'brain_client.py')
+    return text.startswith('#!/bin/sh\nexec ') and str(python) in text and client in text and text.endswith('\n')
+
+
+def owned_grok(entry, root):
+    args = entry.get('args') if isinstance(entry, dict) else None
+    return isinstance(args, list) and args == [] and same(entry.get('command', ''), root / 'bin' / 'second-brain-mcp')
+
+
 def instructions(path, imports=True, depth=0):
     """Text an assistant loads from this file. Claude Code also follows @imports."""
     path = Path(path).expanduser()
@@ -265,9 +280,9 @@ def main():
                 entry = servers['second-brain']
                 env = entry.get('env', {}) if isinstance(entry, dict) else None
                 clean = isinstance(env, dict) and all(isinstance(key, str) and isinstance(value, str) and not key.startswith(('BRAIN_', 'BASIC_MEMORY_')) for key, value in env.items())
-                good = owned(entry, python, root) and clean
+                good = owned_grok(entry, root) and clean and stable_launcher(root, python)
                 add('PASS' if good else 'FAIL', 'Grok Bot connection',
-                    'one spec for this runtime' if good else 'missing, duplicated, or points somewhere else')
+                    'one stable launcher for this runtime' if good else 'missing, duplicated, stale, or points somewhere else')
                 if not good:
                     add('FAIL', 'Grok Bot server', 'not started because the registration spec is not this runtime')
                 elif running:

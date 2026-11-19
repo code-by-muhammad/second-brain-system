@@ -12,21 +12,13 @@ A chat without terminal access cannot do this.
 
 | Path | Status |
 |---|---|
-| Fresh install, Mac, Windows x64, Ubuntu 24.04 with systemd | {{FRESH_STATUS}} |
+| Fresh install, Mac, Windows x64, Ubuntu 24.04 with systemd | The service definitions are the same as v0.2.13. |
 | Linux without systemd (container, tini, no user bus) | Supported by the user-space service in this release. |
+| Update a v0.2.13 device whose service never registered | Supported when PID 1 is not systemd. See section 5. |
 | Grok Bot on its computer | Supported when `~/agent-data/workflows` is present, or with `--clients grok`. |
-| Update an existing Mac on macOS 27 | {{MAC_UPDATE_STATUS}} |
-| Update an existing Windows device | {{WINDOWS_UPDATE_STATUS}} |
-| Wiki pages built with Claude or Codex | {{WIKI_STATUS}} |
 | Notes kept on one device, no GitHub | Supported. Sync shows "off" and the check passes. |
 
-Release identity. The command in section 3 checks the commit for you. These values let you check by hand:
-
-- Tag `v0.2.14`, commit `{{COMMIT}}`
-- `release-manifest.json` SHA256 `{{MANIFEST_SHA256}}`
-- Software repository: `https://github.com/code-by-muhammad/second-brain-system` (public, no account needed)
-
-If this copy still shows `{{...}}` placeholders, it is the source file. Use the copy attached to the release.
+Release identity. Tag `v0.2.14`. The setup command checks the commit of the checkout it runs. Software repository: `https://github.com/code-by-muhammad/second-brain-system` (public, no account needed).
 
 ## 1. Rules
 
@@ -55,17 +47,19 @@ You do not need a GitHub account. Sync is an optional extra (section 6).
 
 Mac and Linux:
 
-```text
-curl -fsSLO https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.14/setup.sh && echo "{{SETUP_SH_SHA256}}  setup.sh" | shasum -a 256 -c - && sh setup.sh
-```
-
-Windows PowerShell:
+When this release is published, download `setup.sh` or `setup.ps1` from the v0.2.14 GitHub release and check its SHA256 against the hash on that release page before running it. Until then, or when the checkout is already on the machine, run its setup directly. `<runtime>` is `~/.local/share/second-brain` unless `SECOND_BRAIN_ROOT` was set; on the Grok Bot computer it is `/home/box/.local/share/second-brain`.
 
 ```text
-iwr https://github.com/code-by-muhammad/second-brain-system/releases/download/v0.2.14/setup.ps1 -OutFile setup.ps1; if ((Get-FileHash setup.ps1 -Algorithm SHA256).Hash -ne '{{SETUP_PS1_SHA256}}') { throw 'setup.ps1 does not match this guide' }; powershell -ExecutionPolicy Bypass -File .\setup.ps1
+uv run --no-project --python 3.12 python -I -B "<runtime>/releases/v0.2.14/setup_device.py" --root "<runtime>" --yes --vault "<notes>" --role capture
 ```
 
-The first part downloads a small script and checks it against the hash in this guide. The script then downloads the exact release, checks its commit, and starts the setup. A release folder kept from an earlier run must match that fresh download exactly. If any check fails, nothing runs.
+Windows PowerShell, from the published `setup.ps1` or, with the checkout already at the release path:
+
+```text
+& uv run --no-project --python 3.12 python -I -B "<runtime>\releases\v0.2.14\setup_device.py" --root "<runtime>" --yes --vault "<notes>" --role capture
+```
+
+The command runs the checkout at `<runtime>/releases/v0.2.14` and checks that tag. A release folder kept from an earlier run must match that checkout. If any check fails, nothing runs. Options below are added after `setup_device.py`.
 
 What it asks on a new device:
 
@@ -141,7 +135,13 @@ If your assistant files are links to one shared rules or skills folder inside yo
 
 ## 5. Updating a device that already runs Second Brain
 
-Use the same command. It finds the installed version, updates it, then adds anything the old setup was missing. A Mac or Windows device on v0.2.13 keeps its existing service definition; the update does not move it onto another backend. An Ubuntu 24.04 device whose PID 1 is systemd keeps its user unit. A Linux device that could not start the service because there is no systemd gets the user-space service on this update. The notes folder is not replaced.
+Use the same command, with `-I -B` and `--root`. It finds the installed version, updates it, then adds anything the old setup was missing. A Mac or Windows device on v0.2.13 keeps its existing service definition; the update does not move it onto another backend. An Ubuntu 24.04 device whose PID 1 is systemd keeps its user unit, and still refuses the update when that service is absent or stopped. A Linux device whose PID 1 is not systemd, and whose service was never registered, gets the user-space service on this update. The notes folder is not replaced.
+
+```text
+uv run --no-project --python 3.12 python -I -B /home/box/.local/share/second-brain/releases/v0.2.14/setup_device.py --root /home/box/.local/share/second-brain --yes --role capture
+```
+
+Replace both copies of the runtime path on any other device. Then run the same command with `--check --selftest` instead of `--yes --role capture`. Grok Bot's MCP command stays `<runtime>/bin/second-brain-mcp` with no arguments and an empty environment; do not register the Python inside a release folder.
 
 Before:
 

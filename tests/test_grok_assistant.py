@@ -38,8 +38,18 @@ def test_grok_plan_writes_one_spec_and_the_shared_skill(owner,monkeypatch):
     spec=json.loads(files[registration]['after'])
     assert set(spec['mcpServers'])=={'second-brain'}
     entry=spec['mcpServers']['second-brain']
-    assert entry=={'command':str(python),'args':[str(root/'app/brain_client.py')],'env':{}}
+    assert entry=={'command':str(root/'bin'/'second-brain-mcp'),'args':[],'env':{}}
     helpers.authorize_plan(plan,selected=['grok'])
+
+
+def test_an_owned_release_python_spec_is_rewritten_to_the_stable_launcher(owner):
+    home,root,python=owner
+    path=home/'agent-data/workflows/second-brain/mcp-registration.json'
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({'mcpServers':{'second-brain':{'command':str(python),'args':[str(root/'app/brain_client.py')]}}}),encoding='utf-8')
+    plan=helpers.plan(root,python,PROTOCOL,installer._codex_toml_plan,home=home,skill='skill\n',selected=['grok'])
+    spec=json.loads(next(row['after'] for row in plan['files'] if row['path'].endswith('mcp-registration.json')))
+    assert spec['mcpServers']['second-brain']=={'command':str(root/'bin'/'second-brain-mcp'),'args':[],'env':{}}
 
 
 def test_a_second_server_or_a_foreign_runtime_is_refused(owner):
@@ -61,8 +71,12 @@ def test_check_accepts_one_owned_spec_without_starting_a_service(owner,monkeypat
     (root/'device.json').write_text(json.dumps({'version':'0.2.14','role':'capture','python':str(python),'vault':str(vault)}),encoding='utf-8')
     folder=home/'agent-data/workflows/second-brain';folder.mkdir(parents=True)
     (folder/'SKILL.md').write_text(helpers.composed_skill(PROTOCOL),encoding='utf-8')
+    launcher=root/'bin'/'second-brain-mcp'
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text('#!/bin/sh\nexec '+str(python)+' '+str(root/'app'/'brain_client.py')+'\n',encoding='utf-8')
+    launcher.chmod(0o700)
     (folder/'mcp-registration.json').write_text(json.dumps({'mcpServers':{'second-brain':{
-        'command':str(python),'args':[str(root/'app/brain_client.py')],'env':{}}}},indent=2)+'\n',encoding='utf-8')
+        'command':str(launcher),'args':[],'env':{}}}},indent=2)+'\n',encoding='utf-8')
     import check_setup
     monkeypatch.setattr(sys,'argv',['check_setup.py','--root',str(root),'--home',str(home),'--clients','grok','--no-service','--expect-version','0.2.14','--release',str(SOURCE)])
     assert check_setup.main()==1

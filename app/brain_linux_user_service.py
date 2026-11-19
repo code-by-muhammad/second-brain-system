@@ -178,7 +178,7 @@ class LinuxUserService:
         if content is None:
             if enabled is not None:raise RegistrationError('User service activation exists without its definition.')
             value={'file_present':False,'loaded':False,'enabled':None,'running':False,'main_pid':None,
-                   'definition_sha256':None,'needs_reload':False,'quiescent':self._quiet()}
+                   'definition_sha256':None,'needs_reload':False,'quiescent':self._quiet(),'backend':'user-space'}
         else:
             if content not in self.known:raise RegistrationError('User service definition belongs to another configuration.')
             if enabled is None:raise RegistrationError('User service definition has no activation flag.')
@@ -187,7 +187,7 @@ class LinuxUserService:
             value={'file_present':True,'loaded':keeper is not None or running,'enabled':enabled,'running':running,
                    'main_pid':supervisor['pid'] if running else None,
                    'definition_sha256':hashlib.sha256(content).hexdigest(),'needs_reload':False,
-                   'quiescent':not running and keeper is None}
+                   'quiescent':not running and keeper is None,'backend':'user-space'}
             if prove_main and running:
                 import brain_process as processes
                 owned=processes.inspect(supervisor['pid'],required=True)
@@ -348,6 +348,17 @@ class LinuxUserService:
             subprocess.run([binary,'-'],input='\n'.join(rows)+'\n',text=True,timeout=10,check=True)
             return True
         except (OSError,subprocess.SubprocessError):return False
+
+    def withdraw(self):
+        """Delete this definition only when nothing is running. The vault and runtime state stay."""
+        current=self.inspect(prove_main=False)
+        if not current['quiescent'] or current.get('running'):
+            raise RegistrationError('User service is not stopped; the definition was not removed.')
+        if self.path.exists() and not self.path.is_symlink():self.path.unlink()
+        if self.enabled_path.exists() and not self.enabled_path.is_symlink():self.enabled_path.unlink()
+        self.remove_boot_hooks()
+        if self.path.exists() or self.enabled_path.exists():
+            raise RegistrationError('User service definition was not removed.')
 
     def remove_boot_hooks(self):
         """Drop the login, autostart and crontab hooks. The definition file stays until a later install replaces it."""

@@ -88,6 +88,7 @@ def main():
         elif args.action=='cancel': result=service.cancel_transaction(args.hold_id)
         elif args.action=='recover': result=service.recovery_status()
         elif args.action=='inspect': result=service.inspect()
+        elif args.action=='withdraw-first': result=service.withdraw_first_registration()
         elif args.action=='definition': result={'definition':service.definition()}
         else: result=service.recovery_status()
     print(json.dumps(result,indent=2,ensure_ascii=False,default=str))
