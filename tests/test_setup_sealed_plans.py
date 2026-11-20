@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -34,14 +35,15 @@ def test_refresh_preserves_server_options_and_creates_no_integration(owner):
     path.write_text('[mcp_servers.second-brain]\ncommand="old"\nargs=['+json.dumps(str(root/'app/brain_client.py'))+']\nstartup_timeout_sec=91\n[mcp_servers.second-brain.env]\nOWNER="keep"\n')
     result=plan(owner,selected=['codex'],refresh=True)
     toml=next(row for row in result['files'] if row['path'].endswith('config.toml'))
-    assert any(row['path'].endswith('AGENTS.md') for row in result['files']) and not (home/'.codex/AGENTS.md').exists()
+    assert [row['path'] for row in result['files']]==[str(path)]
+    assert any(row['path']==str(home/'.codex/AGENTS.md') and row['code']=='missing_file' for row in result['skipped'])
     data=tomllib.loads(toml['after'])['mcp_servers']['second-brain']
     spec=helpers.connection_spec(root,python)
     assert data['env']=={'OWNER':'keep'} and data['startup_timeout_sec']==91
     assert data['command']==spec['command'] and data['args']==spec['args']
 
 
-def test_refresh_migrates_an_owned_connection_to_the_stable_launcher(owner):
+def test_refresh_migrates_an_owned_connection_to_the_platform_spec(owner):
     home,root,python=owner
     path=home/'.claude.json'
     path.write_text(json.dumps({'theme':'keep','mcpServers':{'second-brain':{
@@ -102,9 +104,89 @@ def test_malformed_unowned_refresh_preserved_but_owned_duplicate_json_refused(ow
     assert all(not row['path'].endswith('.claude.json') for row in preserved['files'])
     assert any(row['reason']=='unparseable; ownership not inspected' for row in preserved['skipped'])
     path.write_text('{"root":'+json.dumps(str(root))+',"mcpServers":{},"mcpServers":{}}')
-    refused=plan(owner,selected=['claude-code'],refresh=True)
-    assert all(not row['path'].endswith('.claude.json') for row in refused['files'])
-    assert any('Duplicate' in row['reason'] for row in refused['skipped'])
+    before=path.read_bytes()
+    with pytest.raises(helpers.ClientPlanError) as refused:
+        plan(owner,selected=['claude-code'],refresh=True)
+    assert isinstance(refused.value.__cause__,helpers.DuplicateJSONError)
+    assert path.read_bytes()==before
+
+
+def test_client_planning_uses_types_instead_of_diagnostic_words(owner,monkeypatch):
+    home,root,python=owner
+    path=home/'tomlkit-config.json';path.write_text('{unrelated malformed')
+    result=plan(owner,selected=['claude-desktop'],refresh=True,desktop=path)
+    assert result['files']==[] and result['skipped'][0]['code']=='unparseable_unowned'
+
+    def unavailable(*args):raise helpers.TomlSupportError('changed diagnostic text')
+    monkeypatch.setattr(installer,'_codex_toml_plan',unavailable)
+    with pytest.raises(helpers.TomlSupportError,match='changed diagnostic'):
+        plan(owner,selected=['codex'])
+
+
+def test_grok_only_no_hooks_and_empty_refresh_preserve_other_clients(owner):
+    home,root,python=owner
+    hook=home/'.claude/settings.json';hook.parent.mkdir()
+    hook.write_text(json.dumps({'hooks':{'Stop':[{'hooks':[{'type':'command',
+        'command':'"old interpreter" "'+str(root/'app/brain_hooks.py')+'"'}]}]}}))
+    codex=home/'.codex/config.toml';codex.write_text('model = "unselected"')
+    registration=helpers.grok_directory(home)/'mcp-registration.json';registration.parent.mkdir(parents=True)
+    registration.write_text(json.dumps({'mcpServers':{'second-brain':{'command':'old','args':[str(root/'app/brain_client.py')]}}}))
+    before=(hook.read_bytes(),codex.read_bytes())
+    selected=helpers.selected_clients(['grok'],refresh=True,no_hooks=True)
+    value=plan(owner,selected=selected,refresh=True)
+    assert [row['path'] for row in value['files']]==[str(registration)]
+    assert not helpers.apply(value,installer.write_client,lambda *args:None,root)['deferred']
+    assert (hook.read_bytes(),codex.read_bytes())==before
+    empty=helpers.selected_clients([],refresh=True)
+    assert plan(owner,selected=empty,refresh=True)['files']==[]
+
+
+@pytest.mark.skipif(os.name!='posix',reason='uses POSIX symlinks and no-follow directory descriptors')
+def test_authorized_in_home_client_leaf_and_parent_swap_are_confined(owner,monkeypatch,tmp_path):
+    home,root,python=owner
+    monkeypatch.setattr(Path,'home',classmethod(lambda cls:home))
+    directory=home/'real';directory.mkdir()
+    target=directory/'claude.json';target.write_bytes(b'{}')
+    logical=home/'.claude.json';logical.symlink_to(target)
+    value=plan(owner,selected=['claude-code'])
+    row=next(row for row in value['files'] if row['path']==str(target))
+    value['files']=[row]
+    helpers.authorize_plan(value,selected=['claude-code'])
+    first=helpers.apply(value,installer.write_client,lambda *args:None,root)
+    assert first['changed']==[str(target)] and logical.is_symlink()
+
+    external=tmp_path/'external';external.mkdir()
+    (external/target.name).write_bytes(target.read_bytes())
+    directory.rename(home/'moved');directory.symlink_to(external,target_is_directory=True)
+    with pytest.raises(ValueError,match='outside the selected'):
+        helpers.authorize_plan(value,selected=['claude-code'])
+    after=(external/target.name).read_bytes()
+    with pytest.raises(OSError):
+        installer.write_client(target,b'{}',expected_sha256=row['after_sha256'])
+    assert (external/target.name).read_bytes()==after
+
+
+@pytest.mark.skipif(os.name!='posix',reason='injects a POSIX directory swap during guarded rollback staging')
+def test_rollback_staging_cannot_publish_inside_a_swapped_client_directory(owner,monkeypatch,tmp_path):
+    home,root,_=owner
+    folder=home/'selected';folder.mkdir();target=folder/'settings.json'
+    target.write_bytes(b'candidate')
+    external=tmp_path/'external';external.mkdir();(external/target.name).write_bytes(b'candidate')
+    displaced=home/'displaced'
+    sync=os.fsync
+    swapped=False
+    def fsync(descriptor):
+        nonlocal swapped
+        sync(descriptor)
+        if not swapped and stat.S_ISREG(os.fstat(descriptor).st_mode):
+            folder.rename(displaced)
+            folder.symlink_to(external,target_is_directory=True)
+            swapped=True
+    monkeypatch.setattr(os,'fsync',fsync)
+    with pytest.raises((OSError,helpers.ConcurrentWriteError)):
+        installer.write_client(target,b'predecessor',expected_sha256=helpers.digest(b'candidate'),mode=0o640)
+    assert swapped and list(displaced.iterdir())==[displaced/target.name]
+    assert (displaced/target.name).read_bytes()==(external/target.name).read_bytes()==b'candidate'
 
 
 @pytest.mark.parametrize('text',[helpers.BEGIN+'\n',helpers.BEGIN+helpers.END+helpers.BEGIN+helpers.END,helpers.END+helpers.BEGIN])

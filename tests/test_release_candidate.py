@@ -101,7 +101,7 @@ def staged(tmp_path,monkeypatch):
     payload={'install.py':b"VERSION='0.1.8'\n",'app/brain_settings.py':b"VERSION='0.1.8'\n",
              'pyproject.toml':b'[project]\nversion="0.1.8"\n',
              'uv.lock':b'[[package]]\nname="shared-second-brain"\nversion="0.1.8"\n'}
-    for name in ('update.py','setup_runtime.py','app/brain_service.py','app/brain_process.py','app/brain_windows_process.py','app/brain_index_bootstrap.py','app/brain_index_worker.py','check_dependency_audit.py','security-exceptions.json','security-exceptions-darwin-arm64.json','security-exceptions-darwin-x86_64.json','security-exceptions-linux-x86_64.json','SECURITY.md'):payload[name]=b'# synthetic release builder contract\n'
+    for name in ('update.py','setup_runtime.py','app/brain_service.py','app/brain_process.py','app/brain_windows_process.py','app/brain_index_bootstrap.py','app/brain_index_worker.py','app/brain_release.py','predecessor-builds.json','check_dependency_audit.py','security-exceptions.json','security-exceptions-darwin-arm64.json','security-exceptions-darwin-x86_64.json','security-exceptions-linux-x86_64.json','SECURITY.md'):payload[name]=b'# synthetic release builder contract\n'
     for name,data in payload.items():
         target=repo/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(data)
     subprocess.run(['git','init',str(repo)],check=True,capture_output=True)
@@ -116,7 +116,7 @@ def test_manifest_capabilities_bind_all_required_staged_bytes(staged):
     builder.main();value=json.loads((repo/'release-manifest.json').read_text())
     assert value['version']=='0.1.8' and value['qualified_service_platforms']==['win32','darwin','linux']
     assert value['qualification_status']=='candidate_pending_external_receipts'
-    assert set(value['capabilities'])=={'sealed-client-refresh-v1','owned-service-control-v1'}
+    assert set(value['capabilities'])=={'sealed-client-refresh-v1','owned-service-control-v1','held-deployment-v1'}
     assert value['sha256']=={name:hashlib.sha256(data).hexdigest() for name,data in payload.items()}
 
 
@@ -128,7 +128,7 @@ def test_builder_refuses_mismatched_staged_versions(staged,name):
     assert not (repo/'release-manifest.json').exists()
 
 
-@pytest.mark.parametrize('name',['setup_runtime.py','check_dependency_audit.py','security-exceptions.json','security-exceptions-darwin-arm64.json','security-exceptions-darwin-x86_64.json','security-exceptions-linux-x86_64.json','SECURITY.md'])
+@pytest.mark.parametrize('name',['setup_runtime.py','app/brain_index_worker.py','app/brain_index_bootstrap.py','predecessor-builds.json','check_dependency_audit.py','security-exceptions.json','security-exceptions-darwin-arm64.json','security-exceptions-darwin-x86_64.json','security-exceptions-linux-x86_64.json','SECURITY.md'])
 def test_builder_refuses_missing_staged_fixed_helper(staged,name):
     builder,repo,_,stage=staged
     (repo/name).unlink();stage()

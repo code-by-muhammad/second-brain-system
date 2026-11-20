@@ -83,10 +83,18 @@ def test_environment_drift_refused_before_service_work(brain,monkeypatch):
 
 
 def test_foreign_and_multiple_listeners_refused_without_process_adoption(brain,monkeypatch):
-    row=lambda pid,ip:SimpleNamespace(pid=pid,laddr=SimpleNamespace(ip=ip,port=cfg.PORT))
-    for rows in ([row(1,'0.0.0.0')],[row(1,'127.0.0.1'),row(2,'127.0.0.1')],[row(None,'127.0.0.1')]):
+    def row(pid,ip):
+        lifetime = None if pid is None else {'pid':pid,'start_ticks':10,'boot_id':'synthetic'}
+        return SimpleNamespace(pid=pid,laddr=SimpleNamespace(ip=ip,port=cfg.PORT),lifetime=lifetime)
+    cases = [
+        ([row(1,'0.0.0.0')], 'non-loopback'),
+        ([row(1,'127.0.0.1'),row(2,'127.0.0.1')], 'multiple listeners'),
+        ([row(None,'127.0.0.1')], 'unverified'),
+    ]
+    for rows, reason in cases:
         monkeypatch.setattr(processes,'_listeners',lambda:rows)
-        with pytest.raises(processes.OwnershipError,match='unverified'):processes.listener_identity()
+        expected=reason if sys.platform=='linux' else 'unverified'
+        with pytest.raises(processes.OwnershipError,match=expected):processes.listener_identity()
 
 
 @pytest.mark.parametrize('orphan,changed',[(False,False),(True,False),(False,True)])

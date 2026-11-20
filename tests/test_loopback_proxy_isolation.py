@@ -24,7 +24,7 @@ async def test_owned_client_ignores_ambient_and_registry_proxy_routing(monkeypat
         # listener identity. Never label this raw synthetic HTTP fixture owned.
         monkeypatch.setattr(brain_client.cfg,'PORT',port)
         monkeypatch.setattr(brain_client.processes,'validate_environment',lambda:None)
-        monkeypatch.setattr(brain_client.processes,'listener_identity',lambda:object())
+        monkeypatch.setattr(brain_client.processes,'listener_identity',lambda **kwargs:object())
         trap='http://127.0.0.1:'+str(proxy.sockets[0].getsockname()[1])
         for name in ('HTTP_PROXY','HTTPS_PROXY','ALL_PROXY'):monkeypatch.setenv(name,trap)
         monkeypatch.setenv('NO_PROXY','')

@@ -28,7 +28,7 @@ def retain_known_failure(h,monkeypatch):
 
 
 @pytest.mark.parametrize('mode',['forward','automatic-rollback','manual-recover'])
-def test_lost_finish_reply_never_advertises_nonexistent_recovery(portable,monkeypatch,tmp_path,mode):
+def test_lost_finish_reply_reuses_exact_durable_result(portable,monkeypatch,tmp_path,mode):
     h=prepare_case(portable,monkeypatch);hold=None
     if mode=='manual-recover':hold=retain_known_failure(h,monkeypatch)
     elif mode=='automatic-rollback':h.fail_health=True
@@ -45,9 +45,10 @@ def test_lost_finish_reply_never_advertises_nonexistent_recovery(portable,monkey
             raise RuntimeError('named update transaction does not exist')
         return original(python,checkout,root,command,action,*flags)
     monkeypatch.setattr(h.updater,'controller',controller)
-    with pytest.raises(RuntimeError):
-        if mode=='manual-recover':h.updater.recover(h.root,hold)
-        else:h.updater.perform(h.root,'v0.2.0')
+    if mode=='automatic-rollback':
+        with pytest.raises(RuntimeError,match='previous runtime health verified'):h.updater.perform(h.root,'v0.2.0')
+    elif mode=='manual-recover':h.updater.recover(h.root,hold)
+    else:h.updater.perform(h.root,'v0.2.0')
     receipt=json.loads((h.root/'state/upgrade-status.json').read_bytes())
     expected=(['stop','install','start','finish'] if mode=='manual-recover' else
         ['inspect','hold','stop','install','start','finish'] if mode=='forward' else
@@ -58,12 +59,12 @@ def test_lost_finish_reply_never_advertises_nonexistent_recovery(portable,monkey
         'device_after_finish_preserved':(h.root/'device.json').read_bytes()==finished['device'],
         'app_after_finish_preserved':{p.relative_to(h.root/'app').as_posix():p.read_bytes() for p in (h.root/'app').rglob('*.py')}==finished['app']}
     (tmp_path/'finish-loss-observation.json').write_text(json.dumps(observed,indent=2))
-    assert receipt['status']=='transaction outcome inspection required' and 'hold_id' not in receipt
-    assert receipt['observed_transaction']=='absent'
-    assert receipt['transaction_evidence_path']==str(h.root/'state/service-transactions'/(receipt['attempt_hold_id']+'.json'))
-    assert len(receipt['attempt_hold_id'])==32 and not path.exists()
+    assert receipt['status']=={'forward':'updated','automatic-rollback':'update failed; previous runtime verified',
+                               'manual-recover':'recovered'}[mode]
+    result=receipt if mode=='forward' else receipt['recovery']
+    assert result['finish']['durable_receipt'] is True and not path.exists()
     assert attempts==expected and h.running and observed['device_after_finish_preserved'] and observed['app_after_finish_preserved']
-    with pytest.raises((ValueError,OSError)):h.updater._recovery_binding(h.root,receipt['attempt_hold_id'])
+    with pytest.raises((ValueError,OSError)):h.updater._recovery_binding(h.root,receipt['hold_id'])
 
 
 def test_health_failure_automatic_rollback_remains_verified(portable,monkeypatch):

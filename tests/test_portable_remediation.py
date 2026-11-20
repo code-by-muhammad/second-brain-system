@@ -108,9 +108,9 @@ def test_atomic_keeps_mode_and_first_byte_private(portable,monkeypatch,tmp_path)
     real_replace=install.os.replace;real_link=install.os.link
     real_fdopen=install.os.fdopen
     observed=[]; before_write=[]
-    def fdopen(fd,*args,**kwargs):
-        before_write.append(stat.S_IMODE(os.fstat(fd).st_mode))
-        return real_fdopen(fd,*args,**kwargs)
+    def fdopen(fd,mode,*args,**kwargs):
+        if 'w' in mode:before_write.append(stat.S_IMODE(os.fstat(fd).st_mode))
+        return real_fdopen(fd,mode,*args,**kwargs)
     def replace(source,destination):
         observed.append(('replace',stat.S_IMODE(Path(source).stat().st_mode),Path(source).read_text()))
         real_replace(source,destination)

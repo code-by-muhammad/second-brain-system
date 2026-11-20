@@ -39,9 +39,13 @@ def test_pre_hold_task_or_hold_refusal_never_claims_nonexistent_recovery(portabl
         if action==refusal:raise RuntimeError('synthetic task ownership/control refusal')
         return actual(python,checkout,root,command,action,*flags)
     monkeypatch.setattr(h.updater,'controller',controller)
-    with pytest.raises(RuntimeError,match='before a hold was created'):h.updater.perform(h.root,'v0.1.6')
-    result=json.loads((h.root/'state/upgrade-status.json').read_text())
-    assert result['status']=='update deferred; no hold created'
+    receipt=h.root/'state/upgrade-status.json'
+    if refusal=='hold':
+        with pytest.raises(RuntimeError,match='before a hold was created'):h.updater.perform(h.root,'v0.1.6')
+        assert json.loads(receipt.read_text())['status']=='update deferred; no hold created'
+    else:
+        with pytest.raises((ValueError,RuntimeError)):h.updater.perform(h.root,'v0.1.6')
+        assert not receipt.exists() and all(row['kind']!='provision' for row in h.events)
     assert not (h.root/'state/service-transaction.json').exists() and h.running==initial_running
     assert (h.root/'device.json').read_bytes()==before
     assert {path.name:path.read_bytes() for path in (h.root/'app').glob('*.py')}==app

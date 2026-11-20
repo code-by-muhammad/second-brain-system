@@ -38,7 +38,8 @@ def _bounded(seconds):
         @wraps(function)
         def wrapped(self,*args,**kwargs):
             previous=getattr(self,'_deadline',None)
-            self._deadline=min(previous or float('inf'),time.monotonic()+seconds)
+            deadline=kwargs.pop('deadline',None)
+            self._deadline=min(previous or float('inf'),deadline or float('inf'),time.monotonic()+seconds)
             try:return function(self,*args,**kwargs)
             except (OSError,UnicodeError) as error:
                 failure=RegistrationError('Native filesystem or OS state could not be verified.')
@@ -709,7 +710,7 @@ class LinuxRegistration:
             except NotReady:
                 if time.monotonic()>=deadline:raise
             if time.monotonic()>=deadline:raise RegistrationError('Native supervisor did not reach its running state.')
-            time.sleep(.1)
+            time.sleep(min(.1,max(0,deadline-time.monotonic())))
 
     def _replace(self,payload,before):
         for directory in (self.home/'.config',self.home/'.config/systemd',self.directory):

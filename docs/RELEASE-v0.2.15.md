@@ -1,6 +1,6 @@
 # v0.2.15 release candidate
 
-v0.2.15 applies a newer build of the same product line when the installed runtime does not match the release, and it points Claude Code and Codex at the same stable launcher Grok Bot already uses. Mac, Windows and Ubuntu 24.04 with systemd keep the service they already run.
+v0.2.15 verifies the installed app against the release before a same-version refresh and points Claude Code and Codex at the same stable launcher Grok Bot already uses. Mac, Windows and Ubuntu 24.04 with systemd keep the service they already run.
 
 ## Upgrade from v0.2.14
 
@@ -22,7 +22,7 @@ Then:
 uv run --no-project --python 3.12 python -I -B "<runtime>/releases/v0.2.15/setup_device.py" --root "<runtime>" --check --selftest
 ```
 
-A same-version rerun does not replace `app/` or `state/config.json`. If this device already reports v0.2.15 but the installed scripts do not match this checkout's manifest, setup stops and says so. It does not report success after refreshing only the assistant files. The forward update from v0.2.14 still runs when the installed scripts are an earlier build of v0.2.14 than the copy in `releases/v0.2.14`. An extra file under `app/` is still refused.
+A same-version rerun does not replace `app/` or `state/config.json`. If this device already reports v0.2.15 but the installed scripts do not match this checkout's manifest, setup stops and says so. It does not report success after refreshing only the assistant files. A forward update from v0.2.14 uses the retained source and recorded interpreter. The later v0.2.16 candidate records exact independently verified predecessor builds in its sealed catalog.
 
 ## Assistants
 

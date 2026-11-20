@@ -230,7 +230,7 @@ def test_candidate_update_parser_preflight_failure_preserves_old_runtime_and_nev
     before=(tree(h.home),tree(h.root))
     missing_parser(monkeypatch,mode)
     with pytest.raises(ValueError,match='locked tomlkit'):h.updater.perform(h.root,'v0.1.6')
-    assert not any(event['kind']=='controller' for event in h.events)
+    assert [event['action'] for event in h.events if event['kind']=='controller']==['inspect']
     assert (tree(h.home),tree(h.root))==before
 
 

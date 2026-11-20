@@ -11,7 +11,7 @@ the read-only acceptance check. --yes accepts every default. Nothing is sent any
 import sys
 if __name__=='__main__' and not sys.flags.isolated:
     raise SystemExit('Run this with Python -I from the verified release folder.')
-import argparse, hashlib, json, os, re, runpy, shutil, subprocess, time
+import argparse, json, os, re, runpy, shutil, subprocess, time
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
@@ -22,30 +22,15 @@ CLIENTS=('claude-code','codex','claude-desktop','grok')
 def say(text):print(text,flush=True)
 
 
-def runtime_matches_release(root, release, version):
-    """True when every installed app script matches this release manifest.
-
-    A manifest for another version is not this check. verify() is what refuses that checkout.
-    """
-    installed=Path(root)/'app'
-    manifest_path=Path(release)/'release-manifest.json'
-    if not manifest_path.is_file() or installed.is_symlink():return False
-    if not installed.is_dir():return True
-    try:manifest=json.loads(manifest_path.read_text(encoding='utf-8'))
-    except (OSError, ValueError):return False
-    if manifest.get('version')!=version:return True
-    expected={}
-    for name, sha in (manifest.get('sha256') or {}).items():
-        if not isinstance(name,str) or not isinstance(sha,str):return False
-        if len(Path(name).parts)==2 and name.startswith('app/') and name.endswith('.py'):expected[name]=sha
-    if not expected:return False
-    actual={}
+def runtime_matches_release(root, release, version, *, verified=None):
+    """Require every installed app byte to match the invoked release version."""
     try:
-        for path in installed.glob('*.py'):
-            if path.is_symlink():return False
-            actual['app/'+path.name]=hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:return False
-    return actual==expected
+        updater=runpy.run_path(str(REPO/'update.py'))
+        helper=updater['release_helpers'](REPO,verified)
+        helper.verify_installed(Path(root),Path(release),version)
+    except (OSError,ValueError,TypeError,RecursionError):
+        return False
+    return True
 
 
 def refuse_same_version_drift(version, release):
@@ -316,7 +301,7 @@ def main():
     parser.add_argument('--wiki',choices=['claude','codex'],help='Maintainer only: select which assistant program builds the wiki pages. Nothing is built by this.')
     parser.add_argument('--no-hooks',action='store_true',help='Leave out the Claude Code session hooks.')
     parser.add_argument('--timezone',help='IANA name such as Europe/Berlin. Default: the system timezone.')
-    parser.add_argument('--no-service',action='store_true',help='Install without registering or starting the background service.')
+    parser.add_argument('--no-service',action='store_true',help='Keep the service unregistered. Version upgrades require verified unregistered non-systemd Linux.')
     parser.add_argument('--no-model',action='store_true',help='Skip the search model download (search stays unavailable until it is present).')
     parser.add_argument('--local-only',action='store_true',help='The owner wants no Git remote for these notes; the check fails if one exists.')
     parser.add_argument('--check',action='store_true',help='Only run the acceptance check.')
@@ -324,7 +309,8 @@ def main():
     parser.add_argument('--yes',action='store_true',help='Accept every default without asking.')
     args=parser.parse_args()
     root=Path(args.root).expanduser().resolve()
-    version=runpy.run_path(str(REPO/'update.py'))['verify'](REPO)['version']
+    release_info=runpy.run_path(str(REPO/'update.py'))['verify'](REPO)
+    version=release_info['version']
     say('Second Brain '+version+': release files verified.')
     selected=[name for name in (args.clients.split(',') if args.clients is not None else detected(home)) if name]
     if set(selected)-set(CLIENTS):parser.error('Unknown client; choose from '+', '.join(CLIENTS))
@@ -415,12 +401,14 @@ def main():
             release=root/'releases'/('v'+version)
             if REPO!=release:raise SystemExit('To update this device the release must be at exactly '+str(release)+'. Clone the tag there and run its setup_device.py.')
             say('Updating this device from '+str(device.get('version'))+' to '+version+'. The service stops only after every check has passed.')
-            command=[device['python'],'-I','-B',REPO/'update.py','--root',root,'--version','v'+version]
+            command=[device['python'],'-I','-B',REPO/'update.py','--root',root,'--version','v'+version,'--clients',','.join(selected)]
+            if args.no_hooks:command.append('--no-hooks')
+            if args.no_service:command.append('--no-service')
             if 'claude-desktop' not in selected:command.append('--skip-desktop-refresh')
             if run(command).returncode:
                 raise SystemExit('The update did not finish. If it said "deferred", nothing was switched and the old version is still running. Read the reason above before trying again.')
             device=json.loads((root/'device.json').read_text(encoding='utf-8-sig'))
-        elif not runtime_matches_release(root, REPO, version):
+        elif not runtime_matches_release(root, REPO, version, verified=release_info['sha256']):
             refuse_same_version_drift(version, REPO)
         if selected:
             # An update refreshes only what already existed; this adds whatever a selected assistant still lacks.
@@ -463,19 +451,6 @@ def main():
     elif args.selftest:
         say('\nEnd-to-end self-test (the connection an assistant uses; one test milestone per device):')
         failed=selftest(device) or failed
-    if 'grok' in selected:
-        spec=home/'agent-data'/'workflows'/'second-brain'/'mcp-registration.json'
-        try:
-            servers=json.loads(spec.read_text(encoding='utf-8')).get('mcpServers',{})
-            entry=servers.get('second-brain',{}) if isinstance(servers,dict) and set(servers)=={'second-brain'} else {}
-            if entry.get('command') and isinstance(entry.get('args'),list) and entry.get('env')=={}:
-                say('Grok Bot MCP registration (add this one server in the account; Grok Bot does not read the file by itself):')
-                say('  spec:    '+str(spec))
-                say('  command: '+str(entry['command']))
-                say('  args:    '+json.dumps(entry['args']))
-                say('  env:     {}')
-        except (OSError,ValueError,AttributeError):
-            say('Grok Bot registration spec was not written. The check above shows why.')
     say('\nNext: open a NEW chat in your assistant and ask it to call brain_context. After a restart of this computer, run this again with --check.')
     if open_wiki:say('Still open: '+open_wiki)
     # A requested wiki assistant that could not be selected is a failure of this run, whatever the check says.

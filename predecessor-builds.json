@@ -1,0 +1,193 @@
+{
+  "format": 1,
+  "repository": "code-by-muhammad/second-brain-system",
+  "builds": [
+    {
+      "version": "0.2.14",
+      "app_sha256": {
+        "brain_cli.py": "55337043211fdf238f8e3688b2529ddea788a0b6b324b69586845d212ee49912",
+        "brain_client.py": "a06d6ee8ab0c01ba5371db5e001a15a379a339eb657aad4441b90c79ddc2d95f",
+        "brain_git.py": "7f15b6af765d3205a21858473ebdefdb7aa0f0226a98fde8feabd62a868ac543",
+        "brain_hooks.py": "cc1623457ebe2c33cbee6b208a18374d4fda3242c75239d53764f37a23882437",
+        "brain_index.py": "a3160700bb3884998036cc16c13b9a6e242b1d22af898aac6009bf9799b60f9a",
+        "brain_index_bootstrap.py": "ccf16d4dac53c4299890399776d3a9c8d2a529b7b516b10777c654f111010d5d",
+        "brain_index_reconcile.py": "1efd65a75ad1e05453bae1f62fe0b77b9b2a78b2445a58b3575647f7d2b69c4d",
+        "brain_linux_identity.py": "9a1d506b72b18e7c6c918f799f20e758605884ff220b67280af6265b017e2437",
+        "brain_linux_registration.py": "176ecadb4ef01081cc6354b93bf9dc7475c731394c01b5df6e73536719a2c043",
+        "brain_linux_user_service.py": "a7676a3cdbf35ab57d38eb38a424e016d4a3bd7bcb8d0c38e372b08fc1aec54e",
+        "brain_mac_inventory.py": "9f417fcf625abc407e3e7e9c079a10b0c07dd10f1180bbdc8f961bf6cfcd5fe5",
+        "brain_mac_registration.py": "d263304109b31d7679e12422e2c709007684df6cfdcd95b8b3f1435c9603dd4e",
+        "brain_maintenance.py": "a93b3a3d0f9f80026fa5d8f5c9b6a7e8adb6d0544567bed342c23a40727556c8",
+        "brain_markdown.py": "3bc18c92524364acdce8bbf0abf00e69d7acf72d0d9cfbc809461424c3379892",
+        "brain_process.py": "c355fcbf01a5aadb9fcb9c5f939c210783aac58aff448932364997817e64e32b",
+        "brain_selftest.py": "fea216be82137d7adf302a2545ab7409895a8e94beb8f0f2f119848c3875f820",
+        "brain_server.py": "0a0791b2ea41e7ca0eac56fcdcd56209d468fb9934d63fb15d6cd60c603fa4f3",
+        "brain_service.py": "61647aebcd43b0667ddebd78bca1aa291b88fb115c9ff04188a2e2c07c499e41",
+        "brain_settings.py": "6b70c963052150251e1505579f42a43c1abd6c0341474b6c6fa59d689b3e3a42",
+        "brain_store.py": "f3025605f8c75fd6b34dc4d4250fdf96b70848ede1110eb7a9a6c76c89717539",
+        "brain_supervisor.py": "da06c6be2446cb8dcb1adcd0037de5645411f4f13e6c2a094a71a88fec30459e",
+        "brain_walk.py": "92d7e35a59a052f1ae920b8249a929477e2c42aa5535a5f81004c09f8f7ad24a",
+        "brain_wiki.py": "fb564cb8ab8b937a237461b8acfb5bb68f70f1f404fe4fe1d40c06ad86f2340e",
+        "brain_windows_process.py": "803eb93b9a23fc941f7eed4aa5e53512b91ae38f5694d11f75cf91de30a83758"
+      },
+      "provenance": [
+        {
+          "commit": "a342caeb4bf7ca55b05fe4b326d5c2a280438d70",
+          "manifest_sha256": "d9740c1e7156150553097d5b4bcf7c98344df4ac1322c38517bd7f6fa266515b"
+        }
+      ]
+    },
+    {
+      "version": "0.2.14",
+      "app_sha256": {
+        "brain_cli.py": "f891728d46749ea502549db42b419c4a5a26c5cb134e161059d80402772447d2",
+        "brain_client.py": "a06d6ee8ab0c01ba5371db5e001a15a379a339eb657aad4441b90c79ddc2d95f",
+        "brain_git.py": "7f15b6af765d3205a21858473ebdefdb7aa0f0226a98fde8feabd62a868ac543",
+        "brain_hooks.py": "cc1623457ebe2c33cbee6b208a18374d4fda3242c75239d53764f37a23882437",
+        "brain_index.py": "a3160700bb3884998036cc16c13b9a6e242b1d22af898aac6009bf9799b60f9a",
+        "brain_index_bootstrap.py": "ccf16d4dac53c4299890399776d3a9c8d2a529b7b516b10777c654f111010d5d",
+        "brain_index_reconcile.py": "1efd65a75ad1e05453bae1f62fe0b77b9b2a78b2445a58b3575647f7d2b69c4d",
+        "brain_linux_identity.py": "9a1d506b72b18e7c6c918f799f20e758605884ff220b67280af6265b017e2437",
+        "brain_linux_registration.py": "176ecadb4ef01081cc6354b93bf9dc7475c731394c01b5df6e73536719a2c043",
+        "brain_linux_user_service.py": "78326380a2e08c4d09c54be8d49a9b15f23e17aecb427ba53d6de8f0ea280f57",
+        "brain_mac_inventory.py": "9f417fcf625abc407e3e7e9c079a10b0c07dd10f1180bbdc8f961bf6cfcd5fe5",
+        "brain_mac_registration.py": "d263304109b31d7679e12422e2c709007684df6cfdcd95b8b3f1435c9603dd4e",
+        "brain_maintenance.py": "a93b3a3d0f9f80026fa5d8f5c9b6a7e8adb6d0544567bed342c23a40727556c8",
+        "brain_markdown.py": "3bc18c92524364acdce8bbf0abf00e69d7acf72d0d9cfbc809461424c3379892",
+        "brain_process.py": "c355fcbf01a5aadb9fcb9c5f939c210783aac58aff448932364997817e64e32b",
+        "brain_selftest.py": "fea216be82137d7adf302a2545ab7409895a8e94beb8f0f2f119848c3875f820",
+        "brain_server.py": "0a0791b2ea41e7ca0eac56fcdcd56209d468fb9934d63fb15d6cd60c603fa4f3",
+        "brain_service.py": "7954a75f09120f0091d589cd46ddfcee4e229b1abd81ca257d4ba085cb861f97",
+        "brain_settings.py": "6b70c963052150251e1505579f42a43c1abd6c0341474b6c6fa59d689b3e3a42",
+        "brain_store.py": "f3025605f8c75fd6b34dc4d4250fdf96b70848ede1110eb7a9a6c76c89717539",
+        "brain_supervisor.py": "da06c6be2446cb8dcb1adcd0037de5645411f4f13e6c2a094a71a88fec30459e",
+        "brain_walk.py": "92d7e35a59a052f1ae920b8249a929477e2c42aa5535a5f81004c09f8f7ad24a",
+        "brain_wiki.py": "fb564cb8ab8b937a237461b8acfb5bb68f70f1f404fe4fe1d40c06ad86f2340e",
+        "brain_windows_process.py": "803eb93b9a23fc941f7eed4aa5e53512b91ae38f5694d11f75cf91de30a83758"
+      },
+      "provenance": [
+        {
+          "commit": "8bd4e1036f2611690ee8b255dd4e67e8c94ae231",
+          "manifest_sha256": "500d00ce614ecc359cfa03fa2d1d3093b9b008a661a56aaae01b7e0c987dffbf"
+        },
+        {
+          "commit": "f5303ac7209ae6e25c2979d59ef48f599e2f8c8b",
+          "manifest_sha256": "f5f86fa9797ab62d2ccd0225eedb0eebccf88659075e3c95da5b0131c536a6a6"
+        }
+      ]
+    },
+    {
+      "version": "0.2.14",
+      "app_sha256": {
+        "brain_cli.py": "f891728d46749ea502549db42b419c4a5a26c5cb134e161059d80402772447d2",
+        "brain_client.py": "a06d6ee8ab0c01ba5371db5e001a15a379a339eb657aad4441b90c79ddc2d95f",
+        "brain_git.py": "7f15b6af765d3205a21858473ebdefdb7aa0f0226a98fde8feabd62a868ac543",
+        "brain_hooks.py": "cc1623457ebe2c33cbee6b208a18374d4fda3242c75239d53764f37a23882437",
+        "brain_index.py": "a3160700bb3884998036cc16c13b9a6e242b1d22af898aac6009bf9799b60f9a",
+        "brain_index_bootstrap.py": "de917d4f8cb0382b53d807bd6470e137da6515fcc470846c3265848d67f51ebb",
+        "brain_index_reconcile.py": "1efd65a75ad1e05453bae1f62fe0b77b9b2a78b2445a58b3575647f7d2b69c4d",
+        "brain_linux_identity.py": "9a1d506b72b18e7c6c918f799f20e758605884ff220b67280af6265b017e2437",
+        "brain_linux_registration.py": "176ecadb4ef01081cc6354b93bf9dc7475c731394c01b5df6e73536719a2c043",
+        "brain_linux_user_service.py": "78326380a2e08c4d09c54be8d49a9b15f23e17aecb427ba53d6de8f0ea280f57",
+        "brain_mac_inventory.py": "9f417fcf625abc407e3e7e9c079a10b0c07dd10f1180bbdc8f961bf6cfcd5fe5",
+        "brain_mac_registration.py": "d263304109b31d7679e12422e2c709007684df6cfdcd95b8b3f1435c9603dd4e",
+        "brain_maintenance.py": "a93b3a3d0f9f80026fa5d8f5c9b6a7e8adb6d0544567bed342c23a40727556c8",
+        "brain_markdown.py": "3bc18c92524364acdce8bbf0abf00e69d7acf72d0d9cfbc809461424c3379892",
+        "brain_process.py": "742267c98052100f0d85775cc994a4c976b5a9495b6269110bf6e3ff72dff010",
+        "brain_selftest.py": "fea216be82137d7adf302a2545ab7409895a8e94beb8f0f2f119848c3875f820",
+        "brain_server.py": "3c0c730c9fbf79aab25c6a52e0a4829cc82d6b6812dec5a53c5fec91fe107b8e",
+        "brain_service.py": "7954a75f09120f0091d589cd46ddfcee4e229b1abd81ca257d4ba085cb861f97",
+        "brain_settings.py": "bfc352f4d077bfbcb6092c09e75cf5e7e34a172716167b6fc5dc331080f84bed",
+        "brain_store.py": "f3025605f8c75fd6b34dc4d4250fdf96b70848ede1110eb7a9a6c76c89717539",
+        "brain_supervisor.py": "6fa69ee872a26c5ab1a1e6dd61843d50dfcb4046eaa1499120cc8cb10a1d15a8",
+        "brain_walk.py": "92d7e35a59a052f1ae920b8249a929477e2c42aa5535a5f81004c09f8f7ad24a",
+        "brain_wiki.py": "fb564cb8ab8b937a237461b8acfb5bb68f70f1f404fe4fe1d40c06ad86f2340e",
+        "brain_windows_process.py": "803eb93b9a23fc941f7eed4aa5e53512b91ae38f5694d11f75cf91de30a83758"
+      },
+      "provenance": [
+        {
+          "commit": "0040c66831d182b459eed93db8ccabf24c6e6b94",
+          "manifest_sha256": "4c55398e12e63df343d2c409c0bd235dc90fe30fd925a7ba1baf9ec3728e18d3"
+        }
+      ]
+    },
+    {
+      "version": "0.2.15",
+      "app_sha256": {
+        "brain_cli.py": "f891728d46749ea502549db42b419c4a5a26c5cb134e161059d80402772447d2",
+        "brain_client.py": "68bdec094096f9a6c9d92b12e22c3e432c500a0d21c76c18608c1a2b0cd00d39",
+        "brain_git.py": "7f15b6af765d3205a21858473ebdefdb7aa0f0226a98fde8feabd62a868ac543",
+        "brain_hooks.py": "cc1623457ebe2c33cbee6b208a18374d4fda3242c75239d53764f37a23882437",
+        "brain_index.py": "a3160700bb3884998036cc16c13b9a6e242b1d22af898aac6009bf9799b60f9a",
+        "brain_index_bootstrap.py": "de917d4f8cb0382b53d807bd6470e137da6515fcc470846c3265848d67f51ebb",
+        "brain_index_reconcile.py": "1efd65a75ad1e05453bae1f62fe0b77b9b2a78b2445a58b3575647f7d2b69c4d",
+        "brain_linux_identity.py": "9a1d506b72b18e7c6c918f799f20e758605884ff220b67280af6265b017e2437",
+        "brain_linux_registration.py": "176ecadb4ef01081cc6354b93bf9dc7475c731394c01b5df6e73536719a2c043",
+        "brain_linux_user_service.py": "78326380a2e08c4d09c54be8d49a9b15f23e17aecb427ba53d6de8f0ea280f57",
+        "brain_mac_inventory.py": "9f417fcf625abc407e3e7e9c079a10b0c07dd10f1180bbdc8f961bf6cfcd5fe5",
+        "brain_mac_registration.py": "d263304109b31d7679e12422e2c709007684df6cfdcd95b8b3f1435c9603dd4e",
+        "brain_maintenance.py": "a93b3a3d0f9f80026fa5d8f5c9b6a7e8adb6d0544567bed342c23a40727556c8",
+        "brain_markdown.py": "3bc18c92524364acdce8bbf0abf00e69d7acf72d0d9cfbc809461424c3379892",
+        "brain_process.py": "742267c98052100f0d85775cc994a4c976b5a9495b6269110bf6e3ff72dff010",
+        "brain_selftest.py": "fea216be82137d7adf302a2545ab7409895a8e94beb8f0f2f119848c3875f820",
+        "brain_server.py": "3c0c730c9fbf79aab25c6a52e0a4829cc82d6b6812dec5a53c5fec91fe107b8e",
+        "brain_service.py": "7954a75f09120f0091d589cd46ddfcee4e229b1abd81ca257d4ba085cb861f97",
+        "brain_settings.py": "b1e0c07942eb2531278d64b6665bc89e8e296d6d366d94aafc3fa798296696e7",
+        "brain_store.py": "f3025605f8c75fd6b34dc4d4250fdf96b70848ede1110eb7a9a6c76c89717539",
+        "brain_supervisor.py": "6fa69ee872a26c5ab1a1e6dd61843d50dfcb4046eaa1499120cc8cb10a1d15a8",
+        "brain_walk.py": "92d7e35a59a052f1ae920b8249a929477e2c42aa5535a5f81004c09f8f7ad24a",
+        "brain_wiki.py": "fb564cb8ab8b937a237461b8acfb5bb68f70f1f404fe4fe1d40c06ad86f2340e",
+        "brain_windows_process.py": "803eb93b9a23fc941f7eed4aa5e53512b91ae38f5694d11f75cf91de30a83758"
+      },
+      "provenance": [
+        {
+          "commit": "43a36d9ea9bf63f7c23023c935a505fc97af413a",
+          "manifest_sha256": "7b283ba308165d7848629e8f16b98a551abeefbdbdffa2b314092ef67bb7acee"
+        }
+      ]
+    },
+    {
+      "version": "0.2.15",
+      "app_sha256": {
+        "brain_cli.py": "f891728d46749ea502549db42b419c4a5a26c5cb134e161059d80402772447d2",
+        "brain_client.py": "68bdec094096f9a6c9d92b12e22c3e432c500a0d21c76c18608c1a2b0cd00d39",
+        "brain_git.py": "7f15b6af765d3205a21858473ebdefdb7aa0f0226a98fde8feabd62a868ac543",
+        "brain_hooks.py": "cc1623457ebe2c33cbee6b208a18374d4fda3242c75239d53764f37a23882437",
+        "brain_index.py": "a3160700bb3884998036cc16c13b9a6e242b1d22af898aac6009bf9799b60f9a",
+        "brain_index_bootstrap.py": "de917d4f8cb0382b53d807bd6470e137da6515fcc470846c3265848d67f51ebb",
+        "brain_index_reconcile.py": "1efd65a75ad1e05453bae1f62fe0b77b9b2a78b2445a58b3575647f7d2b69c4d",
+        "brain_linux_identity.py": "9a1d506b72b18e7c6c918f799f20e758605884ff220b67280af6265b017e2437",
+        "brain_linux_registration.py": "176ecadb4ef01081cc6354b93bf9dc7475c731394c01b5df6e73536719a2c043",
+        "brain_linux_user_service.py": "78326380a2e08c4d09c54be8d49a9b15f23e17aecb427ba53d6de8f0ea280f57",
+        "brain_mac_inventory.py": "9f417fcf625abc407e3e7e9c079a10b0c07dd10f1180bbdc8f961bf6cfcd5fe5",
+        "brain_mac_registration.py": "d263304109b31d7679e12422e2c709007684df6cfdcd95b8b3f1435c9603dd4e",
+        "brain_maintenance.py": "a93b3a3d0f9f80026fa5d8f5c9b6a7e8adb6d0544567bed342c23a40727556c8",
+        "brain_markdown.py": "3bc18c92524364acdce8bbf0abf00e69d7acf72d0d9cfbc809461424c3379892",
+        "brain_process.py": "80a9e433338ebf75148319ca7fd6ed0d81e86e28a3a66c8034ab8045833b1c65",
+        "brain_selftest.py": "fea216be82137d7adf302a2545ab7409895a8e94beb8f0f2f119848c3875f820",
+        "brain_server.py": "3c0c730c9fbf79aab25c6a52e0a4829cc82d6b6812dec5a53c5fec91fe107b8e",
+        "brain_service.py": "7954a75f09120f0091d589cd46ddfcee4e229b1abd81ca257d4ba085cb861f97",
+        "brain_settings.py": "b1e0c07942eb2531278d64b6665bc89e8e296d6d366d94aafc3fa798296696e7",
+        "brain_store.py": "f3025605f8c75fd6b34dc4d4250fdf96b70848ede1110eb7a9a6c76c89717539",
+        "brain_supervisor.py": "6fa69ee872a26c5ab1a1e6dd61843d50dfcb4046eaa1499120cc8cb10a1d15a8",
+        "brain_walk.py": "92d7e35a59a052f1ae920b8249a929477e2c42aa5535a5f81004c09f8f7ad24a",
+        "brain_wiki.py": "fb564cb8ab8b937a237461b8acfb5bb68f70f1f404fe4fe1d40c06ad86f2340e",
+        "brain_windows_process.py": "803eb93b9a23fc941f7eed4aa5e53512b91ae38f5694d11f75cf91de30a83758"
+      },
+      "provenance": [
+        {
+          "commit": "bc057fd527135d76a83ff158a0f8948b056c1a44",
+          "manifest_sha256": "0bf5cdb267b50f0d13b8550bf7f1ff0896ee306e7280dd093eff2b34367a0b1e"
+        },
+        {
+          "commit": "1aa67d0f706f14cbfba06c5661bdda61de5dab31",
+          "manifest_sha256": "54c012b42384a076f6cfc00501ab92faaad0c4b724b522bcd1c3cb4bef3e8a1c"
+        },
+        {
+          "commit": "f7d3eb9d4f0df4af6274f7371b904b305dabc070",
+          "manifest_sha256": "6217dedb15689f9b65c5eeea9f9ab234dd5cbf209105139be588c63185ed0f5e"
+        }
+      ]
+    }
+  ]
+}

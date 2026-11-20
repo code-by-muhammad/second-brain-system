@@ -10,7 +10,7 @@ if PILOT:
     cfg.STATE=(ROOT/'pilot/state').resolve()
     cfg.PORT=8767
 for key in list(os.environ):
-    if key.startswith('BASIC_MEMORY_'): os.environ.pop(key)
+    if key.upper().startswith('BASIC_MEMORY_'): os.environ.pop(key)
 os.environ.update(cfg.environment())
 os.environ['BRAIN_VAULT']=str(ROOT/'pilot/vault') if PILOT else str(cfg.VAULT)
 os.environ['BRAIN_STATE']=str(ROOT/'pilot/state') if PILOT else str(cfg.STATE)
@@ -24,7 +24,6 @@ os.environ['HF_HUB_DISABLE_TELEMETRY']='1'
 os.environ['HF_HUB_OFFLINE']='1'
 os.environ['DO_NOT_TRACK']='1'
 os.environ['LOGFIRE_IGNORE_NO_CONFIG']='1'
-cfg.clamp_search_memory()
 cfg.require_local_search_runtime()
 from basic_memory.config import init_mcp_logging
 init_mcp_logging()

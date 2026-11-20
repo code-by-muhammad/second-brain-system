@@ -32,7 +32,7 @@ def release_case(tmp_path, monkeypatch):
     root = tmp_path / 'synthetic runtime'
     root.mkdir()
     (root / 'device.json').write_text(json.dumps({'vault': str(tmp_path / 'synthetic vault'),
-        'python': 'synthetic-old-python', 'release_root': 'synthetic-old-release',
+        'python': sys.executable, 'release_root': 'synthetic-old-release',
         'version': '0.1.6', 'role': 'capture'}), encoding='utf-8')
     release = root / 'releases' / VERSION
     effects = []
@@ -110,6 +110,14 @@ def release_case(tmp_path, monkeypatch):
         monkeypatch.setattr(support,'run',run)
         monkeypatch.setattr(helper,'setup_helpers',lambda:support)
         monkeypatch.setattr(updater,'installer',lambda:helper)
+        monkeypatch.setattr(support,'service_python',lambda *args:None)
+        monkeypatch.setattr(updater,'_predecessor',lambda *args:({'app.py':'a'*64},{'source':'synthetic'}))
+        def inspect(*args):
+            assert args[3:]==('service','inspect')
+            registration={'kind':sys.platform,'definition_sha256':'a'*64,'enabled':True,'interpreter':sys.executable}
+            if sys.platform=='win32':registration.update(xml='<Task/>',owner_sid='S-1-5-21-101-102-103-1001')
+            return {'status':'inspected','task_present':True,'task_enabled':True,'registration':registration}
+        monkeypatch.setattr(updater,'controller',inspect)
         monkeypatch.setattr(updater,'__file__',str(release/'update.py'))
         monkeypatch.setattr(updater, 'update_lock', lambda _: contextlib.nullcontext())
         monkeypatch.setattr(sys, 'argv', ['update.py', '--root', str(root), '--version', VERSION])

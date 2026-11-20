@@ -1,5 +1,5 @@
 """Explicit, coverage-bound local indexing; no source rewrites or Git calls."""
-from contextlib import closing,ExitStack
+from contextlib import closing,ExitStack,contextmanager
 from datetime import datetime,timezone
 import hashlib
 import json
@@ -12,7 +12,9 @@ import time
 import uuid
 # As an entry point this imports its sibling modules before it reads the start line. However it was launched, one that
 # is never released leaves the application folder as it found it: no compiled files.
-if __name__=='__main__':sys.dont_write_bytecode=True
+if __name__=='__main__':
+    sys.dont_write_bytecode=True
+    sys.modules.setdefault('brain_index_bootstrap',sys.modules[__name__])
 from filelock import FileLock
 import brain_settings as cfg
 import brain_index as index
@@ -228,7 +230,7 @@ def _ready_settled(deadline=None,attempts=3):
     return None
 
 
-def _run_reindex(command,log,deadline,on_tick,on_cleanup_wait,on_spawn=None,admission=None):
+def _run_reindex(command,log,deadline,on_tick,on_cleanup_wait,on_spawn=None,admission=None,managed=False):
     """Run one worker pass to the absolute monotonic deadline.
 
     admission() returns a context manager whose entry never waits and raises LaunchDeferred when service control is
@@ -242,10 +244,10 @@ def _run_reindex(command,log,deadline,on_tick,on_cleanup_wait,on_spawn=None,admi
             scope.enter_context(admission())
             # Admission that took too long starts nothing.
             if time.monotonic()>=deadline:raise subprocess.TimeoutExpired(command,overall)
-        return _run_admitted(command,log,deadline,overall,on_tick,on_cleanup_wait,on_spawn,scope)
+        return _run_admitted(command,log,deadline,overall,on_tick,on_cleanup_wait,on_spawn,scope,managed)
 
 
-def _run_admitted(command,log,deadline,overall,on_tick,on_cleanup_wait,on_spawn,scope):
+def _run_admitted(command,log,deadline,overall,on_tick,on_cleanup_wait,on_spawn,scope,managed):
     if os.name=='nt':
         from brain_windows_process import run,StartWindowExpired
         # The start line is in the runner's standard-input file before the program exists, so creating the program
@@ -272,6 +274,8 @@ def _run_admitted(command,log,deadline,overall,on_tick,on_cleanup_wait,on_spawn,
         # Signals already dispatched into cleanup do not re-raise afterward.
     handlers={signal.SIGINT:signal.getsignal(signal.SIGINT)}
     process=None
+    handles=ExitStack()
+    retained=None
     try:
         for signum in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP):
             if signum==signal.SIGINT and handlers[signum]==signal.SIG_IGN:continue
@@ -282,6 +286,9 @@ def _run_admitted(command,log,deadline,overall,on_tick,on_cleanup_wait,on_spawn,
         # line, and reads end of input instead if this process dies first.
         process=subprocess.Popen(command,env=cfg.environment(),stdin=subprocess.PIPE,stdout=log,stderr=log,start_new_session=True)
         born=_lifetime(process.pid)
+        if managed:
+            from brain_linux_generation import retain_worker
+            retained=retain_worker(handles,process)
         check_interrupt()
         if on_spawn is not None:on_spawn(process)
         check_interrupt()
@@ -321,31 +328,36 @@ def _run_admitted(command,log,deadline,overall,on_tick,on_cleanup_wait,on_spawn,
                 except (AttributeError,OSError,ValueError):pass
                 try:process.poll()
                 except OSError:pass
-                if process.returncode is None:
+                if managed:
+                    from brain_linux_generation import clean_worker
+                    clean_worker(handles,process,retained,on_cleanup_wait)
+                elif process.returncode is None:
                     # Do not poll/wait during grace: even an exited, unreaped
                     # leader reserves this PID/PGID through the final signal.
                     for signum in (signal.SIGTERM,signal.SIGKILL):
                         try:os.killpg(process.pid,signum)
                         except OSError:pass
                         if signum==signal.SIGTERM:time.sleep(2)
-                try:process.wait(timeout=5)
-                except (subprocess.TimeoutExpired,OSError):pass
-                notified=False
-                while True:
-                    # A reaped leader no longer grants group signal authority.
-                    # Existence/permission errors can only retain admission.
-                    try:reaped=process.poll() is not None
-                    except OSError:reaped=False
-                    if reaped:
-                        try:os.killpg(process.pid,0)
-                        except ProcessLookupError:break
-                        except OSError:pass
-                    if not notified:
-                        notified=True
-                        try:on_cleanup_wait()
-                        except Exception:pass
-                    time.sleep(.1)
+                if not managed:
+                    try:process.wait(timeout=5)
+                    except (subprocess.TimeoutExpired,OSError):pass
+                    notified=False
+                    while True:
+                        # A reaped leader no longer grants group signal authority.
+                        # Existence/permission errors can only retain admission.
+                        try:reaped=process.poll() is not None
+                        except OSError:reaped=False
+                        if reaped:
+                            try:os.killpg(process.pid,0)
+                            except ProcessLookupError:break
+                            except OSError:pass
+                        if not notified:
+                            notified=True
+                            try:on_cleanup_wait()
+                            except Exception:pass
+                        time.sleep(.1)
         finally:
+            handles.close()
             for signum in (signal.SIGTERM,signal.SIGHUP,signal.SIGINT):
                 if signum in handlers:signal.signal(signum,handlers[signum])
 
@@ -368,7 +380,30 @@ def _archive_previous():
     return name
 
 
+@contextmanager
+def _index_environment():
+    overlay=cfg.environment()
+    keys={key for key in os.environ if key.upper().startswith('BASIC_MEMORY_')}
+    keys.update(key for key,value in overlay.items() if os.environ.get(key)!=value)
+    previous={key:os.environ.get(key) for key in keys}
+    try:
+        for key in keys:
+            if key in overlay:os.environ[key]=overlay[key]
+            else:os.environ.pop(key,None)
+        yield
+    finally:
+        for key,value in previous.items():
+            if value is not None:os.environ[key]=value
+            else:os.environ.pop(key,None)
+
+
 def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=False,retry=False,launch=None):
+    with _index_environment():
+        return _main(overall_seconds=overall_seconds,stall_seconds=stall_seconds,
+                     full=full,retry=retry,launch=launch)
+
+
+def _main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=False,retry=False,launch=None):
     """Index, verify coverage, and save one receipt.
 
     launch is the service lifecycle's seam and may be None (no lifecycle integration; the start gate still applies):
@@ -378,7 +413,6 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
                               because a stop holds that lock while it waits for this process
       launch.generation       an opaque string saved in the receipt as launch_generation; None for a manual retry
     """
-    cfg.clamp_search_memory()
     if (type(overall_seconds) is not int or type(stall_seconds) is not int
             or not 1<=stall_seconds<overall_seconds<=86400):
         raise ValueError('Use integer budgets: 1 <= stall-seconds < overall-seconds <= 86400.')
@@ -546,7 +580,8 @@ def main(*,overall_seconds=OVERALL_SECONDS,stall_seconds=STALL_SECONDS,full=Fals
                         # this function does not raise across it; tick() and the check() after it still do.
                         stop.armed=False
                         try:result=_run_reindex(command+arguments,log,deadline,tick,cleanup_wait,
-                                                on_spawn=getattr(launch,'publish',None),admission=getattr(launch,'admission',None))
+                                                on_spawn=getattr(launch,'publish',None),admission=getattr(launch,'admission',None),
+                                                **({'managed':True} if getattr(launch,'managed',False) else {}))
                         except IndexStalled:result=subprocess.CompletedProcess(command+arguments,None)
                         finally:stop.armed=not stop.signal and bool(stop.previous)
                         # The worker's own verdict is recorded before anything reads the database, which may not exist.
@@ -638,8 +673,14 @@ if __name__=='__main__':
     if not _released():
         print('index bootstrap: not_released',file=sys.stderr,flush=True)
         os._exit(UNRELEASED_EXIT)  # The reader thread may still hold stdin.
+    from brain_process import OwnershipError
+    from brain_service import index_launch
+    try:launch=index_launch(manual=False)
+    except OwnershipError as error:
+        print('index bootstrap: '+getattr(error,'reason','launch_admission_unverified'),file=sys.stderr,flush=True)
+        raise SystemExit(UNRELEASED_EXIT) from None
     if sys.argv[1:]==['--reconcile']:
         from brain_index_reconcile import main as reconcile
         reconcile()
     else:
-        main()
+        main(launch=launch)

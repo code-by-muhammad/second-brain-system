@@ -501,8 +501,14 @@ def test_entry_refuses_unknown_arguments_before_the_gate(tmp_path,arguments):
 
 
 def test_released_entry_runs_and_saves_its_own_receipt(tmp_path):
-    """No configuration exists in this empty runtime, so the released run ends at once with a terminal receipt."""
+    """The pipe release is enough only on backends without Linux user-space enrolment."""
     result,written=_entry(tmp_path,[],b'start\n')
+    if sys.platform=='linux':
+        from brain_linux_user_service import systemd_manager_present
+        if not systemd_manager_present():
+            assert result.returncode==75 and b'bootstrap_unenrolled' in result.stderr
+            assert written==[]
+            return
     assert result.returncode==0 and b'not_released' not in result.stderr
     assert 'index-bootstrap-status.json' in written
 

@@ -1,9 +1,9 @@
 """Common configuration; device identity and secrets never belong in Git."""
 from __future__ import annotations
-import json, os, sys, re
+import json, os, sys, re, stat
 from pathlib import Path
 
-VERSION = '0.2.15'
+VERSION = '0.2.16'
 ROOT = Path(os.environ.get('BRAIN_SYSTEM_ROOT', str(Path(__file__).resolve().parents[1]))).resolve()
 DEVICE_PATH = ROOT / 'device.json'
 DEVICE = json.loads(DEVICE_PATH.read_text(encoding='utf-8')) if DEVICE_PATH.exists() else {}
@@ -43,20 +43,41 @@ def validate_search_configuration(value):
         raise ValueError('Only local FastEmbed with reranking disabled is supported; preserve and review the configuration.')
 
 
+def read_search_configuration():
+    """Read the bounded local configuration that Basic Memory will load."""
+    path = STATE / 'config.json'
+    if any(item.is_symlink() or item.is_junction() for item in (path, *path.parents)):
+        raise ValueError('Linked search configuration is refused.')
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return {}
+    if not stat.S_ISREG(info.st_mode) or info.st_size > 1_000_000:
+        raise ValueError('Search configuration must be a regular file within its size bound.')
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_BINARY', 0)
+    with os.fdopen(os.open(path, flags), 'rb') as source:
+        opened = os.fstat(source.fileno())
+        if not stat.S_ISREG(opened.st_mode) or not os.path.samestat(info, opened):
+            raise ValueError('Search configuration changed while opening it.')
+        raw = source.read(1_000_001)
+    if len(raw) > 1_000_000:
+        raise ValueError('Search configuration exceeds its bound.')
+    try:
+        value = json.loads(raw)
+    except (ValueError, UnicodeError, RecursionError):
+        raise ValueError('Search configuration must be a valid local JSON object.') from None
+    validate_search_configuration(value)
+    return value
+
+
 def require_local_search_runtime():
     """Before upstream imports, reject unsupported providers and an unsealed SDK."""
     from importlib.util import find_spec
-    path=STATE/'config.json'
-    if path.is_symlink() or path.is_junction():raise ValueError('Linked search configuration is refused.')
-    if path.exists():
-        with path.open('rb') as source:raw=source.read(1_000_001)
-        if len(raw)>1_000_000:raise ValueError('Search configuration exceeds its bound.')
-        try:value=json.loads(raw)
-        except (ValueError,UnicodeError):raise ValueError('Search configuration must be a valid local JSON object.') from None
-    else:value={}  # Pinned Basic Memory defaults are FastEmbed and no reranker.
-    validate_search_configuration(value)
+
+    read_search_configuration()
     if find_spec('litellm') is not None or any(Path(sys.executable).with_name(name).exists() for name in ('litellm.exe','litellm-proxy.exe')):
         raise ValueError('This release excludes LiteLLM; preserve the environment and reprovision from the verified locked release.')
+
 
 # One thread and one note at a time. A few thousand notes otherwise load several
 # ONNX arenas at once; that is what exhausted a 16 GB host during indexing.
@@ -74,44 +95,14 @@ SEARCH_MEMORY_LIMITS = {
 }
 
 
-def clamp_search_memory(state=None):
-    """Lower index memory knobs already stored on a device. Other keys stay."""
-    directory = Path(state) if state is not None else STATE
-    path = directory / 'config.json'
-    if path.is_symlink() or os.path.isjunction(path) or not path.is_file():
-        return False
-    if any(item.is_symlink() or os.path.isjunction(item) for item in path.parents):
-        return False
-    try:
-        raw = path.read_bytes()
-        if len(raw) > 1_000_000:
-            return False
-        value = json.loads(raw)
-    except (OSError, ValueError, UnicodeError):
-        return False
-    if not isinstance(value, dict):
-        return False
-    changed = False
-    for key, cap in SEARCH_MEMORY_LIMITS.items():
-        current = value.get(key)
-        if type(current) is not int or current < 1 or current > cap:
-            value[key] = cap
-            changed = True
-    if not changed:
-        return False
-    temporary = path.with_name('config.json.tmp')
-    if temporary.exists() or temporary.is_symlink():
-        return False
-    temporary.write_text(json.dumps(value, indent=2) + '\n', encoding='utf-8')
-    os.chmod(temporary, 0o600)
-    os.replace(temporary, path)
-    return True
-
-
 def environment():
-    # Basic Memory environment overrides must not defeat the source-safe file
-    # config, change the indexed project or silently select a remote provider.
-    env = {key:value for key,value in os.environ.items() if not key.startswith('BASIC_MEMORY_')}
+    # Remove inherited Basic Memory overrides before setting the local routing,
+    # source-preservation defaults and memory caps controlled by this runtime.
+    settings = read_search_configuration()
+    env = {key: value for key, value in os.environ.items() if not key.upper().startswith('BASIC_MEMORY_')}
+    for key, cap in SEARCH_MEMORY_LIMITS.items():
+        selected = settings.get(key)
+        env['BASIC_MEMORY_' + key.upper()] = str(min(selected, cap) if type(selected) is int and selected > 0 else cap)
     env.update(BRAIN_SYSTEM_ROOT=str(ROOT), BRAIN_VAULT=str(VAULT), BRAIN_STATE=str(STATE),
                BASIC_MEMORY_CONFIG_DIR=str(STATE), BASIC_MEMORY_FORCE_LOCAL='true',
                FASTEMBED_CACHE_PATH=str(ROOT/'models'), HF_HUB_DISABLE_TELEMETRY='1',

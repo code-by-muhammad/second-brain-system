@@ -18,7 +18,7 @@ class Registration:
         self.exact=hashlib.sha256(service.definition('darwin').encode()).hexdigest()
         self.value={'file_present':True,'loaded':True,'enabled':True,'running':True,'definition_sha256':self.exact}
         self.calls=[];self.suspend_error=None;self.stop_error=None
-    def inspect(self):self.calls.append('inspect');return dict(self.value)
+    def inspect(self,*,deadline=None):self.calls.append('inspect');return dict(self.value)
     def suspend_activation(self):
         record=json.loads((cfg.STATE/'service-control-status.json').read_text())
         assert record['activation_disable_attempted'] is True
@@ -34,7 +34,7 @@ class Registration:
         if self.stop_error:raise self.stop_error
         self.value.update(loaded=False,running=False)
         return {**self.value,'native_end_exit':0}
-    def start(self,*,explicit):self.calls.append(('start',explicit));return self.inspect()
+    def start(self,*,explicit,deadline=None):self.calls.append(('start',explicit));return self.inspect()
 
 
 @pytest.fixture
@@ -137,7 +137,8 @@ def test_native_listener_binding_requires_same_typed_manager_supervisor(identity
     with pytest.raises(processes.OwnershipError,match='native manager job'):service._native_listener_binding(identity,native)
 
 
-def test_native_listener_binding_accepts_same_loaded_running_supervisor():
+def test_native_listener_binding_accepts_same_loaded_running_supervisor(monkeypatch):
+    monkeypatch.setattr(service,'sys',SimpleNamespace(platform='darwin'))
     assert service._native_listener_binding({'supervisor_pid':123},{'loaded':True,'running':True,'main_pid':123}) is None
 
 
@@ -189,6 +190,7 @@ def test_mac_stop_can_end_verified_job_with_contained_orphan_without_pid_signals
 
 @pytest.mark.parametrize('mismatch_at',['before-health','after-health'])
 def test_mac_finish_binds_native_supervisor_on_both_sides_of_authenticated_health(mac_controller,monkeypatch,mismatch_at):
+    monkeypatch.setattr(service,'_held_snapshot',lambda value:{'registration':{'present':True},'previous':{}})
     import brain_cli
     identity={'supervisor_pid':123,'birth':3,'supervisor_birth':3}
     monkeypatch.setattr(processes,'listener_identity',lambda:dict(identity))

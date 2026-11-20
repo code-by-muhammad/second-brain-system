@@ -8,6 +8,56 @@ from pathlib import Path
 REMOTE='https://github.com/code-by-muhammad/second-brain-system.git'
 _INSTALLER_CACHE=None
 _VERIFIED_HASHES={}
+_RELEASE_HELPER=None
+CATALOG='predecessor-builds.json'
+HELD_DEPLOYMENT='held-deployment-v1'
+
+
+def release_helpers(checkout=None, hashes=None):
+    global _RELEASE_HELPER
+    import types
+    checkout=Path(checkout or Path(__file__).resolve().parent)
+    path=checkout/'app/brain_release.py'
+    raw=path.read_bytes()
+    actual=hashlib.sha256(raw).hexdigest()
+    expected=(hashes if hashes is not None else _VERIFIED_HASHES).get('app/brain_release.py')
+    if expected is not None and actual!=expected:
+        raise ValueError('Verified application inventory helper changed.')
+    if _RELEASE_HELPER is not None and _RELEASE_HELPER[:2]==(path,actual):
+        return _RELEASE_HELPER[2]
+    module=types.ModuleType('_brain_upgrade_release')
+    exec(compile(raw,str(path),'exec'),module.__dict__)
+    _RELEASE_HELPER=(path,actual,module)
+    return module
+
+
+def _predecessor(root, device, checkout, target):
+    helper=release_helpers()
+    installed=helper.inventory(root/'app')
+    version=device.get('version')
+    if not isinstance(version,str) or not re.fullmatch(r'\d+\.\d+\.\d+',version):
+        raise ValueError('Installed release version is invalid.')
+    try:
+        recorded=Path(device['release_root'])
+        if not recorded.is_absolute() or recorded.resolve()!=recorded:
+            raise ValueError('Recorded release path is unavailable.')
+        old=verify(recorded,version='v'+version)
+        expected=helper.manifest_app(old,version)
+        if installed==expected:
+            return installed,{'source':'recorded checkout','version':version,'identity':old['git_identity']}
+    except (OSError,ValueError,TypeError,KeyError,RuntimeError):
+        pass
+    expected=target['sha256'].get(CATALOG)
+    if expected is not None:
+        data,_=helper.file_image(checkout/CATALOG)
+        if _digest(data)!=expected:
+            raise ValueError('Verified predecessor catalog changed before admission.')
+        for build in helper.catalog(data):
+            if build['version']==version and installed==build['app_sha256']:
+                return installed,{'source':'candidate catalog','version':version,'catalog_sha256':expected,
+                                  'provenance':build['provenance']}
+    raise ValueError('Installed app differs from every verified predecessor payload for '+version+'.')
+
 
 def _candidate_platform():
     """Admit the declared native candidate matrix; this is not release approval."""
@@ -76,10 +126,12 @@ def installer():
     if expected is not None and sha!=expected:raise ValueError('Verified installer bytes changed; no helper executed.')
     if _INSTALLER_CACHE is not None and _INSTALLER_CACHE[:2]==(str(path),sha):
         _INSTALLER_CACHE[2]._SETUP_SHA256=_VERIFIED_HASHES.get('setup_runtime.py')
+        _INSTALLER_CACHE[2]._CONNECTION_SHA256=_VERIFIED_HASHES.get('app/brain_connection.py')
         return _INSTALLER_CACHE[2]
     module=types.ModuleType('_brain_update_installer');module.__file__=str(path)
     exec(compile(raw,str(path),'exec'),module.__dict__)
     module._SETUP_SHA256=_VERIFIED_HASHES.get('setup_runtime.py')
+    module._CONNECTION_SHA256=_VERIFIED_HASHES.get('app/brain_connection.py')
     _INSTALLER_CACHE=(str(path),sha,module)
     return module
 
@@ -94,6 +146,11 @@ def _forward_release(root,version):
     if not {'sealed-client-refresh-v1','owned-service-control-v1'}<=set(info.get('capabilities',[])):
         raise ValueError('Target release does not support safe client refresh/recovery; no service or client changes made.')
     _bind_release(info)
+    if HELD_DEPLOYMENT in info.get('capabilities',[]) or info['version']=='0.2.16':
+        data,_=release_helpers().file_image(release/CATALOG)
+        if data is None or _digest(data)!=info['sha256'].get(CATALOG):
+            raise ValueError('Release predecessor catalog is absent or changed.')
+        release_helpers().catalog(data)
     return release,info
 
 @contextlib.contextmanager
@@ -115,6 +172,8 @@ def _digest(data):return None if data is None else hashlib.sha256(data).hexdiges
 
 def _registration_record(record,previous):
     """The native controller supplies authority; seal its exact bounded record."""
+    if sys.platform=='linux' and record=={'kind':'linux','backend':'user-space','present':False}:
+        return dict(record)
     common={'kind','definition_sha256','enabled','interpreter'}
     if (not isinstance(record,dict) or record.get('kind')!=sys.platform
         or set(record)!=(common|({'xml','owner_sid'} if sys.platform=='win32' else set()))
@@ -150,105 +209,170 @@ def _binding_images(target,value):
     return before,after
 
 
-def snapshot(root,python,plan=None,*,controller_checkout=None,controller_identity=None,registration=None):
-    """Save exactly the sealed paths before stop, never live index/auth/note state."""
-    helpers=installer();support=helpers.setup_helpers()
+def _seal_artifacts(target, images):
+    helper=release_helpers()
+    rows=[]
+    seen=set()
+    for index,(kind,path,before,after,phase) in enumerate(images):
+        if str(path) in seen:
+            raise ValueError('Duplicate sealed deployment artifact.')
+        seen.add(str(path))
+        row={'kind':kind,'path':str(path),'phase':phase}
+        for name,(data,mode) in (('before',before),('after',after)):
+            row[name]={'sha256':_digest(data),'mode':mode}
+            if data is not None:
+                installer().atomic(target/('artifact-'+str(index)+'.'+name),data,expected_sha256=None)
+                helper.sync_directory(target)
+        rows.append(row)
+    return rows
+
+
+def snapshot(root,python,plan=None,*,controller_checkout=None,controller_identity=None,registration=None,
+             accepted=None, target_app=None, hold=None, service_policy='registered', images=()):
+    """Save sealed runtime preimages and an attempt-specific publication layout."""
+    helpers=installer();support=helpers.setup_helpers();release=release_helpers()
     plan=plan or {'format':1,'root':str(root),'python':str(python),'files':[]}
     support.validate_plan(plan,root,python);support.current(plan)
-    registration=_registration_record(registration,json.loads(_read(root/'device.json')))
+    device=_read(root/'device.json')
+    previous=json.loads(device)
+    registration=_registration_record(registration,previous)
     binding_before=_read(root/'state/previous-release.json')
     if binding_before is not None and len(binding_before)>65536:raise ValueError('Previous-release metadata exceeds its bound.')
+    if accepted is None:
+        accepted=_predecessor(root,previous,Path(controller_checkout or previous['release_root']),{'sha256':{}})
     helpers.private_dir(root/'backups')
     target=Path(tempfile.mkdtemp(prefix='upgrade-',dir=root/'backups'));helpers.private_dir(target)
-    installed=root/'app'
-    app_hashes={}
-    if installed.exists():
-        if installed.is_symlink() or os.path.isjunction(installed):raise ValueError('Linked installed app cannot be snapshotted.')
-        for path in installed.rglob('*'):
-            if path.is_symlink() or os.path.isjunction(path):raise ValueError('Linked app payload cannot be snapshotted.')
-        device=json.loads(_read(root/'device.json'))
-        manifest=json.loads(_read(Path(device['release_root'])/'release-manifest.json'))
-        if manifest.get('version')!=device.get('version'):raise ValueError('Previous app manifest/version disagrees; inspect before stopping.')
-        expected={Path(name).name:sha for name,sha in manifest.get('sha256',{}).items() if name.startswith('app/') and len(Path(name).parts)==2 and name.endswith('.py')}
-        actual={path.relative_to(installed).as_posix():_digest(path.read_bytes()) for path in installed.rglob('*') if path.is_file() and '__pycache__' not in path.relative_to(installed).parts}
-        # The file set must still be the previous release. The bytes may differ when a same-version
-        # checkout was replaced and the installed runtime was not switched. Snapshot those bytes so
-        # a rollback restores what was running.
-        if set(actual)!=set(expected):raise ValueError('Installed app differs from the previous release payload; preserve extras for review before stopping.')
-        shutil.copytree(installed,target/'app',ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
-        app_hashes={path.relative_to(target/'app').as_posix():_digest(path.read_bytes()) for path in (target/'app').rglob('*') if path.is_file()}
-        if app_hashes!=actual:raise ValueError('App changed while snapshotting; old service is still healthy.')
+    expected,provenance=accepted
+    if (release.inventory(root/'app',copy_to=target/'app')!=expected
+            or release.inventory(target/'app',allow_cache=False)!=expected):
+        raise ValueError('App changed while snapshotting; old service is still healthy.')
     records=[]
-    device=_read(root/'device.json')
     if plan.get('device_before_sha256') and _digest(device)!=plan['device_before_sha256']:raise ValueError('Device configuration changed before stop; re-plan.')
     rows=[{'path':str(root/'device.json'),'client':'device','before_sha256':_digest(device),'after_sha256':plan.get('device_after_sha256')}]+plan['files']
     for index,row in enumerate(rows):
-        path=Path(row['path']);data=_read(path)
+        path=Path(row['path'])
+        data,mode=release.file_image(path) if index==0 else support.client_image(path)
         if _digest(data)!=row['before_sha256']:raise ValueError('Client changed before stop; old service is still healthy.')
         if data is not None:helpers.atomic(target/str(index),data)
-        records.append({key:row.get(key) for key in ('path','client','before_sha256','after_sha256')})
-    binding_after=_binding_payload(json.loads(device),python,target)
+        default_mode=0o666 if os.name=='nt' else 0o600
+        records.append({**{key:row.get(key) for key in ('path','client','before_sha256','after_sha256')},
+                        'before_mode':mode,'after_mode':mode if mode is not None else default_mode})
+    binding_after=_binding_payload(previous,python,target)
     if binding_before is not None:helpers.atomic(target/'previous-binding.before',binding_before)
     helpers.atomic(target/'previous-binding.after',binding_after)
     value={'format':3,'root':str(root),'controller_python':str(python),'controller_checkout':str(controller_checkout) if controller_checkout else None,
-           'controller_identity':controller_identity,'previous':json.loads(device),
-           'files':records,'app_sha256':app_hashes,'registration':registration,
+           'controller_identity':controller_identity,'previous':previous,'files':records,'app_sha256':expected,
+           'predecessor':provenance,'registration':registration,
            'previous_binding':{'before_sha256':_digest(binding_before),'after_sha256':_digest(binding_after)}}
-    helpers.atomic(target/'snapshot.json',json.dumps(value,indent=2)+'\n')
+    if hold is not None:
+        value['deployment']={'hold_id':hold,'service_policy':service_policy,'target_app_sha256':release.app_map(target_app),
+                             'artifacts':_seal_artifacts(target,images)}
+    helpers.atomic(target/'snapshot.json',json.dumps(value,indent=2)+'\n',expected_sha256=None)
+    release.sync_directory(target);release.sync_directory(target.parent)
     support.current(plan)
     if _read(root/'state/previous-release.json')!=binding_before:raise ValueError('Previous-release metadata changed before stop; old service is still healthy.')
     return target
 
 
 def _snapshot(root,target):
-    target=Path(target)
-    if target.is_symlink() or os.path.isjunction(target) or not target.resolve().is_relative_to(root/'backups'):raise ValueError('Unsafe upgrade snapshot path.')
+    target=Path(target);release=release_helpers()
+    if target.is_symlink() or target.is_junction() or not target.resolve().is_relative_to(root/'backups'):raise ValueError('Unsafe upgrade snapshot path.')
     value=json.loads(_read(target/'snapshot.json'))
     if not isinstance(value,dict) or value.get('format')!=3 or value.get('root')!=str(root):raise ValueError('Unsupported snapshot identity; preserve it for review.')
     for index,row in enumerate(value['files']):
         if row['before_sha256'] is not None and _digest(_read(target/str(index)))!=row['before_sha256']:raise ValueError('Upgrade snapshot bytes changed; no restore performed.')
-    for name,expected in value['app_sha256'].items():
-        path=target/'app'/name
-        if not path.resolve().is_relative_to(target/'app') or _digest(_read(path))!=expected:raise ValueError('Upgrade code snapshot changed; no restore performed.')
-    actual={path.relative_to(target/'app').as_posix() for path in (target/'app').rglob('*') if path.is_file()}
-    if actual!=set(value['app_sha256']):raise ValueError('Upgrade snapshot contains extra code; no restore performed.')
+    if release.inventory(target/'app',allow_cache=False)!=release.app_map(value['app_sha256']):
+        raise ValueError('Upgrade code snapshot changed or contains extra code; no restore performed.')
     _registration_record(value.get('registration'),value['previous'])
     _binding_images(target,value)
+    if 'deployment' in value:
+        release.artifact_rows(target,value)
+        release.app_map(value['deployment']['target_app_sha256'])
     return value
 
 
+def _check_preimages(root, saved, sealed):
+    release=release_helpers()
+    if release.inventory(root/'app')!=sealed['app_sha256']:
+        raise ValueError('Installed app changed after preflight; no runtime switch was made.')
+    for row,before,_ in release.artifact_rows(saved,sealed):
+        if release.file_image(Path(row['path']))!=before:
+            raise ValueError('Deployment artifact changed before stop: '+row['path'])
+
+
+def _restore_app(root,target,value):
+    release=release_helpers()
+    app=root/'app'; old=value['app_sha256']; deployment=value.get('deployment')
+    def current(path):
+        if not os.path.lexists(path):return None
+        return release.inventory(path)
+    installed=current(app)
+    if installed==old:return
+    if deployment is None:
+        # Existing format-3 holds predate attempt-specific displacement.
+        if installed is None:raise ValueError('Missing app has no sealed displacement evidence.')
+        checkout=Path(value['controller_checkout'])
+        manifest=json.loads(_read(checkout/'release-manifest.json'))
+        if installed!=release.manifest_app(manifest,manifest['version']):
+            raise ValueError('Runtime app is not the sealed previous or forward payload.')
+    else:
+        old_displaced=current(target/'displaced-app')
+        new_displaced=current(target/'rollback-app')
+        forward=deployment['target_app_sha256']
+        if old_displaced not in (None,old) or new_displaced not in (None,forward):
+            raise ValueError('Attempt displacement contains unexplained app bytes.')
+        if installed is None and old_displaced!=old and new_displaced!=forward:
+            raise ValueError('Missing app has no verified attempt displacement.')
+        if installed not in (None,forward):
+            raise ValueError('Runtime app changed outside this upgrade.')
+    with tempfile.TemporaryDirectory(prefix='restore-',dir=target) as container:
+        prepared=Path(container)/'app'
+        if release.inventory(target/'app',copy_to=prepared,allow_cache=False)!=old or release.inventory(prepared)!=old:
+            raise ValueError('Previous app changed before restoration.')
+        release.sync_directory(prepared)
+        if installed is not None:
+            displaced=target/'rollback-app'
+            if os.path.lexists(displaced):
+                raise ValueError('Attempt rollback displacement is already occupied.')
+            if current(app)!=installed:raise ValueError('Runtime app changed during restoration.')
+            os.replace(app,displaced)
+            release.sync_directory(target);release.sync_directory(root)
+        os.replace(prepared,app)
+        release.sync_directory(root)
+
+
 def restore(root,target):
-    helpers=installer();value=_snapshot(root,target);deferred=[]
-    # Device CAS is mandatory before changing code. Client edits are preserved.
-    device=value['files'][0]
-    if _digest(_read(Path(device['path']))) not in (device['before_sha256'],device['after_sha256']):raise ValueError('Device changed outside this upgrade; review before recovery.')
-    if _digest(_read(Path(device['path'])))!=device['before_sha256']:
-        # Mandatory device CAS must succeed before restoring any application code.
-        # A staging conflict is fatal and leaves the candidate app untouched.
-        helpers.atomic(Path(device['path']),_read(target/'0'),expected_sha256=device['after_sha256'])
-    saved=target/'app';app=root/'app'
-    if saved.exists():
-        if app.is_symlink() or os.path.isjunction(app) or app.resolve()!=root/'app':raise ValueError('Unsafe runtime app restore path.')
-        prepared=Path(tempfile.mkdtemp(prefix='restore-',dir=root/'backups'))
-        shutil.copytree(saved,prepared/'app')
-        displaced=root/'backups'/('interrupted-app-'+secrets.token_hex(8))
-        # All fixed absolute targets remain inside this explicit synthetic/owner runtime.
-        if app.exists():os.replace(app,displaced)
-        os.replace(prepared/'app',app)
-        prepared.rmdir()
-    for index,row in enumerate(value['files']):
-        if index==0:continue
-        path=Path(row['path']);current=_digest(_read(path))
-        if current==row['before_sha256']:continue
-        if row['client']=='claude-desktop' and helpers.setup_helpers().desktop_busy():
+    helpers=installer();support=helpers.setup_helpers();release=release_helpers()
+    target=Path(target);value=_snapshot(root,target);deferred=[]
+    images=release.artifact_rows(target,value)
+    for row,before,after in images:
+        if row['phase']=='deploy' and release.file_image(Path(row['path'])) not in (before,after):
+            raise ValueError('Mandatory deployment artifact changed; hold preserved: '+row['path'])
+    device=value['files'][0];path=Path(device['path']);current=_digest(_read(path))
+    if current not in (device['before_sha256'],device['after_sha256']):raise ValueError('Device changed outside this upgrade; review before recovery.')
+    if 'deployment' not in value and current!=device['before_sha256']:
+        helpers.atomic(path,_read(target/'0'),expected_sha256=device['after_sha256'])
+    _restore_app(root,target,value)
+    for row,before,after in reversed(images):
+        if row['phase']!='deploy':continue
+        path=Path(row['path'])
+        if release.file_image(path)!=before:
+            release.write_image(path,before,after,protect=helpers.private if os.name=='nt' else None)
+    for index,row in enumerate(value['files'][1:],1):
+        path=Path(row['path'])
+        try:data,mode=support.client_image(path)
+        except (OSError,ValueError,RuntimeError):
+            deferred.append({'path':str(path),'reason':'unsafe client path preserved during rollback'});continue
+        current=_digest(data)
+        if current==row['before_sha256'] and mode==row.get('before_mode',mode):continue
+        if row['client']=='claude-desktop' and support.desktop_busy():
             deferred.append({'path':str(path),'reason':'Desktop reopened; rollback write deferred'});continue
-        if current!=row['after_sha256']:
+        if current!=row['after_sha256'] or mode!=row.get('after_mode',mode):
             deferred.append({'path':str(path),'reason':'concurrent edit preserved during rollback'});continue
-        if row['before_sha256'] is None:path.unlink(missing_ok=True)
-        else:
-            try:helpers.atomic(path,_read(target/str(index)),expected_sha256=row['after_sha256'])
-            except helpers.setup_helpers().ConcurrentWriteError:
-                deferred.append({'path':str(path),'reason':'concurrent edit during rollback staging; preserved'})
+        try:
+            helpers.write_client(path,_read(target/str(index)),expected_sha256=row['after_sha256'],mode=row.get('before_mode'))
+        except (OSError,ValueError,RuntimeError):
+            deferred.append({'path':str(path),'reason':'concurrent or unsafe client edit during rollback staging; preserved'})
     return {'status':'restored','deferred_clients':deferred}
 
 
@@ -258,7 +382,7 @@ def release_identity(checkout,version):
         raise ValueError('Cached release identity/content is not the requested approved tag; preserve it for review.')
     if not re.fullmatch(r'v\d+\.\d+\.\d+',version): refuse()
     checkout=checkout.resolve()
-    if not (checkout/'.git').is_dir() or (checkout/'.git').is_symlink(): refuse()
+    if not (checkout/'.git').is_dir() or (checkout/'.git').is_symlink() or (checkout/'.git').is_junction(): refuse()
     git=shutil.which('git')
     if git is None: refuse()
     git_path=Path(git)
@@ -305,7 +429,7 @@ def release_identity(checkout,version):
         if index!=tree or 'release-manifest.json' not in tree: refuse()
         for name,(_,oid) in tree.items():
             path=checkout/name
-            if not path.is_file() or path.is_symlink() or path.resolve()!=path: refuse()
+            if not path.is_file() or path.is_symlink() or path.is_junction() or path.resolve()!=path: refuse()
             content=path.read_bytes()
             if hashlib.new(algorithm,b'blob '+str(len(content)).encode('ascii')+b'\0'+content).hexdigest()!=oid: refuse()
     except (OSError,UnicodeError,KeyError,TypeError,ValueError): refuse()
@@ -324,6 +448,8 @@ def verify(checkout,*,version=None):
             raise ValueError('Cached release manifest does not describe its committed tag payload.')
     required={'install.py','update.py','pyproject.toml','uv.lock'} | {p.relative_to(checkout).as_posix() for p in (checkout/'app').rglob('*.py')}
     if 'sealed-client-refresh-v1' in manifest.get('capabilities',[]):required.add('setup_runtime.py')
+    if HELD_DEPLOYMENT in manifest.get('capabilities',[]) or manifest.get('version')=='0.2.16':
+        required.update({CATALOG,'app/brain_release.py','app/brain_index_worker.py','app/brain_index_bootstrap.py'})
     if not required <= set(manifest['sha256']): raise ValueError('Release manifest omits executable or dependency files.')
     for relative,expected in manifest['sha256'].items():
         target=(checkout/relative).resolve()
@@ -338,7 +464,7 @@ def verify(checkout,*,version=None):
         dirs[:]=[name for name in dirs if name!='__pycache__']
         for name in files:
             target=parent/name
-            if any(name.endswith(suffix) for suffix in importlib.machinery.all_suffixes()) and target.relative_to(checkout).as_posix() not in manifest['sha256']:
+            if any(name.endswith(suffix) for suffix in (*importlib.machinery.all_suffixes(),'.pyd','.so')) and target.relative_to(checkout).as_posix() not in manifest['sha256']:
                 raise ValueError('Unexpected importable controller payload; preserve the cache for review.')
     return {**manifest,'git_identity':identity} if identity is not None else manifest
 
@@ -446,21 +572,38 @@ def _restart_previous(root,saved,python,checkout,hold,*,restore_bytes=True):
     before,after=_binding_images(saved,sealed)
     if _read(root/'state/previous-release.json') not in (before,after):
         raise ValueError('Previous-release metadata changed; recovery refused before stopping.')
-    # Keep the forward interpreter selected until original native restoration.
-    if restore_bytes:controller(python,checkout,root,'service','stop','--hold-id',hold,'--wait-seconds','300')
-    with _work_locks(root,timeout=300) if restore_bytes else contextlib.nullcontext():
-        recovery=restore(root,saved) if restore_bytes else {'status':'runtime not switched; original bytes retained','deferred_clients':[]}
-        if restore_bytes:
-            registration=controller(python,checkout,root,'service','install')
-            if (registration.get('restored') not in ('sealed-retained','sealed-restored')
-                or registration.get('definition_sha256')!=sealed['registration']['definition_sha256']):
-                raise ValueError('Original native registration restoration was not verified; hold preserved.')
-            recovery['registration']=registration
+    absent=sealed['registration'].get('present') is False
+    if restore_bytes or absent:
+        stopped=controller(python,checkout,root,'service','stop','--hold-id',hold,'--wait-seconds','300')
+        if stopped.get('status')!='stopped' or not stopped.get('empty_at_filetime'):
+            raise ValueError('Rollback requires fresh verified quiescence.')
+    if restore_bytes or absent:
+        with _work_locks(root,timeout=300):
+            _check_held(root,hold,saved,'stopped')
+            _check_user_space_quiescence(root,checkout,python,sealed,hold,restoring=True)
+            if absent:
+                withdrawn=controller(python,checkout,root,'service','withdraw-first','--hold-id',hold)
+                if withdrawn.get('status')!='withdrawn' or withdrawn.get('file_present') is not False:
+                    raise ValueError('First native registration withdrawal was not verified; hold preserved.')
+            recovery=restore(root,saved) if restore_bytes else {'status':'original runtime retained','deferred_clients':[]}
+            if restore_bytes and not absent:
+                registration=controller(python,checkout,root,'service','install','--hold-id',hold)
+                if (registration.get('restored') not in ('sealed-retained','sealed-restored')
+                    or registration.get('definition_sha256')!=sealed['registration']['definition_sha256']):
+                    raise ValueError('Original native registration restoration was not verified; hold preserved.')
+                recovery['registration']=registration
+    else:
+        recovery={'status':'runtime not switched; original bytes retained','deferred_clients':[]}
     binding=_restore_previous_binding(root,saved)
-    started=controller(python,checkout,root,'service','start','--hold-id',hold,'--allow-legacy')
-    health=wait_health(python,root,previous['version'],checkout=checkout)
-    finished=controller(python,checkout,root,'service','finish','--hold-id',hold,'--expected-version',previous['version'],'--allow-legacy')
-    return {'status':'previous runtime restored','version':previous['version'],'health':health,'start':started,'finish':finished,'previous_binding':binding,**recovery}
+    started=health=None
+    if not absent:
+        started=controller(python,checkout,root,'service','start','--hold-id',hold,'--allow-legacy')
+        health=wait_health(python,root,previous['version'],checkout=checkout)
+    finished=_finish(root,saved,python,checkout,hold,previous['version'],*(() if absent else ('--allow-legacy',)))
+    _retire_displacement(root,saved,hold)
+    return {'status':'previous runtime restored','version':previous['version'],'health':health,'start':started,
+            'finish':finished,'previous_binding':binding,**recovery}
+
 
 def _restore_previous_binding(root,saved):
     value=_snapshot(root,saved);before,after=_binding_images(saved,value)
@@ -527,7 +670,14 @@ def recover(root,hold,checkout=None):
     installer().setup_helpers().service_python(python)
     _receipt(root,{'status':'recovery in progress','hold_id':hold,'snapshot':str(saved) if saved is not None else None,'observed_version':json.loads(_read(root/'device.json')).get('version')})
     try:
-        result=_restart_previous(root,saved,python,checkout,hold)
+        completed=_completion_record(root,saved,hold)
+        if completed is None:
+            result=_restart_previous(root,saved,python,checkout,hold)
+        else:
+            version=completed[1]
+            flags=('--allow-legacy',) if version==value['previous']['version'] else ()
+            result={'version':version,'finish':_finish(root,saved,python,checkout,hold,version,*flags)}
+            _retire_displacement(root,saved,hold)
     except BaseException as error:
         _receipt(root,{**_recovery_receipt_fields(root,hold,saved),'snapshot':str(saved) if saved is not None else None,'error_type':type(error).__name__,'pending_work':'preserved'})
         raise
@@ -540,19 +690,24 @@ def main():
     parser.add_argument('--uv');parser.add_argument('--desktop-config');parser.add_argument('--skip-desktop-refresh',action='store_true')
     parser.add_argument('--recover',action='store_true',help='With the exact hold UUID, restore the sealed previous runtime and preserve concurrent client edits.')
     parser.add_argument('--hold-id')
+    parser.add_argument('--no-service',action='store_true',help='Keep native registration absent on a verified unregistered non-systemd Linux upgrade.')
+    parser.add_argument('--clients',help='Comma-separated assistants to refresh. An empty value selects none.')
+    parser.add_argument('--no-hooks',action='store_true',help='Skip Claude Code hook refresh.')
     parser.add_argument('--migrate-wiki',action='store_true',help='Maintainer only: verify legacy wiki receipts and repair source links during this upgrade.')
     parser.add_argument('--requeue-unverified',action='store_true')
     args=parser.parse_args();root=Path(args.root).expanduser().resolve()
     _qualified_platform()  # Before recovery reads, helper loads or state locks.
     if not args.recover and not re.fullmatch(r'v\d+\.\d+\.\d+',args.version or ''):parser.error('Select an explicit approved version.')
     if args.recover and (args.version or not args.hold_id):parser.error('--recover requires --hold-id and does not take --version.')
+    if args.recover and (args.no_service or args.clients is not None or args.no_hooks):parser.error('Recovery uses the sealed prior options.')
     if args.requeue_unverified and not args.migrate_wiki:parser.error('--requeue-unverified requires --migrate-wiki.')
     if args.recover:_recovery_binding(root,args.hold_id)
     else:_forward_release(root,args.version)
     installer().setup_helpers().host_context()  # Before state/clone/provision/client writes.
     with update_lock(root):
         result=recover(root,args.hold_id) if args.recover else perform(root,args.version,args.migrate_wiki,args.requeue_unverified,
-                               uv=args.uv,desktop_config=args.desktop_config,skip_desktop=args.skip_desktop_refresh)
+                               uv=args.uv,desktop_config=args.desktop_config,skip_desktop=args.skip_desktop_refresh,
+                               no_service=args.no_service,clients=args.clients.split(',') if args.clients else [] if args.clients=='' else None,no_hooks=args.no_hooks)
     print(json.dumps(result,indent=2))
 
 
@@ -572,66 +727,137 @@ def _unregistered_user_service(inspected):
             and native.get('main_pid') is None)
 
 
-def _register_first_user_service(root,release,info,python,plan,device,previous):
-    """Install the user-space service on a host that has never had one.
+def _native_images(python,release,root,policy):
+    if policy=='absent':
+        return [],[]
+    planned=controller(python,release,root,'service','plan-registration','--candidate-python',str(python))
+    if planned.get('status')!='registration planned':
+        raise ValueError('Native registration images were not measured.')
+    result=[]
+    for row in planned['artifacts']:
+        def image(phase):
+            raw=row[phase]['hex'];mode=row[phase]['mode']
+            return (bytes.fromhex(raw) if raw is not None else None,mode)
+        result.append((row['kind'],Path(row['path']),image('before'),image('after'),'native'))
+    return result,planned.get('skipped',[])
 
-    There is no old task to stop. A failure restores the previous app and device
-    bytes and removes a definition this attempt wrote. The vault is not touched.
-    """
-    again=controller(python,release,root,'service','inspect')
-    if not _unregistered_user_service(again):
-        raise ValueError('User service state changed before the first registration; nothing was changed.')
-    helpers=installer()
-    app=root/'app';device_path=root/'device.json'
-    saved_device=_read(device_path)
-    saved_files=[(Path(row['path']),_read(Path(row['path']))) for row in plan.get('files',[])]
-    helpers.private_dir(root/'backups')
-    saved_app=Path(tempfile.mkdtemp(prefix='previous-app-',dir=root/'backups'))
-    helpers.private_dir(saved_app)
-    if app.exists():shutil.copytree(app,saved_app/'app',ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
-    def restore_files():
-        if (saved_app/'app').exists():
-            if app.exists():os.replace(app,root/'backups'/('interrupted-app-'+secrets.token_hex(8)))
-            shutil.copytree(saved_app/'app',app)
-        if saved_device is not None:helpers.atomic(device_path,saved_device,expected_sha256=_digest(_read(device_path)))
-        launcher=root/'bin'/'second-brain-mcp'
-        if launcher.is_file() and not launcher.is_symlink():launcher.unlink()
-        for path,data in saved_files:
-            current=_read(path)
-            if current==data:continue
-            if data is None:
-                if path.is_file() and not path.is_symlink():path.unlink()
-            else:helpers.atomic(path,data,expected_sha256=_digest(current))
+
+def _check_user_space_quiescence(root,checkout,python,sealed,hold,*,restoring=False):
+    deployment=sealed.get('deployment')
+    if deployment is None:
+        return
+    if (sealed['registration'].get('backend')=='user-space'
+            or any(row['phase']=='native' for row in deployment['artifacts'])):
+        flags=['--restoring'] if restoring else []
+        result=controller(python,checkout,root,'service','check-stopped','--hold-id',hold,*flags)
+        if result.get('status')!='quiescent' or result.get('hold_id')!=hold:
+            raise ValueError('Fresh Linux user-space quiescence was not verified.')
+
+
+def _static_grok_acceptance(support,plan,overwritten,root,python):
+    expected=next((row['path'] for row in plan['files']
+                   if row['client']=='grok' and row['after'].startswith('{')),None)
+    if expected is None or expected in overwritten:
+        return
+    home=Path.home()
+    try:path=support.resolve_client_path(support.grok_directory(home)/'mcp-registration.json',home)
+    except (support.ClientSkip,OSError):path=None
+    if str(path)!=expected:
+        overwritten.append(expected)
+        return
+    support.validated_grok(home,root,python)
+
+
+def _deployment_images(root,release,info,device,python,plan):
+    helper=release_helpers()
+    install=installer()
+    vault=Path(device['vault']).resolve()
+    mode=0o666 if os.name=='nt' else 0o600
+    def encode(value,*,indent=None):
+        return (json.dumps(value,indent=indent)+'\n').encode()
+    settings=install.device_settings(device,vault,python)
+    settings.update(release_root=str(release),version=info['version'])
+    device_image=encode(settings,indent=2)
+    if _digest(device_image)!=plan['device_after_sha256']:
+        raise ValueError('Candidate device image disagrees with its validated plan.')
+    launcher,body,launcher_mode=install.launcher_image(root,python)
+    images=[('device',root/'device.json',helper.file_image(root/'device.json'),(device_image,mode),'deploy'),
+            ('launcher',launcher,helper.file_image(launcher),(body,launcher_mode if os.name!='nt' else mode),'deploy')]
+    token=install._auth_recovery_token(root) or secrets.token_urlsafe(48)
+    for kind,relative,value in (
+            ('auth-client','client-access.json',encode({'token':token})),
+            ('auth-server','access.json',encode({'token_sha256':_digest(token.encode())})),
+            ('config','config.json',encode(install.retrieval_settings(root,vault),indent=2)),
+            ('ignore','.bmignore',install.INDEX_IGNORE_TEXT.encode())):
+        path=root/'state'/relative
+        before=helper.file_image(path)
+        if before[0] is None:
+            images.append((kind,path,before,(value,mode),'deploy'))
+    return images
+
+
+def _check_held(root,hold,saved,stage=None):
+    current=json.loads(_read(root/'state/service-transaction.json'))
+    if (not isinstance(current,dict) or current.get('hold_id')!=hold or current.get('root')!=str(root)
+            or Path(current.get('snapshot','')).resolve()!=saved.resolve()
+            or current.get('snapshot_sha256')!=_digest(_read(saved/'snapshot.json'))
+            or stage is not None and current.get('stage')!=stage):
+        raise ValueError('Exact transaction UUID, phase, or snapshot could not be verified.')
+
+
+class CompletionPending(RuntimeError):
+    """The exact committed outcome exists while the active marker remains."""
+
+
+def _completion_record(root,saved,hold,version=None):
+    raw=_read(root/'state/service-transactions'/(hold+'.json'))
+    record=json.loads(raw) if raw is not None else {}
+    if not isinstance(record,dict):return None
+    expected=record.get('authenticated_version') or record.get('absent_version')
+    if (record.get('stage')!='complete' or record.get('hold_id')!=hold
+            or record.get('root')!=str(root) or record.get('snapshot')!=str(saved)
+            or record.get('snapshot_sha256')!=_digest(_read(saved/'snapshot.json'))
+            or not isinstance(expected,str) or (version is not None and expected!=version)):
+        return None
+    return record,expected
+
+
+def _finish(root,saved,python,checkout,hold,version,*flags):
+    arguments=(python,checkout,root,'service','finish','--hold-id',hold,'--expected-version',version,*flags)
     try:
-        installed=helpers.deploy(root,python,Path(device['vault']).resolve(),client_value=plan,source_sha256=info.get('sha256'))
-        if _digest(_read(device_path))!=plan['device_after_sha256']:
-            raise ValueError('Deployed device differs from the sealed update plan.')
-        installed['service']=controller(python,release,root,'service','install')
-        started=controller(python,release,root,'service','start')
-        health=wait_health(python,root,info['version'],checkout=release)
-    except BaseException as error:
-        withdrawn=False
-        try:
-            controller(python,release,root,'service','stop','--wait-seconds','30')
-        except Exception:pass
-        try:
-            controller(python,release,root,'service','withdraw-first');withdrawn=True
-        except Exception:withdrawn=False
-        try:restore_files()
-        except Exception as restore_error:
-            _receipt(root,{'status':'first user-service registration failed; restore incomplete','error_type':type(error).__name__,
-                           'restore_error_type':type(restore_error).__name__,'withdrawn':withdrawn,'pending_work':'preserved'})
-            raise RuntimeError('First user-service registration failed and the previous files could not be restored. Preserve the runtime and do not start another update.') from error
-        _receipt(root,{'status':'first user-service registration failed; previous files restored','error_type':type(error).__name__,
-                       'withdrawn':withdrawn,'pending_work':'preserved'})
-        raise RuntimeError('The user-space service could not be registered. Previous files were restored and no service was left running.') from error
-    return _receipt(root,{'status':'updated','version':info['version'],'release_identity':info.get('git_identity'),
-                          'first_user_service':True,'previous':previous,'health':health,'start':started,
-                          'clients':installed.get('client_result',{}),
-                          'client_acceptance':'configuration checked; named-client verification pending'})
+        result=controller(*arguments)
+        if result.get('status')!='transaction released' or result.get('hold_id')!=hold:
+            raise ValueError('Service did not report exact transaction completion.')
+        return result
+    except (RuntimeError,ValueError,OSError):
+        completed=_completion_record(root,saved,hold,version)
+        if completed is None:
+            raise
+        if os.path.lexists(root/'state/service-transaction.json'):
+            try:
+                _check_held(root,hold,saved)
+                controller(*arguments)
+            except (RuntimeError,ValueError,OSError) as error:
+                raise CompletionPending('Durable completion exists. Preserve the hold until the exact committed outcome is released.') from error
+            if os.path.lexists(root/'state/service-transaction.json'):
+                raise CompletionPending('Durable completion exists and its active hold remains.')
+        return {'status':'transaction released','hold_id':hold,'identity':completed[0].get('identity'),'durable_receipt':True}
 
 
-def perform(root,version,migrate_wiki=False,requeue_unverified=False,*,uv=None,desktop_config=None,skip_desktop=False):
+def _retire_displacement(root,saved,hold):
+    release=release_helpers()
+    value=_snapshot(root,saved)
+    deployment=value.get('deployment')
+    if deployment is None or deployment['hold_id']!=hold:return
+    for name,key in (('displaced-app','app_sha256'),('rollback-app','target_app_sha256')):
+        path=saved/name
+        if not os.path.lexists(path):continue
+        expected=value[key] if name=='displaced-app' else deployment[key]
+        if release.inventory(path)==expected:shutil.rmtree(path)
+
+
+def perform(root,version,migrate_wiki=False,requeue_unverified=False,*,uv=None,desktop_config=None,skip_desktop=False,
+            no_service=False,clients=None,no_hooks=False):
     _qualified_platform()
     release,info=_forward_release(root,version)
     support=installer().setup_helpers();support.host_context()
@@ -639,21 +865,46 @@ def perform(root,version,migrate_wiki=False,requeue_unverified=False,*,uv=None,d
     if initial is not None and support.json_object(initial).get('stage')!='complete':
         raise ValueError('Initial installation is incomplete; use its exact recorded resume UUID before updating.')
     if requeue_unverified and not migrate_wiki:raise ValueError('--requeue-unverified requires --migrate-wiki.')
-    if (root/'state/service-transaction.json').exists():raise ValueError('An interrupted transaction exists; inspect service recover and use the exact --hold-id before a new update.')
-    device=json.loads(_read(root/'device.json'))
-    if device.get('version')==version.removeprefix('v'):raise ValueError('This version is already installed; use client refresh or the recorded recovery flow.')
+    if os.path.lexists(root/'state/service-transaction.json'):
+        raise ValueError('An interrupted transaction exists; inspect service recover and use the exact --hold-id before a new update.')
+    device=support.json_object(_read(root/'device.json'))
+    if device.get('version')==info['version']:raise ValueError('This version is already installed; use client refresh or the recorded recovery flow.')
     if migrate_wiki and device.get('role')!='maintainer':raise PermissionError('--migrate-wiki requires the designated maintainer device.')
+    old_python=Path(device['python'])
+    if (not old_python.is_absolute() or not old_python.is_file() or not os.access(old_python,os.X_OK)
+            or old_python.parent.resolve()!=old_python.parent):
+        raise ValueError('Retained predecessor interpreter is missing, unexecutable or has a noncanonical parent.')
+    support.service_python(old_python)
+    inspected=controller(old_python,release,root,'service','inspect')
+    if inspected.get('status')!='inspected':
+        raise ValueError('Native ownership preflight did not complete; no hold created.')
+    if _unregistered_user_service(inspected):
+        if initial is None:
+            raise ValueError('Completed initial install evidence is required for an unregistered upgrade.')
+        registration={'kind':'linux','backend':'user-space','present':False}
+        policy='absent' if no_service else 'first'
+    else:
+        if no_service:
+            raise ValueError('--no-service upgrades require verified unregistered non-systemd Linux.')
+        if inspected.get('task_present') is not True or inspected.get('task_enabled') is not True:
+            raise ValueError('The owned task is absent or explicitly stopped; inspect it and explicitly start it before requesting this update.')
+        registration=_registration_record(inspected.get('registration'),device)
+        policy='registered'
+    accepted=_predecessor(root,device,release,info)
     python=support.provision(release,root,uv)
     hold=secrets.token_hex(16);plan_path=root/'state'/('upgrade-client-plan-'+hold+'.json')
     options=(['--desktop-config',desktop_config] if desktop_config else [])+(['--skip-desktop-refresh'] if skip_desktop else [])
-    common=[str(python),'-I',str(release/'install.py'),'--root',str(root),'--vault',device['vault'],'--reuse-python',str(python),'--refresh-clients',*options]
-    # A fresh cache namespace avoids executing cached checkout bytecode.
-    common=[*support.isolated_python(python,root),str(release/'install.py'),*common[3:]]
+    if clients is not None:options+=['--clients',','.join(clients)]
+    if no_hooks:options.append('--no-hooks')
+    common=[*support.isolated_python(python,root),str(release/'install.py'),'--root',str(root),'--vault',device['vault'],
+            '--reuse-python',str(python),'--refresh-clients',*options]
     result=support.run([*common,'--install-service','--validate-only','--plan-out',str(plan_path)],source_app=Path(__file__).resolve().parent/'app',
                        env=cli_environment(root),check=True,capture_output=True,text=True,encoding='utf-8',timeout=120)
     preflight=json.loads(result.stdout);plan_bytes=_read(plan_path)
     if preflight.get('plan_sha256')!=_digest(plan_bytes):raise ValueError('Client planning receipt changed before stop.')
     plan=support.validate_plan(support.json_object(plan_bytes),root,python)
+    selected=support.selected_clients(clients,refresh=True,no_hooks=no_hooks)
+    support.authorize_plan(plan,selected=selected,desktop=desktop_config,skip_desktop=skip_desktop)
     # Recovery consumes snapshot.json, never this duplicate plaintext plan.
     # Only replace a plan whose child receipt and full identity were verified.
     summary={key:value for key,value in plan.items() if key!='files'}
@@ -661,49 +912,53 @@ def perform(root,version,migrate_wiki=False,requeue_unverified=False,*,uv=None,d
                    files=[{key:row.get(key) for key in ('path','client','before_sha256','after_sha256')} for row in plan['files']])
     installer().atomic(plan_path,json.dumps(summary,indent=2)+'\n',expected_sha256=_digest(plan_bytes))
     previous={key:device[key] for key in ('release_root','python','version')}
-    saved=None;stopped=False;switched=False;migration=None;first_service=False
+    saved=None;stopped=False;switched=False;migration=None
+    target_map=release_helpers().manifest_app(info,info['version'])
+    images=_deployment_images(root,release,info,device,python,plan)
+    native_hook_skips=[]
+    if inspected.get('native',{}).get('backend')=='user-space':
+        native_images,native_hook_skips=_native_images(python,release,root,policy)
+        images+=native_images
     try:
-        inspected=controller(python,release,root,'service','inspect')
-        if inspected.get('status')!='inspected':raise ValueError('Native ownership preflight did not complete; no hold created.')
-        if _unregistered_user_service(inspected):
-            first_service=True
-            return _register_first_user_service(root,release,info,python,plan,device,previous)
-        if inspected.get('task_present') is not True or inspected.get('task_enabled') is not True:
-            raise ValueError('The owned task is absent or explicitly stopped; inspect it and explicitly start it before requesting this update.')
-        registration=_registration_record(inspected.get('registration'),device)
-        saved=snapshot(root,python,plan,controller_checkout=release,controller_identity=info.get('git_identity'),registration=registration)
+        saved=snapshot(root,python,plan,controller_checkout=release,controller_identity=info.get('git_identity'),
+                       registration=registration,accepted=accepted,target_app=target_map,hold=hold,service_policy=policy,images=images)
         sealed=_snapshot(root,saved);_,previous_after=_binding_images(saved,sealed)
+        _check_preimages(root,saved,sealed)
         support.current(plan)
         if _digest(_read(root/'device.json'))!=plan.get('device_before_sha256'):raise ValueError('Device changed before stop; re-plan.')
-        _receipt(root,{'status':'in progress','hold_id':hold,'snapshot':str(saved) if saved is not None else None,'target':info['version']})
+        _receipt(root,{'status':'in progress','hold_id':hold,'snapshot':str(saved),'target':info['version'],
+                       'predecessor':accepted[1]})
         controller(python,release,root,'service','hold','--hold-id',hold,'--snapshot',str(saved))
+        _check_held(root,hold,saved,'prepared')
         installer().atomic(root/'state/previous-release.json',previous_after,expected_sha256=sealed['previous_binding']['before_sha256'])
         stop=controller(python,release,root,'service','stop','--hold-id',hold,'--wait-seconds','300')
         if stop.get('status')!='stopped' or not stop.get('empty_at_filetime'):raise ValueError('Controller supplied no verified quiescence.')
         stopped=True
-        # Stop owns admission; only now may the updater acquire work locks.
         with _work_locks(root,timeout=300):
-            switched=True  # Includes a partially failed deploy child.
-            # A sealed settings plan is not authority to replace a runtime.
-            # Keep deployment inside this controller's verified stop/work-lock
-            # boundary instead of exposing a public installer CLI bypass.
+            _check_held(root,hold,saved,'stopped')
+            _check_user_space_quiescence(root,release,python,sealed,hold)
+            switched=True
             installed=installer().deploy(root,python,Path(device['vault']).resolve(),client_value=plan,
-                                          source_sha256=info.get('sha256'))
+                                          source_sha256=info.get('sha256'),sealed=(saved,sealed),release_tools=release_helpers())
             if _digest(_read(root/'device.json'))!=plan['device_after_sha256']:
                 raise ValueError('Deployed device differs from the sealed update plan; recovery required.')
-            installed['service']=controller(python,release,root,'service','install')
+            if policy!='absent':installed['service']=controller(python,release,root,'service','install','--hold-id',hold)
         if migrate_wiki:
             from filelock import FileLock
-            # Exclude compilation across BOTH migration/relink calls. Their own
-            # writer/maintenance admission remains free; release before any stop.
             with FileLock(str(root/'state/wiki-worker.lock'),timeout=30):
                 migration=apply_wiki_migration(python,root,device['vault'],requeue_unverified,hold_id=hold)
-        started=controller(python,release,root,'service','start','--hold-id',hold,'--since',str(stop['empty_at_filetime']))
-        health=wait_health(python,root,info['version'],checkout=release)
+        started=health=None
+        if policy!='absent':
+            started=controller(python,release,root,'service','start','--hold-id',hold,'--since',str(stop['empty_at_filetime']))
+            health=wait_health(python,root,info['version'],checkout=release)
         overwritten=support.after_check(plan)
-        finished=controller(python,release,root,'service','finish','--hold-id',hold,'--expected-version',info['version'])
+        if policy=='absent':_static_grok_acceptance(support,plan,overwritten,root,python)
+        finished=_finish(root,saved,python,release,hold,info['version'])
+    except CompletionPending:
+        _receipt(root,{**_recovery_receipt_fields(root,hold,saved),'snapshot':str(saved),
+                       'phase':'committed completion awaiting hold release','pending_work':'preserved'})
+        raise
     except BaseException as error:
-        if first_service:raise
         if not stopped:
             if not (root/'state/service-transaction.json').exists():
                 _receipt(root,{'status':'update deferred; no hold created','hold_id':hold,'snapshot':str(saved) if saved is not None else None,
@@ -738,12 +993,15 @@ def perform(root,version,migrate_wiki=False,requeue_unverified=False,*,uv=None,d
             if outcome['status']!='recovery required':
                 raise RuntimeError('Recovery outcome is uncertain; preserve the current runtime and inspect '+outcome['transaction_evidence_path']+' and service recover before further action.') from recovery_error
             raise RuntimeError('Upgrade recovery is incomplete; preserve pending work and use the recorded exact recovery UUID.') from recovery_error
-        raise RuntimeError('Upgrade failed; previous runtime health verified. Inspect upgrade-status.json for preserved client edits.') from error
+        proof='service absence verified' if policy!='registered' else 'previous runtime health verified'
+        raise RuntimeError('Upgrade failed; '+proof+'. Inspect upgrade-status.json for preserved client edits.') from error
+    _retire_displacement(root,saved,hold)
     clients=installed.get('client_result',{})
     deferred=clients.get('deferred',[])
     return _receipt(root,{'status':'updated','version':info['version'],'release_identity':info.get('git_identity'),'hold_id':hold,
-        'snapshot':str(saved) if saved is not None else None,'previous':previous,'health':health,'start':started,'finish':finished,'wiki_migration':migration,
-        'clients':clients,'client_overwrites_after_health':overwritten,
+        'snapshot':str(saved),'previous':previous,'predecessor':accepted[1],'service_policy':policy,
+        'first_user_service':policy=='first','health':health,'start':started,'finish':finished,'wiki_migration':migration,
+        'clients':clients,'client_overwrites_after_health':overwritten,'native_hook_skips':native_hook_skips,
         'client_acceptance':'pending refresh/named-client verification' if deferred or overwritten else 'configuration checked; named-client verification pending'})
 
 

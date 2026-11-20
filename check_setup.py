@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import re
+import runpy
 import shlex
 import subprocess
 import sys
@@ -21,14 +22,28 @@ BEGIN = '<!-- BEGIN SECOND-BRAIN -->'
 END = '<!-- END SECOND-BRAIN -->'
 CLIENTS = ('claude-code', 'claude-desktop', 'codex', 'grok')
 rows = []
+_SUPPORT = None
+
+
+def support():
+    global _SUPPORT
+    if _SUPPORT is None:
+        _SUPPORT = runpy.run_path(str(Path(__file__).resolve().with_name('setup_runtime.py')))
+    return _SUPPORT
 
 
 def add(status, name, detail=''):
     rows.append((status, name, detail))
 
 
-def load_json(path):
-    return json.loads(Path(path).read_text(encoding='utf-8-sig'))
+def load_json(path, home=None):
+    helpers = support()
+    if home is not None:
+        path = helpers['resolve_client_path'](path, home)
+    raw = helpers['read'](path)
+    if raw is None:
+        raise FileNotFoundError(path)
+    return helpers['json_object'](raw)
 
 
 def same(left, right):
@@ -38,31 +53,19 @@ def same(left, right):
 
 
 def owned(entry, python, root):
-    """Claude Code, Codex and Desktop. Linux and macOS must use the stable launcher."""
-    if os.name != 'nt':
-        return owned_grok(entry, root) and stable_launcher(root, python)
-    args = entry.get('args') if isinstance(entry, dict) else None
-    return (isinstance(args, list) and len(args) == 1 and same(args[0], root / 'app/brain_client.py')
-            and same(entry.get('command', ''), python))
+    """Compare the owned command fields while allowing each assistant's other settings."""
+    expected = support()['connection']().connection_spec(root, python)
+    if not isinstance(entry, dict) or any(entry.get(key) != value for key, value in expected.items()):
+        return False
+    return os.name == 'nt' or stable_launcher(root, python)
 
 
 def stable_launcher(root, python):
-    """The runtime path Grok Bot registers once. Its text names the current Python and client."""
-    path = root / 'bin' / 'second-brain-mcp'
-    if not path.is_file() or path.is_symlink() or not os.access(path, os.X_OK):
+    try:
+        support()['connection']().validate_launcher(root, python)
+    except (ValueError, OSError):
         return False
-    text = path.read_text(encoding='utf-8', errors='replace')
-    client = str(root / 'app' / 'brain_client.py')
-    py = str(python)
-    if not text.startswith('#!/bin/sh\n') or not text.endswith('\n') or py not in text or client not in text:
-        return False
-    last = text.strip().splitlines()[-1]
-    return last.startswith('exec ') and py in last and client in last
-
-
-def owned_grok(entry, root):
-    args = entry.get('args') if isinstance(entry, dict) else None
-    return isinstance(args, list) and args == [] and same(entry.get('command', ''), root / 'bin' / 'second-brain-mcp')
+    return True
 
 
 def instructions(path, imports=True, depth=0):
@@ -99,14 +102,12 @@ def protocol(name, path, release, imports=True):
     add('PASS', name, 'one block' + (' matching this release' if release else ''))
 
 
-def probe_stdio(command, args, env):
-    """Start the registered command and require the six tools. The caller only does this when the service is already up."""
+def probe_stdio(command, args):
+    """Start the generated command with the service already up and require the six tools."""
     import asyncio
     from fastmcp import Client
     from fastmcp.client.transports import StdioTransport
-    child = os.environ.copy()
-    child = {key: value for key, value in child.items() if not key.startswith(('BRAIN_', 'BASIC_MEMORY_'))}
-    child.update(env)
+    child = support()['connection']().probe_environment()
 
     async def once():
         transport = StdioTransport(command=command, args=args, env=child, keep_alive=False)
@@ -134,6 +135,7 @@ def skill(name, candidates, release):
 
 
 def main():
+    rows.clear()
     # A path may hold characters the console's own encoding lacks; printing it must never end the check.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
@@ -142,7 +144,7 @@ def main():
     parser.add_argument('--root', default=str(Path.home() / '.local/share/second-brain'))
     parser.add_argument('--home', default=str(Path.home()))
     parser.add_argument('--clients', default='', help='Comma-separated: ' + ', '.join(CLIENTS))
-    parser.add_argument('--expect-version', help='For example 0.2.13')
+    parser.add_argument('--expect-version', help='For example 0.2.16')
     parser.add_argument('--release', help='Verified release checkout; compares the protocol block and skill with it')
     parser.add_argument('--no-hooks', action='store_true', help='The owner declined Claude Code hooks')
     parser.add_argument('--local-only', action='store_true', help='Notes must have no Git remote on this device')
@@ -150,6 +152,7 @@ def main():
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args()
     root, home = Path(args.root).expanduser().resolve(), Path(args.home).expanduser()
+    grok_registration = None
     release = Path(args.release).expanduser().resolve() if args.release else None
     if release and not (release / 'docs/AI-PROTOCOL.md').is_file():
         parser.error('--release is not a release folder.')
@@ -183,15 +186,19 @@ def main():
             done = subprocess.run([str(python), str(root / 'app/brain_cli.py'), 'health'], capture_output=True,
                                   text=True, timeout=120, stdin=subprocess.DEVNULL, check=False,
                                   env={k: v for k, v in os.environ.items() if not k.startswith(('BRAIN_', 'BASIC_MEMORY_'))})
-            health = json.loads(done.stdout) if done.returncode == 0 else {}
-            health = health if isinstance(health, dict) else {}
+            answer = json.loads(done.stdout)
+            if isinstance(answer, dict) and (done.returncode == 0 or answer.get('status') == 'blocked'):
+                health = answer
         except (OSError, ValueError, subprocess.TimeoutExpired):
             health = {}
     running = health.get('status') == 'running' and health.get('version') == device.get('version')
     if not args.no_service:
-        add('PASS' if running else 'FAIL', 'service health',
-            f"status {health.get('status')}, version {health.get('version')}" if health else 'health command gave no result')
-    if health:
+        if health.get('status') == 'blocked':
+            add('FAIL', 'service health', f"{health.get('reason', 'blocked')}. {health.get('guidance', '')}")
+        else:
+            add('PASS' if running else 'FAIL', 'service health',
+                f"status {health.get('status')}, version {health.get('version')}" if health else 'health command gave no result')
+    if health and health.get('status') != 'blocked':
         add('PASS' if health.get('vault_exists') and health.get('database_exists') else 'FAIL', 'vault and index',
             f"vault {health.get('vault_exists')}, index {health.get('database_exists')}")
         sync = str((health.get('maintenance') or {}).get('git', 'not run yet'))
@@ -244,7 +251,7 @@ def main():
             add('FAIL', 'Claude Code connection', 'no second-brain entry')
         else:
             try:
-                entry = (load_json(claude_json).get('mcpServers') or {}).get('second-brain')
+                entry = (load_json(claude_json, home).get('mcpServers') or {}).get('second-brain')
                 if entry is None:
                     add('FAIL', 'Claude Code connection', 'no second-brain entry')
                 else:
@@ -258,7 +265,7 @@ def main():
             add('SKIP', 'Claude Code hooks', 'declined by the owner')
         else:
             try:
-                hooks = load_json(home / '.claude/settings.json').get('hooks') or {}
+                hooks = load_json(home / '.claude/settings.json', home).get('hooks') or {}
                 missing = []
                 for event in ('SessionStart', 'Stop'):
                     commands = [handler.get('command', '') for entry in hooks.get(event) or [] for handler in entry.get('hooks') or []]
@@ -277,56 +284,55 @@ def main():
         else:
             try:
                 import tomllib
-                entry = tomllib.loads(codex_toml.read_text(encoding='utf-8-sig')).get('mcp_servers', {}).get('second-brain')
+                target = support()['resolve_client_path'](codex_toml, home)
+                raw = support()['read_client'](target)
+                if raw is None:
+                    raise FileNotFoundError(target)
+                entry = tomllib.loads(raw.decode('utf-8-sig')).get('mcp_servers', {}).get('second-brain')
                 if entry is None:
                     add('FAIL', 'Codex connection', 'no second-brain entry')
                 else:
                     add('PASS' if owned(entry, python, root) else 'FAIL', 'Codex connection',
                         'points at this runtime' if owned(entry, python, root) else 'points somewhere else')
-            except (OSError, ValueError, ImportError):
+            except (OSError, ValueError, ImportError, AttributeError):
                 add('FAIL', 'Codex connection', '~/.codex/config.toml unreadable')
         protocol('Codex instructions', home / '.codex/AGENTS.md', release, imports=False)
         skill('Codex skill', [home / '.codex/skills/second-brain/SKILL.md', home / '.agents/skills/second-brain/SKILL.md'], release)
     if 'grok' in clients:
         # Grok Bot registers MCP servers in the account. This file is the spec it should be given;
         # Grok Bot does not load it by itself. The skill beside it is the instruction block.
-        spec_path = home / 'agent-data/workflows/second-brain/mcp-registration.json'
-        entry = None
-        if not spec_path.is_file():
-            add('FAIL', 'Grok Bot connection', 'no second-brain entry')
-            add('FAIL', 'Grok Bot server', 'not started because there is no registration spec')
+        try:
+            grok_registration = support()['validated_grok'](home, root, python)
+        except (OSError, ValueError) as error:
+            add('FAIL', 'Grok Bot connection', str(error))
+            add('FAIL', 'Grok Bot server', 'registration validation failed before starting the command')
         else:
+            add('PASS', 'Grok Bot connection', 'one generated second-brain server for this runtime')
+        if grok_registration is not None and running:
+            _, entry = grok_registration
             try:
-                document = load_json(spec_path)
-                servers = document.get('mcpServers') if isinstance(document, dict) else None
-                if not isinstance(servers, dict) or set(servers) != {'second-brain'}:
-                    add('FAIL', 'Grok Bot connection', 'the spec must contain exactly one server, named second-brain')
-                else:
-                    entry = servers['second-brain']
-                    env = entry.get('env', {}) if isinstance(entry, dict) else None
-                    clean = isinstance(env, dict) and all(isinstance(key, str) and isinstance(value, str) and not key.startswith(('BRAIN_', 'BASIC_MEMORY_')) for key, value in env.items())
-                    good = owned_grok(entry, root) and clean and stable_launcher(root, python)
-                    add('PASS' if good else 'FAIL', 'Grok Bot connection',
-                        'one stable launcher for this runtime' if good else 'missing, duplicated, stale, or points somewhere else')
-                    if not good:
-                        add('FAIL', 'Grok Bot server', 'not started because the registration spec is not this runtime')
-                    elif running:
-                        try:
-                            started, _names = probe_stdio(entry.get('command', ''), list(entry.get('args') or []), env)
-                            add('PASS' if started else 'FAIL', 'Grok Bot server', 'the registered command started and offered the six tools' if started else 'the command started without the six tools')
-                        except Exception as error:
-                            add('FAIL', 'Grok Bot server', type(error).__name__)
-                    else:
-                        add('FAIL', 'Grok Bot server', 'the spec is valid and the service is not running, so the command was not started')
-            except (OSError, ValueError, AttributeError):
-                add('FAIL', 'Grok Bot connection', 'agent-data/workflows/second-brain/mcp-registration.json unreadable')
-                add('FAIL', 'Grok Bot server', 'not started because the registration spec is unreadable')
+                started, _names = probe_stdio(entry['command'], entry['args'])
+                add('PASS' if started else 'FAIL', 'Grok Bot server', 'the command offered the six tools' if started else 'the command started without the six tools')
+            except Exception as error:
+                add('FAIL', 'Grok Bot server', type(error).__name__)
+        elif grok_registration is not None:
+            add('SKIP' if args.no_service else 'FAIL', 'Grok Bot server',
+                'static registration checked on a service-free device' if args.no_service else 'the service is unavailable for the stdio check')
         skill_path = home / 'agent-data/workflows/second-brain/SKILL.md'
-        protocol('Grok Bot instructions', skill_path, release, imports=False)
-        skill('Grok Bot skill', [skill_path], release)
-        add('PASS' if skill_path.is_file() else 'FAIL', 'Grok Bot hooks',
+        try:
+            skill_path = support()['resolve_client_path'](skill_path, home)
+            skill_present = support()['read_client'](skill_path) is not None
+        except (OSError, ValueError):
+            skill_present = False
+        if skill_present:
+            protocol('Grok Bot instructions', skill_path, release, imports=False)
+            skill('Grok Bot skill', [skill_path], release)
+        else:
+            add('FAIL', 'Grok Bot instructions', 'shared instruction block unavailable')
+            add('FAIL', 'Grok Bot skill', 'shared skill unavailable')
+        add('PASS' if skill_present else 'FAIL', 'Grok Bot hooks',
             'session start and capture are in the shared instruction block; Grok Bot has no separate hook file'
-            if skill_path.is_file() else 'the shared instruction block is missing')
+            if skill_present else 'the shared instruction block is missing')
     if 'claude-desktop' in clients:
         folder = (Path(os.environ.get('APPDATA', home / 'AppData/Roaming')) / 'Claude' if os.name == 'nt'
                   else home / 'Library/Application Support/Claude' if sys.platform == 'darwin' else home / '.config/Claude')
@@ -336,10 +342,10 @@ def main():
             stored = [item / 'LocalCache/Roaming/Claude' for item in packages.iterdir() if 'claude' in item.name.lower()]
             folder = next((item for item in stored if (item / 'claude_desktop_config.json').exists()), folder)
         try:
-            entry = load_json(folder / 'claude_desktop_config.json').get('mcpServers', {}).get('second-brain')
+            entry = load_json(folder / 'claude_desktop_config.json', home).get('mcpServers', {}).get('second-brain')
             add('PASS' if owned(entry, python, root) else 'FAIL', 'Claude Desktop connection',
                 'points at this runtime' if owned(entry, python, root) else 'missing or points somewhere else')
-        except (OSError, ValueError):
+        except (OSError, ValueError, AttributeError):
             add('FAIL', 'Claude Desktop connection', 'claude_desktop_config.json unreadable')
 
     if device and vault.is_dir():
@@ -371,6 +377,13 @@ def main():
         for status, name, detail in rows:
             print(f'{status:<6} {name}: {detail}')
         print(f'\n{failed} failed. ' + ('Fix the FAIL lines and run again.' if failed else 'Automatic checks passed; finish the MANUAL lines.'))
+        if grok_registration is not None:
+            path, entry = grok_registration
+            print('\nGrok Bot MCP registration (add this server in the account):')
+            print('  spec:    ' + str(path))
+            print('  command: ' + entry['command'])
+            print('  args:    ' + json.dumps(entry['args']))
+            print('  env:     {}')
     return 1 if failed else 0
 
 

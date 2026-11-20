@@ -47,7 +47,7 @@ def test_install_enable_and_stop_are_file_state_only(monkeypatch):
     assert os.access(boot,os.X_OK) and 'boot' in boot.read_text(encoding='utf-8')
     assert 'BEGIN SECOND-BRAIN USER SERVICE' in (Path.home()/'.profile').read_text(encoding='utf-8')
     desktop=(Path.home()/'.config/autostart/second-brain.desktop').read_text(encoding='utf-8')
-    assert 'Exec='+str(boot) in desktop and 'Type=Application' in desktop
+    assert 'Exec="'+str(boot)+'"' in desktop and 'Type=Application' in desktop
     service.suspend_activation(installed)
     assert service.inspect(prove_main=False)['enabled'] is False
     stopped=service.native_stop()

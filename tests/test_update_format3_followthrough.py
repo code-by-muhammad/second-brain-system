@@ -51,7 +51,7 @@ def test_native_inspect_precedes_seal_and_hold(h,monkeypatch):
 
 def test_other_selected_interpreter_refused_before_snapshot_or_hold(h):
     h.registration['interpreter']=str(h.root/'unrelated/.venv/python')
-    with pytest.raises(RuntimeError,match='before a hold'):h.updater.perform(h.root,'v0.2.0')
+    with pytest.raises(ValueError,match='enabled recorded device interpreter'):h.updater.perform(h.root,'v0.2.0')
     assert not any(e.get('action')=='hold' for e in h.events)
     assert not (h.root/'state/service-transaction.json').exists()
 

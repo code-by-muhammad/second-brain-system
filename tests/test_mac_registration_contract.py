@@ -132,7 +132,7 @@ def test_ambiguous_definition_arguments_refuse(brain,tmp_path,argument):
 def fake_registration(monkeypatch,states):
     registration=object.__new__(native.MacRegistration)
     registration.domain=DOMAIN;registration.label=LABEL;registration.path=Path('/fixture.plist')
-    rows=iter(states);registration.inspect=lambda:next(rows)
+    rows=iter(states);registration.inspect=lambda *,deadline=None:next(rows)
     calls=[];monkeypatch.setattr(native,'command',lambda args,**kw:calls.append(args) or (0,b'',b''))
     monkeypatch.setattr(native.time,'sleep',lambda _:None)
     return registration,calls

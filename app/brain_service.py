@@ -5,6 +5,7 @@ from pathlib import Path
 from filelock import FileLock,Timeout
 import brain_settings as cfg
 import brain_process as processes
+import brain_release as release_files
 
 LABEL='local.second-brain'
 TASK=cfg.DEVICE.get('service_name','SecondBrainLocalService')
@@ -180,8 +181,9 @@ def _linux_boundary(record,prefix):
 
 
 @contextmanager
-def _control():
-    lock=FileLock(str(_state()/'service-control.lock'),timeout=5)
+def _control(deadline=None):
+    budget=5 if deadline is None else min(5,max(0,deadline-time.monotonic()))
+    lock=FileLock(str(_state()/'service-control.lock'),timeout=budget)
     try:lock.acquire()
     except Timeout as error:raise processes.OwnershipError('Service control is busy; retry after the current controller completes.') from error
     try:yield
@@ -214,6 +216,7 @@ def _atomic(path,value):
         with os.fdopen(descriptor,'w',encoding='utf-8') as output:
             json.dump(value,output,ensure_ascii=True);output.flush();os.fsync(output.fileno())
         os.replace(name,path)
+        release_files.sync_directory(path.parent)
     finally:Path(name).unlink(missing_ok=True)
 
 
@@ -259,7 +262,8 @@ def _held_snapshot(value):
         registration=snapshot.get('registration')
         keys={'kind','definition_sha256','enabled','interpreter'}|({'xml','owner_sid'} if sys.platform=='win32' else set())
         digest=lambda value:isinstance(value,str) and re.fullmatch('[a-f0-9]{64}',value) is not None
-        if (not isinstance(registration,dict) or set(registration)!=keys or registration.get('kind')!=sys.platform
+        absent=(sys.platform=='linux' and registration=={'kind':'linux','backend':'user-space','present':False})
+        if not absent and (not isinstance(registration,dict) or set(registration)!=keys or registration.get('kind')!=sys.platform
                 or registration.get('enabled') is not True or not digest(registration.get('definition_sha256'))
                 or not isinstance(registration.get('interpreter'),str) or not Path(registration['interpreter']).is_absolute()
                 or registration['interpreter']!=snapshot['previous'].get('python')):
@@ -281,16 +285,17 @@ def _held_snapshot(value):
             before=row.get('before_sha256')
             if before is not None and (not digest(before) or hashlib.sha256(read(target/str(index),64*1024*1024)).hexdigest()!=before):
                 raise processes.OwnershipError('Sealed device/client image changed; hold preserved.')
-        for name,expected in snapshot['app_sha256'].items():
-            relative=Path(name)
-            if relative.is_absolute() or '..' in relative.parts or not digest(expected):
-                raise processes.OwnershipError('Sealed app image path/hash is invalid.')
-            if hashlib.sha256(read(target/'app'/relative,64*1024*1024)).hexdigest()!=expected:
-                raise processes.OwnershipError('Sealed app image changed; hold preserved.')
-        paths=list((target/'app').rglob('*'))
-        if any(path.is_symlink() or path.is_junction() for path in paths):raise processes.OwnershipError('Linked app snapshot is refused.')
-        if {path.relative_to(target/'app').as_posix() for path in paths if path.is_file()}!=set(snapshot['app_sha256']):
-            raise processes.OwnershipError('App snapshot has extra or missing payloads; hold preserved.')
+        if release_files.inventory(target/'app',allow_cache=False)!=release_files.app_map(snapshot['app_sha256']):
+            raise processes.OwnershipError('App snapshot has extra, missing or changed payloads; hold preserved.')
+        deployment=snapshot.get('deployment')
+        if deployment is not None:
+            rows=release_files.artifact_rows(target,snapshot)
+            release_files.app_map(deployment['target_app_sha256'])
+            if (deployment['hold_id']!=value['hold_id'] or absent!=(deployment['service_policy'] in ('first','absent'))
+                    or not {'device','launcher'} <= {row['kind'] for row,_,_ in rows if row['phase']=='deploy'}):
+                raise processes.OwnershipError('Sealed deployment UUID or policy differs from the active transaction.')
+        elif absent:
+            raise processes.OwnershipError('Native absence requires sealed deployment images.')
         binding=snapshot.get('previous_binding')
         if (not isinstance(binding,dict) or set(binding)!={'before_sha256','after_sha256'}
                 or (binding['before_sha256'] is not None and not digest(binding['before_sha256']))
@@ -308,13 +313,8 @@ def _held_snapshot(value):
 
 
 def _runtime_app_hashes():
-    app=cfg.ROOT/'app';payload={}
-    if app.is_symlink() or app.is_junction():raise processes.OwnershipError('Linked runtime app is refused.')
-    for path in app.rglob('*'):
-        if path.is_symlink() or path.is_junction():raise processes.OwnershipError('Linked runtime app is refused.')
-        if path.is_file() and '__pycache__' not in path.relative_to(app).parts:
-            payload[path.relative_to(app).as_posix()]=hashlib.sha256(path.read_bytes()).hexdigest()
-    return payload
+    try:return release_files.inventory(cfg.ROOT/'app')
+    except (OSError,ValueError) as error:raise processes.OwnershipError('Runtime app could not be verified.') from error
 
 
 def _runtime_device_bytes():
@@ -351,15 +351,19 @@ def _forward_runtime(snapshot):
     if (manifest.get('repository')!=identity['repository'] or 'v'+manifest.get('version','')!=identity.get('tag')
             or device.get('release_root')!=str(checkout)):
         raise processes.OwnershipError('Forward app origin differs from sealed controller identity.')
-    expected={Path(name).name:digest for name,digest in manifest['sha256'].items()
-              if name.startswith('app/') and len(Path(name).parts)==2 and name.endswith('.py')}
-    return bool(expected) and _runtime_app_hashes()==expected
+    expected=release_files.manifest_app(manifest,device.get('version'))
+    sealed=snapshot.get('deployment')
+    return (sealed is None or sealed['target_app_sha256']==expected) and _runtime_app_hashes()==expected
 
 
 def _sealed_registration_check(value,current,history):
     if value is None or value.get('stage')!='prepared':return
     snapshot=_held_snapshot(value);sealed=snapshot['registration']
     if not _original_runtime(snapshot):raise processes.OwnershipError('Original runtime changed before stop; hold preserved.')
+    if sealed.get('present') is False:
+        if not _native_absent(current):
+            raise processes.OwnershipError('Original user-space registration absence differs; hold preserved.')
+        return
     if (current is None or current.get('definition_sha256')!=sealed['definition_sha256']
             or (sys.platform=='win32' and (current.get('owner_sid')!=sealed['owner_sid']
                 or current.get('interpreter')!=sealed['interpreter']))):
@@ -369,11 +373,17 @@ def _sealed_registration_check(value,current,history):
         raise processes.OwnershipError('Native activation changed since preflight; hold preserved.')
 
 
-def _held_install(value):
-    if value is None:return None
+def _held_install(value,hold_id=None):
+    if value is None:
+        if hold_id is not None:raise processes.OwnershipError('The named install transaction does not exist.')
+        return None
+    if hold_id is not None and value['hold_id']!=hold_id:
+        raise processes.OwnershipError('Held install requires the exact upgrade UUID.')
     if value.get('stage')!='stopped' or type(value.get('empty_at_filetime')) is not int or value['empty_at_filetime']<=0:
         raise processes.OwnershipError('Held install requires a verified stopped phase with disabled activation.')
     snapshot=_held_snapshot(value)
+    if 'deployment' in snapshot and value['hold_id']!=hold_id:
+        raise processes.OwnershipError('Held install requires the exact upgrade UUID.')
     if not _original_runtime(snapshot) and not _forward_runtime(snapshot):
         raise processes.OwnershipError('Runtime is neither complete sealed original nor complete verified forward app/device; hold preserved.')
     return snapshot
@@ -398,6 +408,10 @@ def begin_transaction(hold_id,snapshot):
         native=(_windows_task() if sys.platform=='win32' else _mac_registration().inspect() if sys.platform=='darwin'
                 else _linux_registration().inspect(allow_reload=True,prove_main=False))
         _sealed_registration_check(value,native,None)
+        sealed=_held_snapshot(value)
+        if any(release_files.file_image(Path(row['path']))!=before
+               for row,before,_ in release_files.artifact_rows(target,sealed)):
+            raise processes.OwnershipError('Deployment preimages changed before the hold.')
         _atomic(_state()/'service-transaction.json',value)
         return value
 
@@ -408,10 +422,32 @@ def finish_transaction(hold_id,expected_version=None,allow_legacy=False):
     with _control():
         value=_match_transaction(hold_id)
         if value is None:raise processes.OwnershipError('No matching transaction to finish.')
-        if value.get('stage')!='started' or not value.get('empty_at_filetime'):
-            raise processes.OwnershipError('Transaction has not completed a verified stop and start.')
         if not isinstance(expected_version,str) or not re.fullmatch(r'\d+\.\d+\.\d+',expected_version) or expected_version!=cfg.DEVICE.get('version'):
             raise processes.OwnershipError('Name the installed expected version before finishing recovery.')
+        if value.get('stage') not in ('stopped','started') or not value.get('empty_at_filetime'):
+            raise processes.OwnershipError('Transaction has not completed a verified stop.')
+        sealed=_held_snapshot(value)
+        deployment=sealed.get('deployment')
+        restoring=expected_version==sealed['previous'].get('version')
+        if deployment is not None:
+            _verify_finish_payload(value,sealed,restoring)
+            if deployment['service_policy']=='absent' or (deployment['service_policy']=='first' and restoring):
+                if value.get('stage')!='stopped' or not value.get('empty_at_filetime'):
+                    raise processes.OwnershipError('Service-free completion requires an exact stopped transaction.')
+                registration=_linux_registration()
+                if not _native_absent(registration.inspect(allow_reload=True,prove_main=False)):
+                    raise processes.OwnershipError('Service-free completion lacks native absence.')
+                with ExitStack() as locks:
+                    deadline=time.monotonic()+30
+                    for name in ('wiki-worker.lock','index-bootstrap.lock','maintenance.lock','writer.lock'):
+                        locks.enter_context(FileLock(str(_state()/name),timeout=max(0,deadline-time.monotonic())))
+                    prove_user_space_quiescence(registration)
+                    if not _native_absent(registration.inspect(allow_reload=True,prove_main=False)):
+                        raise processes.OwnershipError('Native absence changed during completion.')
+                    _verify_finish_payload(value,sealed,restoring)
+                    return _release_transaction(value,absent_version=expected_version)
+        if value.get('stage')!='started' or not value.get('empty_at_filetime'):
+            raise processes.OwnershipError('Transaction has not completed a verified stop and start.')
         owned=processes.listener_identity()
         if not owned:raise processes.OwnershipError('Cannot release a transaction without an owned live server.')
         minimum=value.get('empty_at_filetime')
@@ -434,9 +470,28 @@ def finish_transaction(hold_id,expected_version=None,allow_legacy=False):
         if not processes.same_runtime(again,owned):raise processes.OwnershipError('Runtime identity changed during transaction health verification.')
         if sys.platform=='darwin':_native_listener_binding(again,_mac_registration().inspect())
         elif sys.platform=='linux':_native_listener_binding(again,_linux_registration().inspect())
-        _atomic(_state()/'service-transactions'/(hold_id+'.json'),{**value,'stage':'complete','completed_filetime':processes.filetime_now(),'authenticated_version':expected_version,'identity':owned,'heartbeat_verified':heartbeat=='verified'})
-        (_state()/'service-transaction.json').unlink()
-        return {'status':'transaction released','hold_id':hold_id,'identity':owned}
+        if deployment is not None:_verify_finish_payload(value,sealed,restoring)
+        return _release_transaction(value,authenticated_version=expected_version,identity=owned,
+                                    heartbeat_verified=heartbeat=='verified')
+
+
+def _verify_finish_payload(value,sealed,restoring):
+    if not (_original_runtime(sealed) if restoring else _forward_runtime(sealed)):
+        raise processes.OwnershipError('Expected sealed runtime bytes differ; hold preserved.')
+    for row,before,after in release_files.artifact_rows(value['snapshot'],sealed):
+        if row['kind']=='activation' and not restoring:after=(b'true\n',after[1])
+        if release_files.file_image(Path(row['path']))!=(before if restoring else after):
+            raise processes.OwnershipError('Expected sealed deployment file differs; hold preserved: '+row['path'])
+
+
+def _release_transaction(value,**proof):
+    hold_id=value['hold_id']
+    _atomic(_state()/'service-transactions'/(hold_id+'.json'),
+            {**value,'stage':'complete','completed_filetime':processes.filetime_now(),**proof})
+    (_state()/'service-transaction.json').unlink()
+    release_files.sync_directory(_state())
+    return {'status':'transaction released','hold_id':hold_id,'identity':proof.get('identity'),
+            **({'absent_version':proof['absent_version']} if 'absent_version' in proof else {})}
 
 
 def spawn_allowed():
@@ -458,6 +513,7 @@ def cancel_transaction(hold_id):
         no_entry=value['stop_entered'] is False and not matching
         refusal=(matching and status.get('status') in ('stop failed','stop preflight failed')
                  and status.get('end_attempted') is False
+                 and status.get('managed_drain_unresolved') is not True
                  and type(status.get('activation_disable_attempted')) is bool
                  and (status['status']!='stop preflight failed' or status['activation_disable_attempted'] is False))
         if not no_entry and not refusal:
@@ -465,6 +521,7 @@ def cancel_transaction(hold_id):
         if not value['stop_entered'] and matching:
             raise processes.OwnershipError('Stop receipt contradicts entry marker; hold preserved.')
         if not _original_runtime(snapshot):raise processes.OwnershipError('Original runtime bytes differ; hold preserved.')
+        if 'deployment' in snapshot:_verify_finish_payload(value,snapshot,True)
         from brain_markdown import bounded_file_bytes
         binding=cfg.ROOT/'state/previous-release.json'
         if binding.is_symlink() or binding.is_junction():raise processes.OwnershipError('Linked previous binding is refused.')
@@ -478,7 +535,10 @@ def cancel_transaction(hold_id):
         except (OSError,ValueError,RuntimeError,subprocess.SubprocessError,SyntaxError,LookupError) as error:
             raise processes.OwnershipError('Native original state cannot be verified; hold preserved.') from error
         sealed=snapshot['registration']
-        if matching and status.get('status')=='stop failed':
+        if sealed.get('present') is False:
+            if not _native_absent(native):
+                raise processes.OwnershipError('Original native absence differs; hold preserved.')
+        elif matching and status.get('status')=='stop failed':
             if sys.platform=='win32':
                 prior=_windows_stop_history(hold_id)
                 if (prior is None or prior['prior_task_present'] is not True or prior['prior_task_enabled'] is not sealed['enabled']
@@ -489,11 +549,13 @@ def cancel_transaction(hold_id):
                 if (not isinstance(prior,dict) or prior.get('definition_sha256')!=sealed['definition_sha256']
                         or prior.get('enabled') is not sealed['enabled']):
                     raise processes.OwnershipError('Stop receipt contradicts sealed original intent; hold preserved.')
-        if native is None or native.get('definition_sha256')!=sealed['definition_sha256'] or native.get('enabled') is not sealed['enabled']:
+        if sealed.get('present') is not False and (native is None
+                or native.get('definition_sha256')!=sealed['definition_sha256'] or native.get('enabled') is not sealed['enabled']):
             raise processes.OwnershipError('Original native definition/activation differs; hold preserved.')
         record={**value,'stage':'cancelled before runtime switch','cancelled_filetime':processes.filetime_now(),'empty_runtime_verified':False}
         _atomic(_state()/'service-transactions'/(hold_id+'.json'),record)
         (_state()/'service-transaction.json').unlink()
+        release_files.sync_directory(_state())
         _atomic(_state()/'service-control-status.json',{**(status if matching else {}),'status':'stop refused; runtime unchanged' if refusal else 'stop not entered; runtime unchanged',
             'hold_id':hold_id,'transaction_cancelled':True})
         return {'status':'cancelled; runtime not switched','hold_id':hold_id,'pending_work':'preserved'}
@@ -514,7 +576,7 @@ def _scheduled_module():
     return module
 
 
-def _windows_task(*,include_xml=False):
+def _windows_task(*,include_xml=False,deadline=None):
     """Use structured error categories, never localized text to infer absence."""
     name=_task_name()
     module=str(_scheduled_module()).replace("'","''")
@@ -525,7 +587,8 @@ def _windows_task(*,include_xml=False):
           "$sid=if($t.Principal.UserId -match '^S-1-'){ $t.Principal.UserId }else{ (New-Object System.Security.Principal.NTAccount($t.Principal.UserId)).Translate([System.Security.Principal.SecurityIdentifier]).Value }; "
           "@{exists=$true;state=[string]$t.State;last_result=[long]$i.LastTaskResult;owner_sid=$sid;current_sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;xml=(Export-ScheduledTask -TaskPath '\\' -TaskName '"+name+"')}|ConvertTo-Json -Compress "
           "} catch { if ($_.CategoryInfo.Category -eq 'ObjectNotFound') { '{\"exists\":false}' } else { exit 2 } }")
-    result=subprocess.run([_tool('powershell.exe'),'-NoProfile','-NonInteractive','-Command',code],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=20,**cfg.child_options())
+    result=subprocess.run([_tool('powershell.exe'),'-NoProfile','-NonInteractive','-Command',code],capture_output=True,text=True,encoding='utf-8',errors='replace',
+        timeout=20 if deadline is None else _startup_budget(deadline,20),**cfg.child_options())
     if result.returncode:raise processes.OwnershipError('Scheduled task ownership could not be queried.')
     value=json.loads(result.stdout)
     if not value.get('exists'):return None
@@ -612,13 +675,13 @@ def definition(platform=None,*,enabled=True):
     def quote(value): return '"'+str(value).replace('\\','\\\\').replace('"','\\"').replace('%','%%')+'"'
     return '[Unit]\nDescription=Local Second Brain MCP\nAfter=network.target\n\n[Service]\nType=simple\nExecStart='+quote(cfg.PYTHON)+' '+quote(script)+'\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n'
 
-def install():
+def install(hold_id=None):
     _qualified_native_platform()
     processes.validate_environment()
     (cfg.ROOT/'logs').mkdir(parents=True,exist_ok=True)
     if sys.platform=='win32':
         with _control():
-            active=transaction();snapshot=_held_install(active)
+            active=transaction();snapshot=_held_install(active,hold_id)
             previous=_windows_task()
             if active is None and previous is not None and previous.get('state') in ('Running','Queued'):
                 raise processes.OwnershipError('Stop the owned Windows Task before replacing its registration.')
@@ -657,7 +720,7 @@ def install():
                 'restored':'sealed-restored','definition_sha256':after['definition_sha256']}
     elif sys.platform=='darwin':
         with _control():
-            active=transaction();snapshot=_held_install(active)
+            active=transaction();snapshot=_held_install(active,hold_id)
             if active is not None and (active.get('stage')!='stopped' or type(active.get('empty_at_filetime')) is not int or active['empty_at_filetime']<=0):
                 raise processes.OwnershipError('Finish a verified stop before replacing the Mac definition during a hold.')
             registration=_mac_registration();prior=registration.inspect();target=registration.path
@@ -700,8 +763,12 @@ def install():
                 raise
     elif sys.platform=='linux':
         with _control():
-            registration=_linux_registration();current=registration.inspect(allow_reload=True,prove_main=False);target=registration.path
-            hold=transaction();snapshot=_held_install(hold);active_hold=hold is not None
+            from brain_linux_user_service import LinuxUserService
+            registration=_linux_registration()
+            hold=transaction();snapshot=_held_install(hold,hold_id);active_hold=hold is not None
+            if snapshot is not None and 'deployment' in snapshot and isinstance(registration,LinuxUserService):
+                return _install_held_user_space(registration,hold,snapshot)
+            current=registration.inspect(allow_reload=True,prove_main=False);target=registration.path
             if active_hold and (hold.get('stage')!='stopped' or not hold.get('empty_at_filetime')
                     or current['enabled'] is not False or current.get('quiescent') is not True):
                 raise processes.OwnershipError('Held Linux install requires the verified disabled stopped phase.')
@@ -739,39 +806,279 @@ def install():
     else:raise processes.OwnershipError('Unsupported native service platform.')
     return {'status':'installed','definition':str(target)}
 
-def withdraw_first_registration():
-    """Remove a user-space definition that this release just wrote and never left running.
-
-    systemd, macOS and Windows have no such withdrawal. A running listener is refused.
-    """
-    if sys.platform!='linux':
-        raise processes.OwnershipError('Only an unregistered Linux user service can be withdrawn.')
-    from brain_linux_user_service import systemd_manager_present
-    if systemd_manager_present():
-        raise processes.OwnershipError('systemd owns this host; the user service is not withdrawn.')
-    processes.validate_environment()
-    if processes.listener_identity() is not None:
-        raise processes.OwnershipError('A listener is still owned; the user service was not withdrawn.')
-    registration=_linux_registration()
-    current=registration.inspect(allow_reload=True,prove_main=False)
-    if current.get('backend')!='user-space' or current.get('running') or current.get('quiescent') is not True:
-        raise processes.OwnershipError('The user service is not a stopped first registration; nothing was removed.')
-    if current['file_present']:
-        expected=hashlib.sha256(definition('linux').encode('utf-8')).hexdigest()
-        if current.get('definition_sha256')!=expected:
-            raise processes.OwnershipError('The user service definition is not this release; nothing was removed.')
-        registration.withdraw()
-    return {'status':'withdrawn','file_present':False}
+def _native_absent(native):
+    return (isinstance(native,dict) and native.get('backend')=='user-space'
+            and native.get('file_present') is False and native.get('enabled') is None
+            and native.get('loaded') is False and native.get('running') is False
+            and native.get('quiescent') is True and native.get('main_pid') is None)
 
 
-def _start_native(*,explicit=False):
-    if sys.platform=='win32': command=[_tool('schtasks.exe'),'/Run','/TN',_task_address()]
-    elif sys.platform=='darwin':
-        return _mac_registration().start(explicit=explicit)
-    elif sys.platform=='linux':
-        return _linux_registration().start(explicit=explicit)
+def plan_registration(python):
+    """Measure the exact user-space definition, activation and hooks for a held update."""
+    from brain_linux_user_service import LinuxUserService
+    from brain_linux_registration import definitions
+    if not python or not Path(python).is_absolute() or not Path(python).is_file():
+        raise processes.OwnershipError('Candidate interpreter is unavailable.')
+    _qualified_native_platform();processes.validate_environment()
+    with _control():
+        if transaction() is not None:
+            raise processes.OwnershipError('An active transaction already owns registration.')
+        registration=_linux_registration()
+        if not isinstance(registration,LinuxUserService):
+            raise processes.OwnershipError('Exact file planning requires the Linux user-space backend.')
+        registration.inspect(allow_reload=True,prove_main=False)
+        unit=next(iter(definitions(registration.unit,cfg.ROOT,[python])))
+        activation=release_files.file_image(registration.enabled_path,16)
+        unit_before=release_files.file_image(registration.path,65536)
+        unit_mode=0o644 if unit_before[1] is None else unit_before[1]
+        activation_mode=0o644 if activation[1] is None else activation[1]
+        measured=[('unit',registration.path,unit_before,(unit,unit_mode)),
+                  ('activation',registration.enabled_path,activation,(b'false\n',activation_mode))]
+        skipped=[]
+        for path,before,mode,after,new_mode in registration.hook_images(python,skips=skipped):
+            measured.append(('hook',path,(before,mode),(after,new_mode)))
+        def image(value):
+            data,mode=value
+            return {'hex':None if data is None else data.hex(),'mode':mode}
+        return {'status':'registration planned','artifacts':[
+            {'kind':kind,'path':str(path),'before':image(before),'after':image(after)}
+            for kind,path,before,after in measured],'skipped':skipped}
+
+
+def _native_images(registration,value,snapshot):
+    rows=[(row,before,after) for row,before,after in release_files.artifact_rows(value['snapshot'],snapshot)
+          if row['phase']=='native']
+    fixed={'unit':{registration.path},'activation':{registration.enabled_path},
+           'hook':{registration.boot_path,registration.home/'.profile',
+                   registration.home/'.config/autostart/second-brain.desktop'}}
+    for row,before,after in rows:
+        if Path(row['path']) not in fixed[row['kind']]:
+            raise processes.OwnershipError('Sealed native destination does not belong to this service.')
+    kinds={row['kind'] for row,_,_ in rows}
+    policy=snapshot['deployment']['service_policy']
+    if policy=='absent':
+        if rows:raise processes.OwnershipError('Service-free update cannot publish native registration.')
+    elif not {'unit','activation'} <= kinds:
+        raise processes.OwnershipError('Native unit and activation images are required.')
+    return rows
+
+
+def _activation_disabled(image):
+    return (b'false\n',image[1]) if image[0] is not None else image
+
+
+def _publish_native_images(registration,value,snapshot,restoring):
+    images=_native_images(registration,value,snapshot)
+    ordered=list(reversed(images)) if restoring else images
+    changes=[]
+    for row,before,after in ordered:
+        path=Path(row['path'])
+        observed=release_files.file_image(path)
+        if row['kind']=='activation':before=_activation_disabled(before)
+        if observed not in (before,after):
+            raise processes.OwnershipError('Native deployment artifact is outside the sealed phase: '+str(path))
+        changes.append((path,before if restoring else after,observed))
+    for path,desired,observed in changes:
+        release_files.write_image(path,desired,observed)
+
+
+def _stop_first_user_space(linux,value,wait_seconds):
+    """Stop a first-upgrade runtime while both native files are absent or only partly published."""
+    snapshot=_held_snapshot(value)
+    if snapshot['registration'].get('present') is not False:
+        return None
+    rows=_native_images(linux,value,snapshot)
+    paths={row['kind']:(Path(row['path']),before,after) for row,before,after in rows if row['kind']!='hook'}
+    unit=release_files.file_image(linux.path)
+    flag=release_files.file_image(linux.enabled_path)
+    if value['stage']=='prepared' or snapshot['deployment']['service_policy']=='absent':
+        if unit[0] is not None or flag[0] is not None:
+            raise processes.OwnershipError('Expected both native registration files absent; hold preserved.')
+    else:
+        selected_unit=paths['unit'][2];selected_flag=paths['activation'][2]
+        if unit not in ((None,None),selected_unit) or flag not in ((None,None),selected_flag,(b'true\n',selected_flag[1])):
+            raise processes.OwnershipError('A partial registration differs from its sealed images.')
+        if unit[0] is not None and flag[0] is not None:
+            return None  # The ordinary native stop verifies this complete candidate.
+    prove_user_space_quiescence(linux)
+    deadline=time.monotonic()+wait_seconds
+    with ExitStack() as locks:
+        for name in ('wiki-worker.lock','index-bootstrap.lock','maintenance.lock','writer.lock'):
+            locks.enter_context(FileLock(str(_state()/name),timeout=max(0,deadline-time.monotonic())))
+        if release_files.file_image(linux.path)!=unit or release_files.file_image(linux.enabled_path)!=flag:
+            raise processes.OwnershipError('Partial registration changed during quiescence proof.')
+        prove_user_space_quiescence(linux)
+        if release_files.file_image(linux.path)!=unit or release_files.file_image(linux.enabled_path)!=flag:
+            raise processes.OwnershipError('Partial registration changed before empty receipt.')
+        boundary=processes.linux_marker()
+        result={'status':'stopped','empty_at_filetime':processes.filetime_now(),
+                'empty_boot_id':boundary['boot_id'],'empty_boottime_ticks':boundary['boottime_ticks'],
+                'native_end_exit':None,'task_disabled':None,'hold_id':value['hold_id']}
+        _atomic(_state()/'service-transaction.json',{**value,**{key:item for key,item in result.items() if key.startswith('empty_')},'stage':'stopped'})
+        _atomic(_state()/'service-control-status.json',result)
+        return result
+
+
+def withdraw_first_registration(hold_id):
+    """Withdraw only a stopped exact first-registration attempt and prove absence."""
+    _qualified_native_platform();processes.validate_environment()
+    with _control():
+        value=_match_transaction(hold_id)
+        if value is None or value['stage']!='stopped' or not value.get('empty_at_filetime'):
+            raise processes.OwnershipError('Withdrawal requires the exact stopped upgrade UUID.')
+        snapshot=_held_snapshot(value)
+        if snapshot['registration'].get('present') is not False:
+            raise processes.OwnershipError('Only a sealed first registration can be withdrawn.')
+        registration=_linux_registration()
+        prove_user_space_quiescence(registration)
+        retire_user_space_generation(registration)
+        _publish_native_images(registration,value,snapshot,restoring=True)
+        if not _native_absent(registration.inspect(allow_reload=True,prove_main=False)):
+            raise processes.OwnershipError('Native absence was not verified after withdrawal.')
+        return {'status':'withdrawn','file_present':False}
+
+
+def check_stopped_user_space(hold_id, *, restoring=False):
+    """Reprove sealed registration, process and port quiescence under the caller's work locks."""
+    _qualified_native_platform();processes.validate_environment()
+    with _control():
+        value=_match_transaction(hold_id)
+        if value is None or value.get('stage')!='stopped' or not value.get('empty_at_filetime'):
+            raise processes.OwnershipError('Fresh quiescence requires the exact stopped update UUID.')
+        snapshot=_held_snapshot(value)
+        registration=_linux_registration()
+        rows=_native_images(registration,value,snapshot)
+        unit=release_files.file_image(registration.path)
+        flag=release_files.file_image(registration.enabled_path,16)
+        absent=(None,None)
+        if snapshot['deployment']['service_policy']=='absent' or (
+                snapshot['registration'].get('present') is False and not restoring):
+            allowed_unit=allowed_flag={absent}
+        else:
+            images={row['kind']:(before,after) for row,before,after in rows if row['kind']!='hook'}
+            allowed_unit=set(images['unit'])
+            allowed_flag={_activation_disabled(image) for image in images['activation']}
+        if unit not in allowed_unit or flag not in allowed_flag:
+            raise processes.OwnershipError('Stopped native registration differs from its sealed images.')
+        prove_user_space_quiescence(registration)
+        if (release_files.file_image(registration.path),release_files.file_image(registration.enabled_path,16))!=(unit,flag):
+            raise processes.OwnershipError('Native registration changed during fresh quiescence proof.')
+        return {'status':'quiescent','hold_id':hold_id}
+
+
+def _install_held_user_space(registration,value,snapshot):
+    policy=snapshot['deployment']['service_policy']
+    restoring=_original_runtime(snapshot)
+    if policy=='absent' or (policy=='first' and restoring):
+        raise processes.OwnershipError('Use the exact verified withdrawal flow for this absent registration.')
+    prove_user_space_quiescence(registration)
+    retire_user_space_generation(registration)
+    _publish_native_images(registration,value,snapshot,restoring)
+    native=registration.inspect(allow_reload=True,prove_main=False)
+    if native['enabled'] is not False or native.get('quiescent') is not True:
+        raise processes.OwnershipError('Held user-space definition is not disabled and quiescent.')
+    result={'status':'installed','definition':str(registration.path),'definition_sha256':native['definition_sha256']}
+    if restoring:
+        if result['definition_sha256']!=snapshot['registration']['definition_sha256']:
+            raise processes.OwnershipError('Restored Linux definition hash differs from the sealed original.')
+        result['restored']='sealed-restored'
+    return result
+
+def _start_native(*,explicit=False,deadline=None,registration=None,hold_id=None):
+    remaining=30 if deadline is None else min(30,deadline-time.monotonic())
+    if remaining<=0:raise processes.OwnershipError('Native startup exceeded the caller deadline.')
+    if sys.platform=='win32':command=[_tool('schtasks.exe'),'/Run','/TN',_task_address()]
+    elif sys.platform in ('darwin','linux'):
+        native=registration or (_mac_registration() if sys.platform=='darwin' else _linux_registration())
+        if _user_space(native) is not None:return native.start(explicit=explicit,deadline=deadline,hold_id=hold_id)
+        return native.start(explicit=explicit,deadline=deadline) if deadline is not None else native.start(explicit=explicit)
     else:raise processes.OwnershipError('Unsupported native service platform.')
-    subprocess.run(command,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=30,**cfg.child_options())
+    subprocess.run(command,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=remaining,**cfg.child_options())
+
+
+def _user_space(registration=None):
+    if sys.platform!='linux':return None
+    from brain_linux_user_service import LinuxUserService, systemd_manager_present
+    if registration is not None:return registration if isinstance(registration,LinuxUserService) else None
+    return None if systemd_manager_present() else _linux_registration()
+
+
+def prove_user_space_quiescence(registration=None):
+    """Require fresh generation, process, descendant and port proof under the controller locks."""
+    user=_user_space(registration)
+    if user is None:raise processes.OwnershipError('User-space Linux service is required.')
+    from brain_linux_generation import GenerationDrain
+    with ExitStack() as stack:
+        GenerationDrain(user,stack).prove_quiet()
+
+
+def retire_user_space_generation(registration=None):
+    user=_user_space(registration)
+    prove_user_space_quiescence(user)
+    from brain_index_bootstrap import settle_interrupted
+    from brain_linux_generation import GENERATION, clear_blocked, drain_recorded
+    settle_interrupted(lambda generation:drain_recorded(user,generation))
+    user._remove_state_file(_state()/GENERATION)
+    user._remove_state_file(user.keeper_path)
+    clear_blocked(user)
+
+
+def user_space_blocker():
+    if sys.platform!='linux':return None
+    from brain_linux_user_service import systemd_manager_present
+    if systemd_manager_present():return None
+    # A backend can be intentionally absent. Read only the local diagnostic.
+    if not (_state()/'user-service-blocked.json').exists():return None
+    from brain_linux_generation import blocked
+    return blocked(_linux_registration())
+
+
+def managed_drain_recorded(generation):
+    user=_user_space()
+    if user is None:return False
+    from brain_linux_generation import drain_recorded
+    return drain_recorded(user,generation)
+
+
+def index_launch(*,manual):
+    if sys.platform!='linux':return None
+    from brain_linux_user_service import systemd_manager_present
+    if systemd_manager_present():return None
+    from brain_linux_generation import GENERATION, Launch, LifecycleError, launch_for
+    if manual:return Launch(None,None,True)
+    if not (_state()/GENERATION).exists():
+        raise LifecycleError('bootstrap_unenrolled','The index bootstrap does not belong to an enrolled generation.')
+    return launch_for(_linux_registration(),manual=False)
+
+
+def supervisor_spawn_allowed():
+    if not spawn_allowed():return False
+    user=_user_space()
+    if user is None:return True
+    from brain_linux_generation import supervisor_allowed
+    return supervisor_allowed(user)
+
+
+def enrol_supervisor_child(role,child):
+    user=_user_space()
+    if user is None:return
+    from brain_linux_generation import enroll
+    enroll(user,role,child)
+
+
+def enrol_index_bootstrap(child,arguments):
+    enrol_supervisor_child('index_bootstrap',child)
+
+
+def _listener(deadline=None):
+    return processes.listener_identity(deadline=deadline) if sys.platform=='linux' and deadline is not None else processes.listener_identity()
+
+
+def _startup_budget(deadline,limit):
+    remaining=min(limit,deadline-time.monotonic())
+    if remaining<=0:raise processes.OwnershipError('Service startup exceeded the caller deadline.')
+    return remaining
+
 
 def write_heartbeat(status):
     if os.name=='nt':
@@ -808,22 +1115,24 @@ def _heartbeat(identity,attempt,legacy,linux_attempt=None):
 
 def _wait_started(attempt,since,legacy,deadline,linux_attempt=None,linux_since=None):
     while time.monotonic()<deadline:
-        try:identity=processes.listener_identity()
+        try:identity=_listener(deadline)
         except (OSError,ValueError):
             # Atomic registry replacement can be briefly unavailable on Windows.
             # OwnershipError remains fatal; never retry a foreign listener.
-            time.sleep(.25);continue
+            time.sleep(min(.25,max(0,deadline-time.monotonic())));continue
         if identity is not None:
             fresh=(processes.newer_than_empty(identity,linux_since) if linux_since is not None
                    else since is None or (identity['birth']>=since and identity['supervisor_birth']>=since))
             heartbeat=(_heartbeat(identity,attempt,legacy,linux_attempt) if linux_attempt is not None
                        else _heartbeat(identity,attempt,legacy))
             if fresh and heartbeat:return identity,heartbeat
-        time.sleep(.25)
+        time.sleep(min(.25,max(0,deadline-time.monotonic())))
     raise processes.OwnershipError('Service did not publish an owned ready listener/heartbeat before the deadline.')
 
 
 def start(*,explicit=False,hold_id=None,since=None,allow_legacy=False,deadline=None):
+    deadline=time.monotonic()+180 if deadline is None else deadline
+    _startup_budget(deadline,180)
     _qualified_native_platform()
     processes.validate_environment()
     attempt=processes.filetime_now()
@@ -831,9 +1140,8 @@ def start(*,explicit=False,hold_id=None,since=None,allow_legacy=False,deadline=N
     linux_since=None
     if since is not None and (type(since) is not int or (sys.platform!='linux' and attempt<since)):
         raise processes.OwnershipError('Startup clock predates verified quiescence.')
-    # Refuse an occupied/foreign/orphan port before task mutation or credential use.
-    processes.listener_identity()
-    with _control():
+    with _control(deadline):
+        _startup_budget(deadline,180)
         value=_match_transaction(hold_id)
         if value is not None:
             if not explicit:raise processes.OwnershipError('Automatic start is blocked by the update transaction.')
@@ -850,50 +1158,55 @@ def start(*,explicit=False,hold_id=None,since=None,allow_legacy=False,deadline=N
                     raise processes.OwnershipError('Linux transaction quiescence boundary is missing or belongs to another boot.')
         elif sys.platform=='linux' and since is not None:
             raise processes.OwnershipError('Linux freshness needs the recorded boot-relative transaction boundary.')
-        task=(_windows_task() if sys.platform=='win32' else _mac_registration().inspect() if sys.platform=='darwin'
-              else _linux_registration().inspect() if sys.platform=='linux' else None)
+        registration=(_mac_registration() if sys.platform=='darwin' else _linux_registration() if sys.platform=='linux' else None)
+        user=_user_space(registration)
+        task=(_windows_task(deadline=deadline) if sys.platform=='win32' else
+              registration.inspect(deadline=deadline) if registration is not None and user is None else
+              registration.inspect() if user is not None else None)
         if sys.platform=='win32' and task is None:raise processes.OwnershipError('Service task is not installed.')
-        if sys.platform=='darwin' and not task['file_present']:raise processes.OwnershipError('The owned Mac registration is not installed.')
-        if sys.platform=='linux' and not task['file_present']:raise processes.OwnershipError('The owned Linux registration is not installed.')
-        if sys.platform=='darwin':
-            listening=processes.listener_identity()
-            if listening is not None:_native_listener_binding(listening,task)
-        elif sys.platform=='linux':
-            listening=processes.listener_identity()
-            if listening is not None:_native_listener_binding(listening,task)
+        if registration is not None and not task['file_present']:raise processes.OwnershipError('The owned native registration is not installed.')
+        # A user-space generation may enter verified orphan cleanup before
+        # ordinary readiness admission. The backend checks every occupied row.
+        if user is None or (user._keeper_process() is not None and task['running']):
+            listening=_listener(deadline)
+            if listening is not None and registration is not None:_native_listener_binding(listening,task)
         if task is not None and not task['enabled'] and not explicit:
             raise processes.OwnershipError('Service is explicitly stopped; use service start to enable it.')
         try:
             if value is not None:_atomic(_state()/'service-transaction.json',{**value,'stage':'starting','start_attempt_filetime':attempt})
             _atomic(_state()/'service-control-status.json',{'status':'starting','started_at_filetime':attempt,'hold_id':hold_id})
             if sys.platform=='win32' and task is not None and not task['enabled']:
-                subprocess.run([_tool('schtasks.exe'),'/Change','/TN',_task_address(),'/Enable'],check=True,timeout=20,**cfg.child_options())
-            if sys.platform in ('darwin','linux'):_start_native(explicit=explicit)
-            else:_start_native()
+                subprocess.run([_tool('schtasks.exe'),'/Change','/TN',_task_address(),'/Enable'],check=True,timeout=_startup_budget(deadline,20),**cfg.child_options())
+            _start_native(explicit=explicit,deadline=deadline,registration=registration,hold_id=hold_id)
         except BaseException:
             if value is not None:_atomic(_state()/'service-transaction.json',{**value,'stage':'start failed'})
             _atomic(_state()/'service-control-status.json',{'status':'start failed','phase':'native start','hold_id':hold_id})
             raise
     try:
         # The supervisor reports readiness on a 20-second cycle and a first start from a new environment is slow.
-        args=(attempt,since,allow_legacy,deadline or time.monotonic()+180)
+        args=(attempt,since,allow_legacy,deadline)
         identity,heartbeat=(_wait_started(*args,linux_attempt,linux_since) if linux_attempt is not None else _wait_started(*args))
         result={'status':'started','identity':identity,'heartbeat_verified':heartbeat=='verified','transaction':hold_id,'started_at_filetime':attempt}
-        with _control():
+        with _control(deadline):
+            _startup_budget(deadline,180)
             current=_match_transaction(hold_id)
             if current is not None and (current.get('stage')!='starting' or current.get('start_attempt_filetime')!=attempt):
                 raise processes.OwnershipError('Another controller superseded this startup attempt.')
-            if sys.platform=='darwin':_native_listener_binding(identity,_mac_registration().inspect())
-            elif sys.platform=='linux':_native_listener_binding(identity,_linux_registration().inspect())
-            if not processes.same_runtime(processes.listener_identity(),identity):raise processes.OwnershipError('Listener changed before recording startup.')
+            if registration is not None:
+                current_native=registration.inspect() if user is not None else registration.inspect(deadline=deadline)
+                _native_listener_binding(identity,current_native)
+            if not processes.same_runtime(_listener(deadline),identity):raise processes.OwnershipError('Listener changed before recording startup.')
             if current is not None:_atomic(_state()/'service-transaction.json',{**current,'stage':'started','identity':identity,'started_at_filetime':attempt,'legacy_heartbeat':heartbeat!='verified',
                 **({'started_boot_id':linux_attempt['boot_id'],'started_boottime_ticks':linux_attempt['boottime_ticks']} if linux_attempt is not None else {})})
+            if user is not None:
+                from brain_linux_generation import clear_blocked
+                clear_blocked(user)
             _atomic(_state()/'service-control-status.json',result)
         return result
     except BaseException as error:
         # Do not replace a concurrent controller's newer stop/start receipt.
         try:
-            with _control():
+            with _control(deadline):
                 current=transaction()
                 if current is not None and current.get('hold_id')==hold_id and current.get('start_attempt_filetime')==attempt and current.get('stage')=='starting':
                     _atomic(_state()/'service-transaction.json',{**current,'stage':'start failed'})
@@ -909,10 +1222,12 @@ def stop(*,hold_id=None,wait_seconds=30):
     _qualified_native_platform()
     processes.validate_environment()
     if type(wait_seconds) is not int or not 1<=wait_seconds<=300:raise ValueError('Use a stop wait between 1 and 300 seconds.')
+    deadline=time.monotonic()+wait_seconds
+    drain=None
     owned=[];task=None;disabled=False;end_attempted=False;phase='task preflight';mac=None;linux=None;linux_receipt=None
     native_disable_attempted=False;native_restore_allowed=False
     windows_disable_attempted=False;windows_restore_allowed=False;windows_preflight_verified=False
-    with _control():
+    with _control(deadline), ExitStack() as retained:
         value=_match_transaction(hold_id)
         windows_history=_windows_stop_history(hold_id) if sys.platform=='win32' else None
         if windows_history is not None:
@@ -962,7 +1277,11 @@ def stop(*,hold_id=None,wait_seconds=30):
                     'prior_native':task,'activation_disable_attempted':True,'end_attempted':end_attempted,'hold_id':hold_id})
                 mac.suspend_activation()
             elif sys.platform=='linux':
-                linux=_linux_registration();current_native=linux.inspect(allow_reload=True,prove_main=False)
+                linux=_linux_registration()
+                if value is not None:
+                    first_stop=_stop_first_user_space(linux,value,max(0,deadline-time.monotonic()))
+                    if first_stop is not None:return first_stop
+                current_native=linux.inspect(allow_reload=True,prove_main=False)
                 _sealed_registration_check(value,current_native,history)
                 if task is None:task=current_native
                 if task['definition_sha256']!=current_native['definition_sha256']:
@@ -971,9 +1290,14 @@ def stop(*,hold_id=None,wait_seconds=30):
                 _atomic(_state()/'service-control-status.json',{'status':'stopping','phase':'native activation suspension',
                     'prior_native':task,'activation_disable_attempted':True,'end_attempted':end_attempted,'hold_id':hold_id})
                 linux.suspend_activation(prior=task)
+                if _user_space(linux) is not None:
+                    from brain_linux_generation import GenerationDrain
+                    phase='managed index preflight and drain'
+                    drain=GenerationDrain(linux,retained)
+                    drain.drain_index(deadline)
             phase='writer admission'
             with ExitStack() as locks:
-                admission=time.monotonic()+wait_seconds
+                admission=deadline
                 for name in ('wiki-worker.lock','index-bootstrap.lock','maintenance.lock','writer.lock'):
                     locks.enter_context(FileLock(str(_state()/name),timeout=max(0,admission-time.monotonic())))
                 phase='process identity'
@@ -989,6 +1313,10 @@ def stop(*,hold_id=None,wait_seconds=30):
                         'prior_native':task,'activation_disable_attempted':True,'end_attempted':True,'hold_id':hold_id})
                 elif linux is not None:
                     current_native=linux.inspect(allow_reload=True,prove_main=False)
+                    if (current_native['definition_sha256']!=task['definition_sha256'] or current_native['enabled']):
+                        raise processes.OwnershipError('Linux definition or activation changed before native End.')
+                    if drain is not None:
+                        drain.inventory()
                     live_supervisors=[process for process in owned if process.role=='supervisor' and process.alive()]
                     if any(process.pid!=current_native.get('main_pid') for process in live_supervisors):
                         raise processes.OwnershipError('A manual same-root supervisor is active outside the native unit.')
@@ -996,7 +1324,7 @@ def stop(*,hold_id=None,wait_seconds=30):
                         and not any(process.pid==current_native['main_pid']
                                     and process.lifetime==current_native['main_lifetime'] for process in live_supervisors)):
                         raise processes.OwnershipError('The native supervisor is missing from the verified role inventory.')
-                    linux.verify_processes(owned)
+                    if drain is None:linux.verify_processes(owned)
                     # Stop may repair an orphan within this exact cgroup; it
                     # neither authenticates to that listener nor signals PIDs.
                     _atomic(_state()/'service-control-status.json',{'status':'stopping','phase':'native end',
@@ -1015,7 +1343,8 @@ def stop(*,hold_id=None,wait_seconds=30):
                 end_attempted=True
                 if sys.platform=='darwin':native_exit=mac.native_stop()['native_end_exit']
                 elif sys.platform=='linux':
-                    linux_receipt=linux.native_stop();native_exit=linux_receipt['native_end_exit']
+                    linux_receipt=(linux.native_stop(drain=drain,deadline=deadline) if drain is not None else linux.native_stop())
+                    native_exit=linux_receipt['native_end_exit']
                     if linux_receipt.get('native_stopped') is not True:
                         raise processes.OwnershipError('Linux manager did not verify native quiescence.')
                 else:
@@ -1025,7 +1354,7 @@ def stop(*,hold_id=None,wait_seconds=30):
                 phase='retained process cleanup'
                 if sys.platform=='win32':
                     for process in sorted(owned,key=lambda process:(process.role!='supervisor',process.kind=='launcher')):process.terminate()
-                deadline=time.monotonic()+wait_seconds
+                if drain is None:deadline=time.monotonic()+wait_seconds
                 while time.monotonic()<deadline:
                     # Job/TerminateProcess exits are asynchronous. Never inspect
                     # orphan-shaped base processes while retained peers are exiting.
@@ -1050,8 +1379,15 @@ def stop(*,hold_id=None,wait_seconds=30):
                     verified=mac.inspect()
                     if verified['loaded'] or verified['enabled']:raise processes.OwnershipError('Mac activation/unloaded proof changed before empty receipt.')
                 elif linux is not None:
+                    if drain is not None:
+                        drain.prove_quiet()
+                        from brain_index_bootstrap import settle_interrupted
+                        from brain_linux_generation import clear_blocked, drain_recorded
+                        settle_interrupted(lambda generation:drain_recorded(linux,generation))
+                        clear_blocked(linux)
                     verified=linux.inspect(allow_reload=True,prove_main=False)
-                    if verified['enabled'] or not verified['quiescent']:
+                    if (verified['enabled'] or not verified['quiescent']
+                            or verified['definition_sha256']!=task['definition_sha256']):
                         raise processes.OwnershipError('Linux disabled cgroup quiescence changed before empty receipt.')
                     disabled=True if verified['enabled'] is False else None
                 empty=processes.filetime_now()
@@ -1065,6 +1401,7 @@ def stop(*,hold_id=None,wait_seconds=30):
                 _atomic(_state()/'service-control-status.json',result);return result
         except BaseException as error:
             restored=False
+            unresolved_drain=(drain is not None and drain.started and drain.value['drain']!='drained')
             if (sys.platform=='win32' and not end_attempted and windows_disable_attempted
                     and windows_restore_allowed and task is not None and task['enabled']):
                 try:
@@ -1077,7 +1414,7 @@ def stop(*,hold_id=None,wait_seconds=30):
                         raise processes.OwnershipError('Original Windows activation was not verified.')
                     restored=True;disabled=False
                 except Exception:pass
-            elif (sys.platform!='win32' and not end_attempted and disabled and task is not None and task['enabled']
+            elif (sys.platform!='win32' and not end_attempted and not unresolved_drain and disabled and task is not None and task['enabled']
                     and (sys.platform not in ('darwin','linux') or native_restore_allowed)):
                 try:
                     if mac is not None:mac.restore_activation(task)
@@ -1098,6 +1435,9 @@ def stop(*,hold_id=None,wait_seconds=30):
                     receipt['status']='stop preflight failed'
             if sys.platform in ('darwin','linux'):
                 receipt.update(prior_native=task,activation_disable_attempted=native_disable_attempted)
+                if drain is not None:
+                    receipt['managed_drain_unresolved']=unresolved_drain
+                    if getattr(error,'reason',None):receipt['reason']=error.reason
                 if task is None and not native_disable_attempted and not end_attempted:receipt['status']='stop preflight failed'
             _atomic(_state()/'service-control-status.json',receipt)
             reason=' '+str(error) if isinstance(error,processes.OwnershipError) else ''
@@ -1126,8 +1466,10 @@ def inspect():
         if sys.platform in ('darwin','linux'):
             registration=_mac_registration() if sys.platform=='darwin' else _linux_registration()
             native=registration.inspect()
-            listening=processes.listener_identity()
-            if listening is not None:_native_listener_binding(listening,native)
+            blocker=user_space_blocker()
+            if blocker is None:
+                listening=processes.listener_identity()
+                if listening is not None:_native_listener_binding(listening,native)
             expected=hashlib.sha256(definition(sys.platform).encode('utf-8')).hexdigest()
             pending_initial_enable=False
             if native['file_present'] and native['enabled'] is False and native['definition_sha256']==expected:
@@ -1137,7 +1479,8 @@ def inspect():
                 except processes.OwnershipError:pass
             return {'status':'inspected','task_present':native['file_present'] and native['loaded'],
                     'task_enabled':native['enabled'],'native':native,'registration':_registration_descriptor(native,registration),
-                    'expected_native_definition_sha256':expected,'pending_initial_install_enable':pending_initial_enable}
+                    'expected_native_definition_sha256':expected,'pending_initial_install_enable':pending_initial_enable,
+                    **({'blocked':blocker} if blocker is not None else {})}
         task=_windows_task(include_xml=True) if sys.platform=='win32' else None
         return {'status':'inspected','task_present':task is not None,
                 'task_enabled':task['enabled'] if task is not None else None,'registration':_registration_descriptor(task)}

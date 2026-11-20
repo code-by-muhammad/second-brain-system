@@ -31,6 +31,8 @@ def main():
     parser.add_argument('--keep-existing',action='store_true',help='wiki configure-model: record only when no assistant is recorded yet.')
     parser.add_argument('--executable',help='Absolute path of the claude or codex program for maintainer wiki configure-model; no model call.')
     parser.add_argument('--snapshot')
+    parser.add_argument('--candidate-python')
+    parser.add_argument('--restoring',action='store_true',help=argparse.SUPPRESS)
     parser.add_argument('--since',type=int)
     parser.add_argument('--allow-legacy',action='store_true')
     parser.add_argument('--expected-version')
@@ -39,7 +41,10 @@ def main():
     parser.add_argument('--hold-sha256',help='Exact private hold digest reported by git status.')
     parser.add_argument('--wait-seconds',type=int,default=30,help='Service stop admission/exit wait budget, 1–300 seconds; busy writers are preserved.')
     args=parser.parse_args()
-    if args.command=='health': result=asyncio.run(mcp_call('brain_health',{}))
+    if args.command=='health':
+        from brain_service import user_space_blocker
+        result=user_space_blocker()
+        if result is None:result=asyncio.run(mcp_call('brain_health',{}))
     elif args.command=='search': result=asyncio.run(mcp_call('brain_search',{'query':args.action,'limit':args.limit}))
     elif args.command=='read': result=asyncio.run(mcp_call('brain_read',{'path':args.action}))
     elif args.command=='index':
@@ -48,7 +53,9 @@ def main():
             result=status()
         elif args.action=='retry':
             from brain_index_bootstrap import main as retry
-            result=retry(overall_seconds=args.overall_seconds,stall_seconds=args.stall_seconds,full=args.full,retry=True)
+            from brain_service import index_launch
+            result=retry(overall_seconds=args.overall_seconds,stall_seconds=args.stall_seconds,full=args.full,
+                         retry=True,launch=index_launch(manual=True))
         else: parser.error('index action: status, retry')
     elif args.command=='wiki':
         import brain_wiki as wiki
@@ -80,7 +87,7 @@ def main():
         else:parser.error('git action: status, review')
     else:
         import brain_service as service
-        if args.action=='install': result=service.install()
+        if args.action=='install': result=service.install(args.hold_id)
         elif args.action=='start': result=service.start(explicit=True,hold_id=args.hold_id,since=args.since,allow_legacy=args.allow_legacy)
         elif args.action=='stop': result=service.stop(hold_id=args.hold_id,wait_seconds=args.wait_seconds)
         elif args.action=='hold': result=service.begin_transaction(args.hold_id,args.snapshot)
@@ -88,12 +95,15 @@ def main():
         elif args.action=='cancel': result=service.cancel_transaction(args.hold_id)
         elif args.action=='recover': result=service.recovery_status()
         elif args.action=='inspect': result=service.inspect()
-        elif args.action=='withdraw-first': result=service.withdraw_first_registration()
+        elif args.action=='withdraw-first': result=service.withdraw_first_registration(args.hold_id)
+        elif args.action=='check-stopped': result=service.check_stopped_user_space(args.hold_id,restoring=args.restoring)
+        elif args.action=='plan-registration': result=service.plan_registration(args.candidate_python)
         elif args.action=='definition': result={'definition':service.definition()}
         else: result=service.recovery_status()
     print(json.dumps(result,indent=2,ensure_ascii=False,default=str))
     # The self-test is a verdict: a failed one ends the command unsuccessfully, after its report.
     if args.command=='selftest' and result.get('failed'):sys.exit(1)
+    if args.command=='health' and result.get('status')=='blocked':sys.exit(1)
     # The index worker refused this Python environment: a retry cannot change that, so the command says so in its
     # exit status as well. Every other index outcome, a deferral included, is reported in the JSON alone.
     if args.command=='index' and isinstance(result,dict) and result.get('reason')=='index_worker_guard_refused':sys.exit(3)

@@ -132,6 +132,15 @@ def native_tool():
     return str(tool)
 
 
+def _startup_command(arguments, deadline):
+    if deadline is None:
+        return command(arguments)
+    remaining=min(15,deadline-time.monotonic())
+    if remaining<=0:
+        raise CommandTimeout('Native startup budget expired.')
+    return command(arguments,timeout=remaining)
+
+
 def command(arguments,*,timeout=15):
     """Private directly owned child, streaming caps, no shell or ambient env."""
     if type(timeout) not in (int,float) or not 0<timeout<=30:raise RegistrationError('Native command timeout is outside its bound.')
@@ -146,7 +155,7 @@ def command(arguments,*,timeout=15):
             os.set_blocking(pipe.fileno(),False);selector.register(pipe,selectors.EVENT_READ,bucket)
         while selector.get_map():
             if time.monotonic()>=deadline:raise CommandTimeout('Native manager command timed out.')
-            for key,_ in selector.select(.1):
+            for key,_ in selector.select(min(.1,max(0,deadline-time.monotonic()))):
                 chunk=os.read(key.fileobj.fileno(),65536)
                 if not chunk:selector.unregister(key.fileobj);continue
                 key.data.extend(chunk)
@@ -157,7 +166,10 @@ def command(arguments,*,timeout=15):
     except OSError:raise RegistrationError('Native manager command is unavailable.') from None
     finally:
         selector.close()
-        if child.poll() is None:child.kill();child.wait(timeout=5)
+        if child.poll() is None:
+            child.kill()
+            try:child.wait(timeout=max(0,min(5,deadline-time.monotonic())))
+            except subprocess.TimeoutExpired:pass
         child.stdout.close();child.stderr.close()
 
 
@@ -225,15 +237,15 @@ class MacRegistration:
             if not stat.S_ISDIR(info.st_mode) or info.st_uid!=self.uid or info.st_mode&0o022:
                 raise RegistrationError('Native user registration directory ownership/privacy is invalid.')
 
-    def inspect(self):
+    def inspect(self,*,deadline=None):
         before=read_definition(self.path,self.uid)
         if before is not None and before[1] not in self.known:raise RegistrationError('Existing native definition belongs to another configuration.')
         def observe():
-            code,domain_raw,err=command(['print',self.domain])
+            code,domain_raw,err=_startup_command(['print',self.domain],deadline)
             if code or err:raise RegistrationError('Native GUI domain is unavailable.')
             present=domain_contains(domain_raw,self.domain,self.label)
-            code,raw,err=command(['print',self.domain+'/'+self.label])
-            disabled_code,disabled_raw,disabled_err=command(['print-disabled',self.domain])
+            code,raw,err=_startup_command(['print',self.domain+'/'+self.label],deadline)
+            disabled_code,disabled_raw,disabled_err=_startup_command(['print-disabled',self.domain],deadline)
             if disabled_code or disabled_err:raise RegistrationError('Native disabled state is unavailable.')
             enabled=disabled_state(disabled_raw,self.label)
             if code:
@@ -274,9 +286,9 @@ class MacRegistration:
         value['definition_sha256']=hashlib.sha256(before[1]).hexdigest() if before else None
         return value
 
-    def _set_enabled(self,enabled):
-        command(['enable' if enabled else 'disable',self.domain+'/'+self.label])
-        current=self.inspect()
+    def _set_enabled(self,enabled,*,deadline=None):
+        _startup_command(['enable' if enabled else 'disable',self.domain+'/'+self.label],deadline)
+        current=self.inspect(deadline=deadline) if deadline is not None else self.inspect()
         if current['enabled'] is not enabled:raise RegistrationError('Native activation override was not verified.')
         return current
 
@@ -307,22 +319,22 @@ class MacRegistration:
             if time.monotonic()>=deadline:raise RegistrationError('Native job did not reach verified disabled absence.')
             time.sleep(.25)
 
-    def start(self,*,explicit=True):
-        value=self.inspect()
+    def start(self,*,explicit=True,deadline=None):
+        deadline=min(deadline if deadline is not None else float('inf'),time.monotonic()+30)
+        value=self.inspect(deadline=deadline)
         if not value['file_present']:raise RegistrationError('Install the exact native definition before start.')
         if not explicit and not value['enabled']:raise RegistrationError('Native service is persistently disabled.')
-        if explicit:value=self._set_enabled(True)
+        if explicit:value=self._set_enabled(True,deadline=deadline)
         if not value['loaded']:
-            command(['bootstrap',self.domain,str(self.path)])
-            value=self.inspect()
+            _startup_command(['bootstrap',self.domain,str(self.path)],deadline)
+            value=self.inspect(deadline=deadline)
             if not value['loaded']:raise RegistrationError('Native bootstrap was not verified.')
-        if not value['running']:command(['kickstart',self.domain+'/'+self.label])
-        deadline=time.monotonic()+30
+        if not value['running']:_startup_command(['kickstart',self.domain+'/'+self.label],deadline)
         while True:
-            value=self.inspect()
+            value=self.inspect(deadline=deadline)
             if value['running']:return value
             if time.monotonic()>=deadline:raise RegistrationError('Native exact supervisor did not start.')
-            time.sleep(.25)
+            time.sleep(min(.25,max(0,deadline-time.monotonic())))
 
     def install(self,payload,*,enabled=None,restore_sha256=None):
         restoring=(isinstance(restore_sha256,str) and re.fullmatch('[a-f0-9]{64}',restore_sha256)

@@ -22,6 +22,9 @@ def installation(tmp_path,monkeypatch):
     (root/'app/old.py').write_bytes(b'# old runtime\n')
     previous=Path(device['release_root']);previous.mkdir()
     (previous/'release-manifest.json').write_text(json.dumps({'version':'0.1.7','sha256':{'app/old.py':hashlib.sha256(b'# old runtime\n').hexdigest()}}))
+    manifest=json.loads((previous/'release-manifest.json').read_bytes())
+    manifest['git_identity']={'commit':'synthetic-old','tag':'v0.1.7'}
+    monkeypatch.setattr(updater,'verify',lambda *args,**kwargs:manifest)
     helper=updater.installer();support=helper.setup_helpers()
     monkeypatch.setattr(helper,'private_dir',lambda path:path.mkdir(parents=True,exist_ok=True))
     monkeypatch.setattr(helper,'private',lambda *args:None)
@@ -46,7 +49,11 @@ def test_snapshot_is_exact_before_bytes_and_rejects_change_before_stop(installat
 
 
 def test_restore_uses_presealed_after_hash_even_without_write_receipt(installation):
-    h=installation;saved=updater.snapshot(h.root,sys.executable,h.plan,registration=h.registration)
+    h=installation
+    forward=h.root/'releases/v0.1.8';forward.mkdir(parents=True)
+    (forward/'release-manifest.json').write_text(json.dumps({'version':'0.1.8',
+        'sha256':{'app/new.py':hashlib.sha256(b'# new runtime\n').hexdigest()}}))
+    saved=updater.snapshot(h.root,sys.executable,h.plan,registration=h.registration,controller_checkout=forward)
     h.path.write_bytes(h.after.encode())
     (h.root/'device.json').write_bytes((json.dumps(h.planned_device,indent=2)+'\n').encode())
     (h.root/'app/old.py').unlink();(h.root/'app/new.py').write_bytes(b'# new runtime\n')
@@ -71,6 +78,7 @@ def test_restore_absent_before_deletes_only_exact_after_bytes(installation):
     h.path.write_bytes(b'owner concurrent file')
     assert updater.restore(h.root,saved)['deferred_clients'] and h.path.exists()
     h.path.write_bytes(h.after.encode())
+    if sys.platform!='win32':h.path.chmod(0o600)
     assert not updater.restore(h.root,saved)['deferred_clients'] and not h.path.exists()
 
 
@@ -95,8 +103,11 @@ def test_rollback_stop_runs_outside_parent_work_locks_and_uses_new_controller(in
         assert str(checkout)=='new-reviewed-checkout' and python==sys.executable
         if action in ('stop','start','finish'):assert not held
         if action=='install':assert bool(held)==switch
+        if action=='stop':return {'status':'stopped','empty_at_filetime':123}
+        if action=='finish':return {'status':'transaction released','hold_id':'a'*32}
         return {'status':action,'restored':'sealed-restored','definition_sha256':h.registration['definition_sha256']}
     monkeypatch.setattr(updater,'controller',controller)
+    monkeypatch.setattr(updater,'_check_held',lambda *args:None)
     monkeypatch.setattr(updater,'wait_health',lambda *args,**kwargs:{'status':'running','version':'0.1.7'})
     result=updater._restart_previous(h.root,saved,sys.executable,'new-reviewed-checkout','a'*32,restore_bytes=switch)
     assert events==(['stop','install'] if switch else [])+['start','finish']

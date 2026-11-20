@@ -11,6 +11,7 @@ def install(monkeypatch,supervisor):
     monkeypatch.setattr(supervisor.processes,'validate_environment',lambda **kwargs:None)
     monkeypatch.setattr(supervisor.processes,'enter_supervisor_job',lambda:None)
     monkeypatch.setattr(supervisor.service,'write_heartbeat',lambda status:None)
+    monkeypatch.setattr(supervisor.service,'_user_space',lambda *args:None)
 
 
 class ReleasePipe:
