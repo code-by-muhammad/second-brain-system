@@ -59,6 +59,16 @@ def _start_bootstrap(arguments,log):
         raise
     return child
 
+
+def _enrol_child(role,child):
+    try:
+        service.enrol_supervisor_child(role,child)
+    except BaseException:
+        child.kill()
+        child.wait(timeout=5)
+        raise
+
+
 def _maintenance_due(owned):
     # Unchanged rule: with no pass recorded yet this compares against the monotonic clock itself, so the
     # first pass is due once the computer has been up for fifteen minutes.
@@ -105,7 +115,7 @@ def main(owned=None):
                         if not listening and child is None:
                             with (cfg.ROOT/'logs/service-server.log').open('ab') as log:
                                 child=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_server.py')],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
-                                service.enrol_supervisor_child('server',child)
+                                _enrol_child('server',child)
                                 owned['server']=child
                                 _publish_owned(owned)
                         # A finished maintenance pass is recorded first, so the repair that waited for it can start
@@ -154,7 +164,7 @@ def main(owned=None):
                                 # line there itself. The log has a new name: the old service-maintenance.log is
                                 # no longer written, so it can stay as it is without ever being renamed or cut.
                                 maintenance=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_maintenance.py')],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=log,env=cfg.environment(),**cfg.child_options())
-                                service.enrol_supervisor_child('maintenance',maintenance)
+                                _enrol_child('maintenance',maintenance)
                                 owned['maintenance']=maintenance
                                 _publish_owned(owned)
                         service.write_heartbeat('ready' if listening else 'starting')

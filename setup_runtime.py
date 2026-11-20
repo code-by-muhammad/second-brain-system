@@ -301,10 +301,12 @@ def _posix_uid(info, allow_root):
 
 
 def _directory_ok(info, allow_root):
-    """A path writable by another account cannot safely authorize client links."""
+    """Require an approved owner and reject world-write or group-write by a different owner."""
     if not _posix_uid(info, allow_root):return False
     if os.name!='posix':return True
-    return not info.st_mode & 0o022
+    if info.st_mode & stat.S_IWOTH:return False
+    if info.st_uid!=os.geteuid() and info.st_mode & stat.S_IWGRP:return False
+    return True
 
 
 def _link_text(raw):
@@ -487,17 +489,13 @@ def _linked(path):
     return any(part.is_symlink() or (hasattr(part,'is_junction') and part.is_junction()) for part in (path,*path.parents))
 
 
-def _real(path,home):
-    return resolve_client_path(path,home)
-
-
 def block_file(path,home,imports=False,shared=()):
     """The one file this assistant loads the managed block from, or the file to add it to.
 
     Claude Code also loads files named as @path, so a block kept in a shared rules file is
     refreshed there and never duplicated. With no block yet, a loaded file that another
     selected assistant also writes (shared) receives the one block."""
-    first=_real(path,home);texts={};loaded=[];outside=set();queue=[(first,0)]
+    first=resolve_client_path(path,home);texts={};loaded=[];outside=set();queue=[(first,0)]
     while queue:
         current,depth=queue.pop(0)
         if current in loaded:continue
@@ -516,7 +514,7 @@ def block_file(path,home,imports=False,shared=()):
             for name in re.findall(r'(?:^|\s)@([^\s`]+)',line):
                 target=Path(home)/name[2:] if name.startswith('~/') else Path(name)
                 if not target.is_absolute():target=current.parent/target
-                try:queue.append((_real(target,home),depth+1))
+                try:queue.append((resolve_client_path(target,home),depth+1))
                 except ClientSkip as error:
                     # Outside the home folder: read to see what the assistant loads, never written.
                     if error.code!='outside_home':continue
@@ -531,17 +529,26 @@ def block_file(path,home,imports=False,shared=()):
     return holders[0] if holders else next((item for item in loaded if _plain(item) in wanted),first)
 
 
-def json_object(data):
+def _load_json(data):
+    duplicate=False
     def pairs(entries):
-        result={}
-        for key,value in entries:
-            if key in result:raise DuplicateJSONError('Duplicate JSON keys; preserve and repair the selected client file first.')
-            result[key]=value
+        nonlocal duplicate
+        result=dict(entries)
+        duplicate=duplicate or len(result)!=len(entries)
         return result
     try:value=json.loads((data or b'{}').decode('utf-8-sig'),object_pairs_hook=pairs)
     except RecursionError as error:raise ValueError('Client JSON exceeds its nesting bound.') from error
+    if duplicate:raise DuplicateJSONError('Duplicate JSON keys; preserve and repair the selected client file first.')
+    return value
+
+
+def _require_json_object(value):
     if not isinstance(value,dict):raise ValueError('Expected a client JSON object.')
     return value
+
+
+def json_object(data):
+    return _require_json_object(_load_json(data))
 
 
 def _path(value):return os.path.normcase(str(Path(value).resolve()))
@@ -691,6 +698,24 @@ def _mentions_runtime(data,root):
     return literal in raw
 
 
+def _parse_client_config(raw,kind,path,root,refresh):
+    try:
+        if kind=='toml':
+            import tomllib
+            content=(raw or b'').decode('utf-8-sig')
+            return tomllib.loads(content),content
+        value=_load_json(raw)
+    except DuplicateJSONError as error:
+        if not refresh:raise
+        raise ClientSkip('duplicate_json',str(error)) from error
+    except (ValueError,RecursionError) as error:
+        if not refresh:raise
+        if _mentions_runtime(raw,root):
+            raise ClientPlanError('Unparseable client file names this runtime: '+str(path)) from error
+        raise ClientSkip('unparseable_unowned','unparseable; ownership not inspected') from error
+    return _require_json_object(value),None
+
+
 def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,desktop=None,skip_desktop=False,skill=None):
     root=Path(root).resolve();home=Path(home or Path.home());python=Path(python)
     selected=set(CLIENTS if selected is None else selected)
@@ -712,13 +737,13 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
     if 'claude-code' in selected:
         targets.append(('claude-code',home/'.claude.json','json'))
         shared('claude-code',home/'.claude/CLAUDE.md','protocol',lambda:block_file(home/'.claude/CLAUDE.md',home,True,[codex_block] if codex_block else ()))
-        if skill is not None:shared('claude-code',home/'.claude/skills/second-brain/SKILL.md','skill',lambda:_real(home/'.claude/skills/second-brain/SKILL.md',home))
+        if skill is not None:shared('claude-code',home/'.claude/skills/second-brain/SKILL.md','skill',lambda:resolve_client_path(home/'.claude/skills/second-brain/SKILL.md',home))
     if 'claude-desktop' in selected:
         path=desktop_path(home,desktop,skip_desktop)
         if path is not None:targets.append(('claude-desktop',path,'json'))
     if 'codex' in selected:
         targets.extend([('codex',home/'.codex/config.toml','toml'),*codex_rows])
-        if skill is not None:shared('codex',codex_skill(home),'skill',lambda:_real(codex_skill(home),home))
+        if skill is not None:shared('codex',codex_skill(home),'skill',lambda:resolve_client_path(codex_skill(home),home))
     if 'hooks' in selected:targets.append(('hooks',home/'.claude/settings.json','hooks'))
     if 'grok' in selected:
         folder=grok_directory(home)
@@ -727,21 +752,20 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
     for client,path,kind in targets:
         # One shared rules or skill file can serve several assistants; write it once.
         # One assistant's refusal is recorded here and the next assistant is planned.
-        before=None
         try:
             path=_target(path,home,client=='claude-desktop' and desktop is not None)
             if _plain(path) in claimed:raise ClientSkip('shared_target','shared file already planned')
             claimed.add(_plain(path))
             before=read(path,limit=connection().GROK_SPEC_LIMIT if kind=='grok' else None)
             if refresh and before is None:raise ClientSkip('missing_file','No existing client file to refresh.')
+            if kind not in ('protocol','skill'):
+                data,content=_parse_client_config(before,kind,path,root,refresh)
             if kind=='json':
-                data=json_object(before);servers=data.get('mcpServers',{})
+                servers=data.get('mcpServers',{})
                 prior=_update_entry(servers,root,path,refresh)
                 data['mcpServers']={**servers,'second-brain':{**prior,**specs}}
                 after=json.dumps(data,indent=2,ensure_ascii=False)+'\n'
             elif kind=='toml':
-                import tomllib
-                content=(before or b'').decode('utf-8-sig');data=tomllib.loads(content)
                 servers=data.get('mcp_servers',{})
                 _update_entry(servers,root,path,refresh)
                 after=toml_plan(content,specs)
@@ -760,7 +784,7 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
                         after=content[:first]+block+content[last+len(END):]
                     else:after=content.rstrip()+'\n\n'+block+'\n'
             elif kind=='grok':
-                data=json_object(before);servers=data.get('mcpServers',{})
+                servers=data.get('mcpServers',{})
                 if servers in ({},None):servers={}
                 if not isinstance(servers,dict):raise ValueError('Invalid Grok MCP registration: '+str(path))
                 extra=[name for name in servers if name!='second-brain']
@@ -768,7 +792,7 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
                 _update_entry(servers,root,path,refresh)
                 after=json.dumps(connection().grok_spec(root,python),indent=2,ensure_ascii=False)+'\n'
             else:
-                data=json_object(before);hooks=data.get('hooks',{})
+                hooks=data.get('hooks',{})
                 if not isinstance(hooks,dict):raise ValueError('Invalid hooks object: '+str(path))
                 found=False
                 create=not refresh
@@ -795,11 +819,7 @@ def plan(root,python,protocol,toml_plan,*,home=None,selected=None,refresh=False,
         except ClientPlanError:raise
         except ClientSkip as error:skip(client,path,error.code,error)
         except (OSError,ConcurrentWriteError) as error:skip(client,path,'inaccessible',error)
-        except (ValueError,RecursionError) as error:
-            if refresh and before is not None and kind not in ('protocol','skill'):
-                if _mentions_runtime(before,root):raise ClientPlanError('Unparseable client file names this runtime: '+str(path)) from error
-                skip(client,path,'unparseable_unowned','unparseable; ownership not inspected')
-            else:skip(client,path,'malformed',error)
+        except (ValueError,RecursionError) as error:skip(client,path,'malformed',error)
     if any(row['client']=='claude-desktop' for row in records) and desktop_busy():raise ValueError('Claude Desktop is open. Close it or explicitly skip its refresh before continuing.')
     return {'format':1,'root':str(root),'python':str(python),'refresh':refresh,'files':records,'skipped':skipped}
 

@@ -1,3 +1,4 @@
+import asyncio
 import time
 from types import SimpleNamespace
 import pytest
@@ -28,6 +29,35 @@ async def test_proxy_waits_until_all_tools_are_exposed(monkeypatch):
 @pytest.mark.asyncio
 async def test_proxy_fails_instead_of_exposing_empty_tool_list():
     with pytest.raises(RuntimeError,match='tools are not ready'): await client.wait_ready(None,time.monotonic()-1)
+
+
+@pytest.mark.asyncio
+async def test_proxy_cancels_a_stalled_handshake_when_startup_deadline_expires(monkeypatch):
+    attempts=[]
+    cancelled=[]
+    budget=.2
+
+    class StalledHandshake:
+        def __init__(self,transport,*,timeout,init_timeout):
+            attempts.append((timeout,init_timeout))
+
+        async def __aenter__(self):
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.append(True)
+                raise
+
+        async def __aexit__(self,*args):
+            pass
+
+    monkeypatch.setattr(client.processes,'listener_identity',lambda **kwargs:{'synthetic':True})
+    monkeypatch.setattr(fastmcp,'Client',StalledHandshake)
+    with pytest.raises(RuntimeError,match='Authenticated Second Brain tools are not ready'):
+        await asyncio.wait_for(client.wait_ready(None,time.monotonic()+budget),timeout=2)
+    assert len(attempts)==1 and cancelled==[True]
+    timeout,init_timeout=attempts[0]
+    assert 0<timeout==init_timeout<=budget
 
 
 def test_cold_start_passes_the_same_deadline_to_dispatch_and_ownership_checks(monkeypatch):

@@ -23,4 +23,5 @@ def observe_note_open(monkeypatch, target, intercept):
         return open_stream()
 
     monkeypatch.setattr(Path, 'open', opened)
-    monkeypatch.setattr(os, 'fdopen', descriptor_opened)
+    if os.name == 'posix':
+        monkeypatch.setattr(os, 'fdopen', descriptor_opened)

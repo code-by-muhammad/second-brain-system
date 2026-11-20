@@ -3,9 +3,12 @@ import hashlib
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 import pytest
+import brain_linux_generation as lifecycle
 import brain_linux_user_service as user
 import brain_process as processes
+import brain_service as controller
 import brain_settings as cfg
 
 pytestmark=pytest.mark.skipif(sys.platform!='linux',reason='the user-space service runs on Linux')
@@ -57,6 +60,69 @@ def test_install_enable_and_stop_are_file_state_only(monkeypatch):
     try:service.install(b'not-the-definition\n',enabled=True)
     except user.RegistrationError as error:assert 'exact' in str(error)
     else:raise AssertionError('a foreign definition must be refused')
-    service.remove_boot_hooks()
-    assert 'BEGIN SECOND-BRAIN USER SERVICE' not in (Path.home()/'.profile').read_text(encoding='utf-8')
-    assert not (Path.home()/'.config/autostart/second-brain.desktop').exists()
+
+
+def test_activation_accepts_owned_files_and_directories_from_umask_002(monkeypatch):
+    service = _service(monkeypatch)
+    config = service.directory.parent
+    config.mkdir()
+    config.chmod(0o775)
+    installed = service.install(service.installable, enabled=True)
+    assert installed['hook_skips'] == []
+    service.enabled_path.chmod(0o664)
+
+    service.suspend_activation(installed)
+    assert service.enabled_path.read_bytes() == b'false\n'
+    assert service.restore_activation(installed)['enabled'] is True
+    assert service.enabled_path.stat().st_mode & 0o777 == 0o664
+
+    service.enabled_path.chmod(0o666)
+    with pytest.raises(user.HookRefusal, match='unsafe_file_mode'):
+        service.suspend_activation(installed)
+    config.chmod(0o777)
+    with pytest.raises(user.RegistrationError, match='directory is unsafe'):
+        service.inspect(prove_main=False)
+
+
+def test_keeper_backs_off_and_only_rewrites_new_blockers(monkeypatch):
+    service = _service(monkeypatch)
+    service.install(service.installable, enabled=True)
+    elapsed = 0.0
+    handlers = {}
+    attempts = []
+    writes = []
+
+    def sleep(seconds):
+        nonlocal elapsed
+        elapsed += seconds
+        if elapsed >= 31:
+            handlers[user.signal.SIGTERM](None, None)
+
+    def refuse_port(deadline):
+        attempts.append(elapsed)
+        reason = 'port_ownership_uncertain' if len(attempts) < 3 else 'unmanaged_index_worker'
+        raise lifecycle.LifecycleError(reason, f'Attempt {len(attempts)}')
+
+    original_write = lifecycle._write
+
+    def write(registration, name, record):
+        if name == lifecycle.BLOCKER:
+            writes.append((elapsed, record['reason'], record['generation']))
+        original_write(registration, name, record)
+
+    monkeypatch.setattr(user, 'time', SimpleNamespace(monotonic=lambda: elapsed, sleep=sleep))
+    monkeypatch.setattr(user.signal, 'signal', handlers.__setitem__)
+    monkeypatch.setattr(controller, 'spawn_allowed', lambda: True)
+    monkeypatch.setattr(lifecycle, 'keeper_record', lambda registration: {})
+    monkeypatch.setattr(lifecycle, 'GenerationDrain',
+                        lambda registration, stack: SimpleNamespace(prove_recovery_port=refuse_port))
+    monkeypatch.setattr(lifecycle, 'generation',
+                        lambda registration: {'generation': ('a' if elapsed < 30 else 'b') * 32})
+    monkeypatch.setattr(lifecycle, '_write', write)
+
+    user.supervise()
+
+    assert attempts == [0, 10, 20, 30]
+    assert writes == [(0, 'port_ownership_uncertain', 'a' * 32),
+                      (20, 'unmanaged_index_worker', 'a' * 32),
+                      (30, 'unmanaged_index_worker', 'b' * 32)]

@@ -75,6 +75,21 @@ def test_health_failure_automatic_rollback_remains_verified(portable,monkeypatch
     assert json.loads((h.root/'state/upgrade-status.json').read_bytes())['status']=='update failed; previous runtime verified'
 
 
+def test_cleanup_failure_preserves_committed_update_receipt(portable,monkeypatch):
+    h=prepare_case(portable,monkeypatch)
+
+    def cleanup(root,saved,hold):
+        assert not (root/'state/service-transaction.json').exists()
+        assert (saved/'displaced-app').is_dir()
+        raise PermissionError('synthetic displacement cleanup refusal')
+
+    monkeypatch.setattr(h.updater,'_retire_displacement',cleanup)
+    result=h.updater.perform(h.root,'v0.2.0')
+    receipt=json.loads((h.root/'state/upgrade-status.json').read_bytes())
+    assert receipt==result and receipt['status']=='updated'
+    assert receipt['displacement_cleanup']=={'status':'incomplete','error_type':'PermissionError'}
+
+
 def test_failure_with_matching_active_hold_keeps_findable_recovery_uuid(portable,monkeypatch):
     h=prepare_case(portable,monkeypatch);hold=retain_known_failure(h,monkeypatch)
     saved,record,selected=h.updater._recovery_binding(h.root,hold)

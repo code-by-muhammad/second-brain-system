@@ -44,7 +44,9 @@ def test_pre_hold_task_or_hold_refusal_never_claims_nonexistent_recovery(portabl
         with pytest.raises(RuntimeError,match='before a hold was created'):h.updater.perform(h.root,'v0.1.6')
         assert json.loads(receipt.read_text())['status']=='update deferred; no hold created'
     else:
-        with pytest.raises((ValueError,RuntimeError)):h.updater.perform(h.root,'v0.1.6')
+        error, message = ((RuntimeError, 'synthetic task ownership/control refusal') if refusal=='inspect' else
+                          (ValueError, 'The owned task is absent or explicitly stopped'))
+        with pytest.raises(error,match=message):h.updater.perform(h.root,'v0.1.6')
         assert not receipt.exists() and all(row['kind']!='provision' for row in h.events)
     assert not (h.root/'state/service-transaction.json').exists() and h.running==initial_running
     assert (h.root/'device.json').read_bytes()==before

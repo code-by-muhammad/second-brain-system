@@ -155,7 +155,7 @@ def command(arguments,*,timeout=15):
             os.set_blocking(pipe.fileno(),False);selector.register(pipe,selectors.EVENT_READ,bucket)
         while selector.get_map():
             if time.monotonic()>=deadline:raise CommandTimeout('Native manager command timed out.')
-            for key,_ in selector.select(min(.1,max(0,deadline-time.monotonic()))):
+            for key,_ in selector.select(.1):
                 chunk=os.read(key.fileobj.fileno(),65536)
                 if not chunk:selector.unregister(key.fileobj);continue
                 key.data.extend(chunk)
@@ -166,10 +166,7 @@ def command(arguments,*,timeout=15):
     except OSError:raise RegistrationError('Native manager command is unavailable.') from None
     finally:
         selector.close()
-        if child.poll() is None:
-            child.kill()
-            try:child.wait(timeout=max(0,min(5,deadline-time.monotonic())))
-            except subprocess.TimeoutExpired:pass
+        if child.poll() is None:child.kill();child.wait(timeout=5)
         child.stdout.close();child.stderr.close()
 
 
@@ -320,21 +317,22 @@ class MacRegistration:
             time.sleep(.25)
 
     def start(self,*,explicit=True,deadline=None):
-        deadline=min(deadline if deadline is not None else float('inf'),time.monotonic()+30)
-        value=self.inspect(deadline=deadline)
+        value=self.inspect(deadline=deadline) if deadline is not None else self.inspect()
         if not value['file_present']:raise RegistrationError('Install the exact native definition before start.')
         if not explicit and not value['enabled']:raise RegistrationError('Native service is persistently disabled.')
         if explicit:value=self._set_enabled(True,deadline=deadline)
         if not value['loaded']:
             _startup_command(['bootstrap',self.domain,str(self.path)],deadline)
-            value=self.inspect(deadline=deadline)
+            value=self.inspect(deadline=deadline) if deadline is not None else self.inspect()
             if not value['loaded']:raise RegistrationError('Native bootstrap was not verified.')
         if not value['running']:_startup_command(['kickstart',self.domain+'/'+self.label],deadline)
+        wait_deadline=time.monotonic()+30
+        if deadline is not None:wait_deadline=min(wait_deadline,deadline)
         while True:
-            value=self.inspect(deadline=deadline)
+            value=self.inspect(deadline=deadline) if deadline is not None else self.inspect()
             if value['running']:return value
-            if time.monotonic()>=deadline:raise RegistrationError('Native exact supervisor did not start.')
-            time.sleep(min(.25,max(0,deadline-time.monotonic())))
+            if time.monotonic()>=wait_deadline:raise RegistrationError('Native exact supervisor did not start.')
+            time.sleep(.25)
 
     def install(self,payload,*,enabled=None,restore_sha256=None):
         restoring=(isinstance(restore_sha256,str) and re.fullmatch('[a-f0-9]{64}',restore_sha256)

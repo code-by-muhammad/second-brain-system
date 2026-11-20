@@ -100,23 +100,78 @@ def test_foreign_and_multiple_listeners_refused_without_process_adoption(brain,m
 @pytest.mark.parametrize('orphan,changed',[(False,False),(True,False),(False,True)])
 def test_listener_requires_live_recorded_supervisor_and_same_socket(brain,monkeypatch,orphan,changed):
     # This fake models Windows' separate launcher/base-interpreter processes.
-    monkeypatch.setattr(processes.sys,'platform','win32')
+    monkeypatch.setattr(processes,'sys',SimpleNamespace(platform='win32'))
     registry=cfg.ROOT/'state/service-pids.json';registry.write_text(json.dumps({'supervisor':70}))
     closed=[]
     launcher=SimpleNamespace(parent_pid=69 if orphan else 70,birth=200)
-    server=SimpleNamespace(pid=80,role='server',birth=300,kind='interpreter',parents=[launcher],record=lambda:{'pid':80,'birth':300},close=lambda:closed.append('server'))
+    birth=133444736000000001  # One 100 ns tick past the second is lost in psutil's float.
+    psutil_process=SimpleNamespace(is_running=lambda:True,status=lambda:processes.psutil.STATUS_RUNNING,
+                                   create_time=lambda:(birth-116444736000000000)/10_000_000)
+    assert int(psutil_process.create_time()*10_000_000)+116444736000000000!=birth
+    monkeypatch.setattr(processes.psutil,'Process',lambda pid:psutil_process)
+    server=SimpleNamespace(pid=80,role='server',birth=birth,kind='interpreter',parents=[launcher],record=lambda:{'pid':80,'birth':birth},close=lambda:closed.append('server'))
     supervisor=SimpleNamespace(role='supervisor',pid=70,birth=100,close=lambda:closed.append('supervisor'))
     monkeypatch.setattr(processes,'inspect',lambda pid,**kwargs:server if pid==80 else supervisor)
     count=[0]
-    def listeners():
+    def listeners(*,kind):
+        assert kind=='tcp'
         count[0]+=1
-        return [SimpleNamespace(pid=81 if changed and count[0]>1 else 80,laddr=SimpleNamespace(ip='127.0.0.1',port=cfg.PORT))]
-    monkeypatch.setattr(processes,'_listeners',listeners)
+        return [SimpleNamespace(pid=81 if changed and count[0]>1 else 80,status=processes.psutil.CONN_LISTEN,
+                                laddr=SimpleNamespace(ip='127.0.0.1',port=cfg.PORT))]
+    monkeypatch.setattr(processes.psutil,'net_connections',listeners)
     if orphan or changed:
         with pytest.raises(processes.OwnershipError):processes.listener_identity()
     else:
-        assert processes.listener_identity()['supervisor_pid']==70
+        assert processes.listener_identity()=={'pid':80,'birth':birth,'supervisor_pid':70,'supervisor_birth':100}
     assert 'server' in closed
+
+
+@pytest.mark.skipif(os.name!='nt',reason='Native Windows TCP inventory and retained process handles.')
+def test_real_windows_listener_uses_exact_handle_birth(brain,monkeypatch):
+    from brain_windows_process import run
+
+    app=cfg.ROOT/'app';app.mkdir()
+    (app/'brain_supervisor.py').write_text(
+        "import json, os, subprocess, sys\nfrom pathlib import Path\n"
+        "app=Path(__file__).parent\n"
+        "(app.parent/'state/service-pids.json').write_text(json.dumps({'supervisor':os.getpid()}))\n"
+        "with subprocess.Popen([sys.executable,'-B',str(app/'brain_server.py')]) as child:\n"
+        "    child.wait()\n",encoding='utf-8')
+    (app/'brain_server.py').write_text(
+        "import json, os, socket, time\nfrom pathlib import Path\n"
+        "with socket.socket() as listener:\n"
+        "    listener.bind(('127.0.0.1',0))\n"
+        "    listener.listen()\n"
+        "    marker=Path(__file__).parent.parent/'state/listener.json'\n"
+        "    pending=marker.with_suffix('.tmp')\n"
+        "    pending.write_text(json.dumps({'pid':os.getpid(),'port':listener.getsockname()[1]}))\n"
+        "    pending.replace(marker)\n"
+        "    time.sleep(60)\n",encoding='utf-8')
+    marker=cfg.STATE/'listener.json'
+    seen=[]
+
+    def tick():
+        if seen or not marker.exists():return
+        address=json.loads(marker.read_text(encoding='utf-8'))
+        monkeypatch.setattr(cfg,'PORT',address['port'])
+        identity=processes.listener_identity()
+        if identity is None:return
+        assert identity['pid']==address['pid']
+        owned=processes.inspect(address['pid'],required=True)
+        try:
+            assert identity['birth']==owned.birth
+            seen.append(identity)
+            owned.terminate()
+        finally:owned.close()
+
+    fixture=cfg.ROOT/'fixture-supervisor.py'
+    fixture.write_text(
+        "import subprocess, sys\nfrom pathlib import Path\n"
+        "sys.exit(subprocess.call([sys.executable,'-B',str(Path(__file__).parent/'app/brain_supervisor.py')]))\n",
+        encoding='utf-8')
+    result=run([sys.executable,'-B',str(fixture)],capture_output=True,timeout=15,
+               on_tick=tick,env=cfg.environment())
+    assert result.returncode==0 and seen
 
 
 # ---- the index worker's command line ----------------------------------------------------------------------------

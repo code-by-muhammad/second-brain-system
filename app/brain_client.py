@@ -27,14 +27,14 @@ def ensure_service(deadline=None):
     if deadline is None:
         deadline = time.monotonic() + 50
     processes.validate_environment()
-    if processes.listener_identity(deadline=deadline) is not None:return
+    if processes.listener_identity(deadline=deadline) is not None: return
     from brain_service import start
     start(deadline=deadline)
     if processes.listener_identity(deadline=deadline) is None:raise processes.OwnershipError('Service ownership changed after startup.')
 
 async def wait_ready(transport,deadline):
     from fastmcp import Client
-    while time.monotonic() < deadline:
+    while time.monotonic()<deadline:
         if processes.listener_identity(deadline=deadline) is None:raise processes.OwnershipError('Service listener disappeared before authentication.')
         remaining=deadline-time.monotonic()
         if remaining<=0:break

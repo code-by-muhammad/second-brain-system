@@ -401,10 +401,18 @@ def set_blocked(registration, error):
         value = generation(registration)
     except processes.OwnershipError:
         value = None
-    reason = getattr(error, 'reason', 'generation_cleanup_blocked')
-    _write(registration, BLOCKER, {'format': 1, 'root': str(cfg.ROOT), 'boot_id': _boot(),
-           'generation': value['generation'] if value else None,
-           'reason': reason, 'guidance': str(error)[:400]})
+    record = {'format': 1, 'root': str(cfg.ROOT), 'boot_id': _boot(),
+              'generation': value['generation'] if value else None,
+              'reason': getattr(error, 'reason', 'generation_cleanup_blocked')}
+    try:
+        current = _read(registration, BLOCKER)
+    except processes.OwnershipError:
+        current = None
+    if current is not None and all(current.get(key) == item for key, item in record.items()):
+        guidance = current.get('guidance')
+        if isinstance(guidance, str) and len(guidance) <= 400:
+            return
+    _write(registration, BLOCKER, {**record, 'guidance': str(error)[:400]})
 
 
 def clear_blocked(registration):

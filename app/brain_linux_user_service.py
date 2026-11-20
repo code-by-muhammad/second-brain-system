@@ -19,6 +19,7 @@ BOOT_MARK_END='# END SECOND-BRAIN USER SERVICE'
 CRON_MARK='second-brain-user-service'
 KEEPER_NAME='user-service-keeper.json'
 HOOK_LIMIT = 1024 * 1024
+RESTART_BACKOFF = 10
 
 
 class HookRefusal(RegistrationError):
@@ -129,7 +130,7 @@ class LinuxUserService:
                 os.close(directory)
                 directory = child
                 info = os.fstat(directory)
-                if info.st_uid != self.uid or info.st_mode & 0o022:
+                if info.st_uid != self.uid or info.st_mode & 0o002:
                     raise RegistrationError('User service directory is unsafe.')
             yield directory
         finally:
@@ -161,35 +162,31 @@ class LinuxUserService:
         return self._file_image(path, limit)[0]
 
     def _write(self, path, payload, mode, *, expected=None):
-        with self._home_directory(path.parent, create=payload is not None) as directory:
+        with self._home_directory(path.parent, create=True) as directory:
             temporary = '.' + path.name + '.' + os.urandom(8).hex()
             try:
-                if payload is not None:
-                    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                                         mode, dir_fd=directory)
-                    with os.fdopen(descriptor, 'wb') as stream:
-                        os.fchmod(stream.fileno(), mode)
-                        stream.write(payload)
-                        stream.flush()
-                        os.fsync(stream.fileno())
+                descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                     mode, dir_fd=directory)
+                with os.fdopen(descriptor, 'wb') as stream:
+                    os.fchmod(stream.fileno(), mode)
+                    stream.write(payload)
+                    stream.flush()
+                    os.fsync(stream.fileno())
                 current = self._file_image(path.name, HOOK_LIMIT, directory=directory)
                 if expected is not None and current != expected:
                     raise HookRefusal('file_changed_after_planning')
                 if not os.path.samestat(os.fstat(directory), path.parent.lstat()):
                     raise HookRefusal('parent_changed_after_planning')
-                if payload is None:
-                    os.unlink(path.name, dir_fd=directory)
-                elif current[0] is None:
+                if current[0] is None:
                     os.link(temporary, path.name, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
                 else:
                     os.replace(temporary, path.name, src_dir_fd=directory, dst_dir_fd=directory)
                 os.fsync(directory)
             finally:
-                if payload is not None:
-                    try:
-                        os.unlink(temporary, dir_fd=directory)
-                    except FileNotFoundError:
-                        pass
+                try:
+                    os.unlink(temporary, dir_fd=directory)
+                except FileNotFoundError:
+                    pass
 
     def _unit_bytes(self):
         data=self._read_file(self.path)
@@ -390,7 +387,7 @@ class LinuxUserService:
             return None, None
         except (OSError, RegistrationError) as error:
             raise HookRefusal('linked_foreign_or_oversized_file') from error
-        if mode is not None and mode & 0o7022:
+        if mode is not None and mode & 0o7002:
             raise HookRefusal('unsafe_file_mode')
         return data, mode
 
@@ -409,15 +406,13 @@ class LinuxUserService:
         marker = '# Second Brain added the preceding newline\n' if separator else ''
         return (BOOT_MARK_BEGIN + '\n' + marker + command + '\n' + BOOT_MARK_END + '\n').encode()
 
-    def _profile_change(self, data, *, remove):
+    def _profile_change(self, data):
         data = data or b''
         begin, end = BOOT_MARK_BEGIN.encode(), BOOT_MARK_END.encode()
         lines = data.split(b'\n')
         if begin not in lines and end not in lines:
             if any(line.removesuffix(b'\r') in (begin, end) for line in lines):
                 raise HookRefusal('malformed_profile_block')
-            if remove:
-                return data
             separator = bool(data and not data.endswith(b'\n'))
             return data + (b'\n' if separator else b'') + self._profile_block(separator=separator)
         if lines.count(begin) != 1 or lines.count(end) != 1:
@@ -428,9 +423,6 @@ class LinuxUserService:
                                  (self._profile_block(separator=True), True)):
             if data.startswith(block, start) and (not separator or start > 0):
                 stop = start + len(block)
-                if remove:
-                    # Keep a necessary delimiter when owner content follows the block.
-                    return data[:start - (1 if separator and stop == len(data) else 0)] + data[stop:]
                 return data[:start] + self._profile_block(separator=separator) + data[stop:]
         raise HookRefusal('foreign_profile_block')
 
@@ -445,8 +437,8 @@ class LinuxUserService:
                 'Comment=Start the local Second Brain service\nExec=' + command +
                 '\nTerminal=false\nX-GNOME-Autostart-enabled=true\n').encode()
 
-    def hook_images(self, python=None, *, skips=None, remove=False):
-        """Plan exact byte and mode transitions. Cron edits are explicit operations."""
+    def hook_images(self, python=None, *, skips=None):
+        """Plan exact byte and mode transitions for the file-backed hooks."""
         python = self.keeper_argv[0] if python is None else python
         boot, mode = self._hook_file(self.boot_path, HOOK_LIMIT)
         candidate_boot = self._boot_script(python)
@@ -454,28 +446,24 @@ class LinuxUserService:
                       self._boot_script(self.keeper_argv[0]), candidate_boot}
         if boot is not None and boot not in known_boot:
             raise HookRefusal('foreign_boot_start')
-        boot_image = (self.boot_path, boot, mode, None if remove else candidate_boot, None if remove else 0o700)
-        images = []
+        images = [(self.boot_path, boot, mode, candidate_boot, 0o700)]
         profile = self.home / '.profile'
         desktop = self.home / '.config' / 'autostart' / 'second-brain.desktop'
         for path in (profile, desktop):
             try:
                 data, mode = self._hook_file(path, HOOK_LIMIT)
                 if path == profile:
-                    changed = self._profile_change(data, remove=remove)
-                    if data is None and remove:
-                        continue
+                    changed = self._profile_change(data)
                 else:
                     if data is not None and data not in (self._desktop_body(legacy=True), self._desktop_body()):
                         raise HookRefusal('foreign_desktop_entry')
-                    changed = None if remove else self._desktop_body()
-                new_mode = (0o644 if mode is None else mode) if changed is not None else None
+                    changed = self._desktop_body()
+                new_mode = 0o644 if mode is None else mode
                 images.append((path, data, mode, changed, new_mode))
             except (OSError, HookRefusal) as error:
                 if skips is not None:
                     skips.append({'path': str(path), 'reason': getattr(error, 'reason', 'inaccessible_file')})
-        ordered = [*images, boot_image] if remove else [boot_image, *images]
-        return [image for image in ordered if image[1:3] != image[3:5]]
+        return [image for image in images if image[1:3] != image[3:5]]
 
     def _apply_hook(self, image):
         path, before, mode, after, new_mode = image
@@ -487,10 +475,10 @@ class LinuxUserService:
         skips = []
         for image in self.hook_images(skips=skips):
             self._apply_hook(image)
-        self._edit_crontab(remove=False, skips=skips)
+        self._install_crontab(skips)
         return skips
 
-    def _edit_crontab(self, *, remove, skips):
+    def _install_crontab(self, skips):
         binary = shutil_which('crontab')
         if not binary:
             return
@@ -501,18 +489,12 @@ class LinuxUserService:
                 raise HookRefusal('unsupported_crontab_path')
             owned = ('@reboot ' + shlex.quote(str(self.boot_path)) + ' # ' + CRON_MARK).encode()
             before = _read_crontab(binary)
-            rows = before.splitlines(keepends=True)
-            matching = [row for row in rows if row.removesuffix(b'\n') == owned]
-            if len(matching) > 1:
+            matching = sum(row.removesuffix(b'\n') == owned for row in before.splitlines(keepends=True))
+            if matching > 1:
                 raise HookRefusal('duplicate_crontab_entry')
-            if remove:
-                after = b''.join(row for row in rows if row not in matching)
-            elif matching:
+            if matching:
                 return
-            else:
-                after = before + (b'\n' if before and not before.endswith(b'\n') else b'') + owned + b'\n'
-            if before == after:
-                return
+            after = before + (b'\n' if before and not before.endswith(b'\n') else b'') + owned + b'\n'
             if _read_crontab(binary) != before:
                 raise HookRefusal('crontab_changed_after_planning')
             result = subprocess.run([binary, '-'], input=after, stdout=subprocess.DEVNULL,
@@ -522,28 +504,6 @@ class LinuxUserService:
         except (OSError, subprocess.SubprocessError, HookRefusal) as error:
             skips.append({'path': 'crontab', 'reason': getattr(error, 'reason', 'crontab_unavailable')})
 
-    def withdraw(self):
-        """Withdraw an owned, disabled service after removing its boot entry points."""
-        current = self.inspect(prove_main=False)
-        if not current['quiescent'] or current['running'] or current['enabled']:
-            raise RegistrationError('Disable and stop the user service before withdrawal.')
-        skips = self.remove_boot_hooks()
-        if any(skip['path'] == 'crontab' for skip in skips):
-            raise HookRefusal('crontab_withdrawal_unverified')
-        for path in (self.path, self.enabled_path):
-            prior = self._hook_file(path, 65536)
-            if prior[0] is not None:
-                self._write(path, None, None, expected=prior)
-        if self.path.exists() or self.enabled_path.exists():
-            raise RegistrationError('User service definition was not removed.')
-        return skips
-
-    def remove_boot_hooks(self):
-        skips = []
-        for image in self.hook_images(skips=skips, remove=True):
-            self._apply_hook(image)
-        self._edit_crontab(remove=True, skips=skips)
-        return skips
 
 def _read_crontab(binary):
     import selectors
@@ -617,7 +577,7 @@ def supervise():
             if child.poll() is None:
                 time.sleep(.25);continue
             child=None
-            restart_after=time.monotonic()+10
+            restart_after=time.monotonic()+RESTART_BACKOFF
         if time.monotonic()<restart_after:
             time.sleep(.25);continue
         try:
@@ -651,6 +611,7 @@ def supervise():
             pass
         except Exception as error:
             lifecycle.set_blocked(service,error)
+            restart_after=time.monotonic()+RESTART_BACKOFF
         finally:
             # A controller waiting for keeper exit holds service-control.lock.
             # Exiting does not require that lock, and the controller owns cleanup.

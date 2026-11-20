@@ -3,7 +3,11 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import secrets
+import shutil
+import subprocess
 import sys
+import time
 from types import SimpleNamespace
 import pytest
 
@@ -205,6 +209,65 @@ def test_grok_probe_is_given_generated_platform_argv(acceptance,monkeypatch,caps
     assert check_setup.main()==0
     assert seen==[helpers.connection_spec(root,python)]
     assert 'PASS   Grok Bot server:' in capsys.readouterr().out
+
+
+@pytest.mark.skipif(sys.platform!='linux',reason='Real Linux launcher, TCP inventory and /proc ownership.')
+def test_grok_acceptance_handshakes_through_the_real_launcher(acceptance,capfd):
+    check_setup,_,_,_,root,python=acceptance
+    app=root/'app';app.mkdir()
+    for name in ('brain_client.py','brain_process.py','brain_linux_identity.py','brain_settings.py'):
+        shutil.copyfile(SOURCE/'app'/name,app/name)
+    state=root/'state'
+    (state/'client-access.json').write_text(json.dumps({'token':secrets.token_urlsafe(24)}),encoding='utf-8')
+    (app/'brain_cli.py').write_text(
+        "import json, sys\n"
+        "print(json.dumps({'status':'verified'} if sys.argv[1]=='index' else\n"
+        "    {'status':'running','version':'0.2.14','vault_exists':True,'database_exists':True}))\n",
+        encoding='utf-8')
+    (app/'brain_supervisor.py').write_text(
+        "import json, os, subprocess, sys\nfrom pathlib import Path\n"
+        "app=Path(__file__).parent\n"
+        "(app.parent/'state/service-pids.json').write_text(json.dumps({'supervisor':os.getpid()}))\n"
+        "with subprocess.Popen([sys.executable,'-B',str(app/'brain_server.py')]) as child:\n"
+        "    try: sys.stdin.buffer.read()\n"
+        "    finally: child.kill(); child.wait(timeout=5)\n",encoding='utf-8')
+    (app/'brain_server.py').write_text(
+        "import json, socket\nfrom pathlib import Path\n"
+        "from fastmcp import FastMCP\nfrom fastmcp.server.auth import StaticTokenVerifier\n"
+        "from uvicorn import Config, Server\n"
+        "root=Path(__file__).parent.parent\n"
+        "token=json.loads((root/'state/client-access.json').read_text())['token']\n"
+        "server=FastMCP('fixture',auth=StaticTokenVerifier(tokens={token:{'client_id':'fixture'}}))\n"
+        "def fixture_tool() -> str: return 'fixture'\n"
+        "for suffix in ('context','search','read','capture','update_current','health'):\n"
+        "    server.tool(fixture_tool,name='brain_'+suffix)\n"
+        "with socket.socket() as listener:\n"
+        "    listener.bind(('127.0.0.1',0))\n"
+        "    listener.listen()\n"
+        "    device=root/'device.json'\n"
+        "    pending=device.with_suffix('.tmp')\n"
+        "    pending.write_text(json.dumps({**json.loads(device.read_text()),'port':listener.getsockname()[1]}))\n"
+        "    pending.replace(device)\n"
+        "    Server(Config(server.http_app(path='/mcp'),log_level='warning')).run(sockets=[listener])\n",
+        encoding='utf-8')
+    # Launch a synthetic supervisor from a fixture entrypoint. The sandbox has no service dispatcher.
+    fixture=root/'fixture-supervisor.py'
+    fixture.write_text(
+        "import os, sys\nfrom pathlib import Path\n"
+        "os.execv(sys.executable,[sys.executable,'-B',str(Path(__file__).parent/'app/brain_supervisor.py')])\n",
+        encoding='utf-8')
+    supervisor=subprocess.Popen([str(python),'-B',str(fixture)],stdin=subprocess.PIPE,
+                                env=helpers.connection().probe_environment())
+    try:
+        deadline=time.monotonic()+20
+        while 'port' not in json.loads((root/'device.json').read_text(encoding='utf-8')):
+            assert supervisor.poll() is None and time.monotonic()<deadline, 'fixture listener did not start'
+            time.sleep(.05)
+        assert check_setup.main()==0
+        assert 'PASS   Grok Bot server: the command offered the six tools' in capfd.readouterr().out
+    finally:
+        supervisor.stdin.close()
+        supervisor.wait(timeout=10)
 
 
 def test_grok_health_blocker_preserves_reason_without_running_stdio(acceptance,monkeypatch,capsys):

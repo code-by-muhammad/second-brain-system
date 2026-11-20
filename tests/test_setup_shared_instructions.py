@@ -135,9 +135,9 @@ def test_one_shared_skill_copy_is_written_once(owner):
 
 
 @pytest.mark.parametrize('drift_after_planning',[False,True])
-def test_clients_only_adds_missing_codex_pieces_after_rechecking_installed_app(owner,monkeypatch,capsys,drift_after_planning):
+def test_clients_only_adds_missing_claude_code_pieces_after_rechecking_installed_app(owner,monkeypatch,capsys,drift_after_planning):
     """An installed device can gain a client later; nothing is redeployed and the service is not touched."""
-    home,root,python=owner;root.mkdir();vault=root.parent/'vault';vault.mkdir()
+    home,root,_=owner;root.mkdir();vault=root.parent/'vault';vault.mkdir()
     release=root.parent/'candidate';(release/'app').mkdir(parents=True);(release/'docs').mkdir()
     shutil.copyfile(SOURCE/'docs/AI-PROTOCOL.md',release/'docs/AI-PROTOCOL.md')
     shutil.copyfile(SOURCE/'app/brain_release.py',release/'app/brain_release.py')
@@ -156,7 +156,7 @@ def test_clients_only_adds_missing_codex_pieces_after_rechecking_installed_app(o
     monkeypatch.setattr(installer.Path,'home',classmethod(lambda cls:home))
     monkeypatch.setattr(helpers.Path,'home',classmethod(lambda cls:home))
     monkeypatch.setattr(sys,'argv',['install.py','--root',str(root),'--vault',str(vault),'--configure-clients','--clients-only',
-                                    '--clients','codex','--no-hooks','--reuse-python',sys.executable])
+                                    '--client','claude-code','--include-hooks','--reuse-python',sys.executable])
     if drift_after_planning:
         plan_clients=installer.sealed_client_plan
         def drift(*args,**kwargs):
@@ -165,17 +165,17 @@ def test_clients_only_adds_missing_codex_pieces_after_rechecking_installed_app(o
             return value
         monkeypatch.setattr(installer,'sealed_client_plan',drift)
         with pytest.raises(ValueError,match='complete release manifest'):installer.main()
-        assert not (home/'.codex').exists() and not (root/'bin').exists()
+        assert not (home/'.claude.json').exists() and not (home/'.claude').exists() and not (root/'bin').exists()
         return
     installer.main()
     receipt=json.loads(capsys.readouterr().out)
     assert receipt['status']=='clients refreshed' and not receipt['client_result']['deferred']
-    import tomllib
-    entry=tomllib.loads((home/'.codex/config.toml').read_text())['mcp_servers']['second-brain']
-    assert {key:entry[key] for key in ('command','args')}==helpers.connection_spec(root,sys.executable)
-    assert not (home/'.claude/settings.json').exists()
-    assert (home/'.codex/AGENTS.md').read_text().count(helpers.BEGIN)==1
-    assert (home/'.codex/skills/second-brain/SKILL.md').read_bytes()==(SOURCE/'skills/second-brain/SKILL.md').read_bytes()
+    entry=json.loads((home/'.claude.json').read_text())['mcpServers']['second-brain']
+    assert entry==helpers.connection_spec(root,sys.executable)
+    hooks=json.loads((home/'.claude/settings.json').read_text())['hooks']
+    assert set(hooks)=={'SessionStart','Stop'}
+    assert (home/'.claude/CLAUDE.md').read_text().count(helpers.BEGIN)==1
+    assert (home/'.claude/skills/second-brain/SKILL.md').read_bytes()==(SOURCE/'skills/second-brain/SKILL.md').read_bytes()
     assert json.loads((root/'device.json').read_text())==device
 
 

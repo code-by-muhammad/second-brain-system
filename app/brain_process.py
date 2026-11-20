@@ -599,24 +599,19 @@ def _listeners():
             pid = getattr(row, 'pid', None)
             fd = getattr(row, 'fd', -1)
             lifetime = None
-            birth = None
-            if type(pid) is int and pid > 0:
+            if sys.platform == 'linux' and type(pid) is int and pid > 0:
                 try:
-                    if sys.platform == 'linux':
-                        lifetime = _linux_lifetime(pid)
-                    else:
-                        process = psutil.Process(pid)
-                        if process.is_running() and process.status() != psutil.STATUS_ZOMBIE:
-                            birth = int(process.create_time()*10_000_000)+116444736000000000
+                    lifetime = _linux_lifetime(pid)
                 except (OwnershipError, psutil.Error, OSError):
                     pass
-            identity = tuple(sorted(lifetime.items())) if lifetime else birth
+            identity = tuple(sorted(lifetime.items())) if lifetime else None
             key = (pid, identity, fd, getattr(row, 'family', None), getattr(row, 'type', None), row.laddr.ip, row.laddr.port)
             if identity is not None and fd >= 0:
                 if key in seen:
                     continue
                 seen.add(key)
-            result.append(SimpleNamespace(pid=pid, lifetime=lifetime, birth=birth,
+            # On Windows, inspect() reads the exact FILETIME from a process handle.
+            result.append(SimpleNamespace(pid=pid, lifetime=lifetime, birth=None,
                                           laddr=row.laddr, status=row.status))
         return result
     except (psutil.Error,OSError) as error:

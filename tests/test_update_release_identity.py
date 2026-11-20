@@ -209,7 +209,11 @@ def test_public_entrypoint_verifies_before_loading_real_sibling(release_case,mon
     assert not marker.exists() and not (root/'state').exists() and effects==[]
     assert before=={p.relative_to(root).as_posix():p.read_bytes() for p in root.rglob('*') if p.is_file()}
 
-@pytest.mark.parametrize('name',['yaml.pyd','filelock.cp312-win_amd64.pyd','json.pyc','pkg/__init__.pyc'])
+@pytest.mark.parametrize('name',[
+    pytest.param('yaml.pyd', marks=pytest.mark.skipif(os.name!='nt', reason='.pyd is importable only on Windows')),
+    pytest.param('filelock.cp312-win_amd64.pyd', marks=pytest.mark.skipif(os.name!='nt', reason='.pyd is importable only on Windows')),
+    'json.pyc','pkg/__init__.pyc',
+])
 def test_untracked_importable_controller_files_are_refused(release_case,name):
     updater,_,release,_,_,_,_,make,_=release_case;make(release)
     path=release/'app'/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'Synthetic inert payload, never execute.')

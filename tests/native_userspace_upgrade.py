@@ -332,7 +332,14 @@ def main():
         assert app_map(root) == original and old_images(root, home) == preimages
     elif args.scenario == 'rollback':
         verify_quiet(str(previous_python), root)
-        inject_post_health_failure(target, root, previous_python)
+        script = '''
+import runpy, sys
+from pathlib import Path
+harness, target, root = map(Path, sys.argv[1:])
+inject = runpy.run_path(str(harness))['inject_post_health_failure']
+inject(target, root, Path(sys.executable))
+'''
+        run(previous_python, '-I', '-B', '-c', script, Path(__file__).resolve(), target, root)
         assert app_map(root) == original and old_images(root, home) == preimages
         cold_stdio(previous_python, root, home, '0.2.15')
     else:

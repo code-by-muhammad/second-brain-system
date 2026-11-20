@@ -94,6 +94,7 @@ def test_corrupt_saved_app_refuses_before_live_bytes_change(installation):
 def test_rollback_stop_runs_outside_parent_work_locks_and_uses_new_controller(installation,monkeypatch,switch):
     h=installation;saved=updater.snapshot(h.root,sys.executable,h.plan,registration=h.registration)
     held=[];events=[]
+    transaction=h.root/'state/service-transaction.json'
     class Locks:
         def __enter__(self):held.append(True)
         def __exit__(self,*args):held.clear()
@@ -103,11 +104,13 @@ def test_rollback_stop_runs_outside_parent_work_locks_and_uses_new_controller(in
         assert str(checkout)=='new-reviewed-checkout' and python==sys.executable
         if action in ('stop','start','finish'):assert not held
         if action=='install':assert bool(held)==switch
-        if action=='stop':return {'status':'stopped','empty_at_filetime':123}
+        if action=='stop':
+            transaction.write_text(json.dumps({'hold_id':'a'*32,'root':str(root),'snapshot':str(saved),
+                'snapshot_sha256':hashlib.sha256((saved/'snapshot.json').read_bytes()).hexdigest(),'stage':'stopped'}))
+            return {'status':'stopped','empty_at_filetime':123}
         if action=='finish':return {'status':'transaction released','hold_id':'a'*32}
         return {'status':action,'restored':'sealed-restored','definition_sha256':h.registration['definition_sha256']}
     monkeypatch.setattr(updater,'controller',controller)
-    monkeypatch.setattr(updater,'_check_held',lambda *args:None)
     monkeypatch.setattr(updater,'wait_health',lambda *args,**kwargs:{'status':'running','version':'0.1.7'})
     result=updater._restart_previous(h.root,saved,sys.executable,'new-reviewed-checkout','a'*32,restore_bytes=switch)
     assert events==(['stop','install'] if switch else [])+['start','finish']

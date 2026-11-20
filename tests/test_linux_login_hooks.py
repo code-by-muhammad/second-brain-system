@@ -7,7 +7,9 @@ import pytest
 
 import brain_linux_user_service as user
 import brain_process as processes
+import brain_service as controller
 import brain_settings as cfg
+from test_portable_remediation import load
 
 pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='requires Linux account and directory-handle hook semantics')
 
@@ -16,11 +18,12 @@ pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='requires Linux 
 def registration(monkeypatch):
     monkeypatch.setattr(user, 'account_home', lambda: Path.home().resolve())
     monkeypatch.setattr(user, 'shutil_which', lambda name: None)
+    monkeypatch.setattr(user, 'pid1_comm', lambda: 'tini')
     return user.LinuxUserService('second-brain.service', cfg.ROOT, processes._selected_python(),
                                  current_python=cfg.PYTHON)
 
 
-def test_exact_profile_bytes_and_mode_round_trip(registration):
+def test_profile_install_preserves_exact_bytes_and_mode(registration):
     profile = registration.home / '.profile'
     original = b'# owner bytes \xff\r\nexport OWNER_SETTING=yes'
     profile.write_bytes(original)
@@ -33,10 +36,34 @@ def test_exact_profile_bytes_and_mode_round_trip(registration):
     assert not registration._install_boot()
     assert profile.read_bytes() == installed
     assert registration.boot_path.stat().st_mode & 0o777 == 0o700
-    assert not registration.remove_boot_hooks()
-    assert profile.read_bytes() == original
-    assert profile.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize('original', [None, b'', b'# owner bytes \xff\r\nexport OWNER_SETTING=yes'])
+def test_profile_rollback_restores_absence_or_exact_original(registration, tmp_path, original):
+    profile = registration.home / '.profile'
+    if original is not None:
+        profile.write_bytes(original)
+        profile.chmod(0o600)
+    target = tmp_path / 'snapshot'
+    target.mkdir()
+    images = [('unit', registration.path, (None, None), (registration.installable, 0o644), 'native'),
+              ('activation', registration.enabled_path, (None, None), (b'false\n', 0o644), 'native')]
+    images.extend(('hook', path, (before, mode), (after, new_mode), 'native')
+                  for path, before, mode, after, new_mode in registration.hook_images())
+    artifacts = load('update')._seal_artifacts(target, images)
+    snapshot = {'root': str(cfg.ROOT), 'deployment': {'hold_id': 'a' * 32, 'service_policy': 'first',
+                'target_app_sha256': {}, 'artifacts': artifacts}}
+    value = {'snapshot': str(target)}
+
+    controller._publish_native_images(registration, value, snapshot, restoring=False)
+    assert user.BOOT_MARK_BEGIN.encode() in profile.read_bytes()
+    controller._publish_native_images(registration, value, snapshot, restoring=True)
     assert not registration.boot_path.exists()
+    if original is None:
+        assert not profile.exists()
+    else:
+        assert profile.read_bytes() == original
+        assert profile.stat().st_mode & 0o777 == 0o600
 
 
 def test_profile_marker_and_foreign_desktop_are_preserved(registration):
@@ -50,7 +77,6 @@ def test_profile_marker_and_foreign_desktop_are_preserved(registration):
     desktop.write_bytes(foreign)
     skips = registration._install_boot()
     assert {row['reason'] for row in skips} == {'foreign_profile_block', 'foreign_desktop_entry'}
-    registration.remove_boot_hooks()
     assert (profile.read_bytes(), desktop.read_bytes()) == (original, foreign)
 
 
@@ -80,7 +106,7 @@ def test_guarded_hook_write_refuses_parent_swap(registration, tmp_path):
     assert list(outside.iterdir()) == []
 
 
-def test_explicit_crontab_edits_only_exact_owned_entry_and_reports_fault(registration, monkeypatch, tmp_path):
+def test_ordinary_install_adds_crontab_entry_once_and_reports_fault(registration, monkeypatch, tmp_path):
     table = registration.home / 'test-crontab'
     other = b'@reboot /usr/bin/echo "second-brain-user-service" # unrelated\n'
     table.write_bytes(other)
@@ -91,15 +117,13 @@ def test_explicit_crontab_edits_only_exact_owned_entry_and_reports_fault(registr
                       '  *) exit 2;;\nesac\n', encoding='ascii')
     binary.chmod(0o700)
     monkeypatch.setattr(user, 'shutil_which', lambda name: str(binary))
+    monkeypatch.setenv('SB_CRON_WRITE_FAIL', 'yes')
+    assert registration._install_boot() == [{'path': 'crontab', 'reason': 'crontab_write_unverified'}]
+    assert table.read_bytes() == other
+    monkeypatch.delenv('SB_CRON_WRITE_FAIL')
     skips = registration._install_boot()
     assert not skips
     installed = table.read_bytes()
     assert installed.startswith(other) and installed.count(b'@reboot') == 2
     assert not registration._install_boot()
     assert table.read_bytes() == installed
-    monkeypatch.setenv('SB_CRON_WRITE_FAIL', 'yes')
-    assert registration.remove_boot_hooks() == [{'path': 'crontab', 'reason': 'crontab_write_unverified'}]
-    assert table.read_bytes() == installed
-    monkeypatch.delenv('SB_CRON_WRITE_FAIL')
-    assert not registration.remove_boot_hooks()
-    assert table.read_bytes() == other

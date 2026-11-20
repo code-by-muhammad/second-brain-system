@@ -146,7 +146,7 @@ def _forward_release(root,version):
     if not {'sealed-client-refresh-v1','owned-service-control-v1'}<=set(info.get('capabilities',[])):
         raise ValueError('Target release does not support safe client refresh/recovery; no service or client changes made.')
     _bind_release(info)
-    if HELD_DEPLOYMENT in info.get('capabilities',[]) or info['version']=='0.2.16':
+    if HELD_DEPLOYMENT in info.get('capabilities',[]):
         data,_=release_helpers().file_image(release/CATALOG)
         if data is None or _digest(data)!=info['sha256'].get(CATALOG):
             raise ValueError('Release predecessor catalog is absent or changed.')
@@ -448,7 +448,7 @@ def verify(checkout,*,version=None):
             raise ValueError('Cached release manifest does not describe its committed tag payload.')
     required={'install.py','update.py','pyproject.toml','uv.lock'} | {p.relative_to(checkout).as_posix() for p in (checkout/'app').rglob('*.py')}
     if 'sealed-client-refresh-v1' in manifest.get('capabilities',[]):required.add('setup_runtime.py')
-    if HELD_DEPLOYMENT in manifest.get('capabilities',[]) or manifest.get('version')=='0.2.16':
+    if HELD_DEPLOYMENT in manifest.get('capabilities',[]):
         required.update({CATALOG,'app/brain_release.py','app/brain_index_worker.py','app/brain_index_bootstrap.py'})
     if not required <= set(manifest['sha256']): raise ValueError('Release manifest omits executable or dependency files.')
     for relative,expected in manifest['sha256'].items():
@@ -464,7 +464,7 @@ def verify(checkout,*,version=None):
         dirs[:]=[name for name in dirs if name!='__pycache__']
         for name in files:
             target=parent/name
-            if any(name.endswith(suffix) for suffix in (*importlib.machinery.all_suffixes(),'.pyd','.so')) and target.relative_to(checkout).as_posix() not in manifest['sha256']:
+            if any(name.endswith(suffix) for suffix in importlib.machinery.all_suffixes()) and target.relative_to(checkout).as_posix() not in manifest['sha256']:
                 raise ValueError('Unexpected importable controller payload; preserve the cache for review.')
     return {**manifest,'git_identity':identity} if identity is not None else manifest
 
@@ -600,9 +600,8 @@ def _restart_previous(root,saved,python,checkout,hold,*,restore_bytes=True):
         started=controller(python,checkout,root,'service','start','--hold-id',hold,'--allow-legacy')
         health=wait_health(python,root,previous['version'],checkout=checkout)
     finished=_finish(root,saved,python,checkout,hold,previous['version'],*(() if absent else ('--allow-legacy',)))
-    _retire_displacement(root,saved,hold)
     return {'status':'previous runtime restored','version':previous['version'],'health':health,'start':started,
-            'finish':finished,'previous_binding':binding,**recovery}
+            'finish':finished,'previous_binding':binding,**recovery,**_displacement_cleanup(root,saved,hold)}
 
 
 def _restore_previous_binding(root,saved):
@@ -677,7 +676,7 @@ def recover(root,hold,checkout=None):
             version=completed[1]
             flags=('--allow-legacy',) if version==value['previous']['version'] else ()
             result={'version':version,'finish':_finish(root,saved,python,checkout,hold,version,*flags)}
-            _retire_displacement(root,saved,hold)
+            result.update(_displacement_cleanup(root,saved,hold))
     except BaseException as error:
         _receipt(root,{**_recovery_receipt_fields(root,hold,saved),'snapshot':str(saved) if saved is not None else None,'error_type':type(error).__name__,'pending_work':'preserved'})
         raise
@@ -856,6 +855,15 @@ def _retire_displacement(root,saved,hold):
         if release.inventory(path)==expected:shutil.rmtree(path)
 
 
+def _displacement_cleanup(root,saved,hold):
+    """Preserve the committed outcome if optional post-release cleanup fails."""
+    try:
+        _retire_displacement(root,saved,hold)
+    except Exception as error:
+        return {'displacement_cleanup':{'status':'incomplete','error_type':type(error).__name__}}
+    return {}
+
+
 def perform(root,version,migrate_wiki=False,requeue_unverified=False,*,uv=None,desktop_config=None,skip_desktop=False,
             no_service=False,clients=None,no_hooks=False):
     _qualified_platform()
@@ -995,13 +1003,13 @@ def perform(root,version,migrate_wiki=False,requeue_unverified=False,*,uv=None,d
             raise RuntimeError('Upgrade recovery is incomplete; preserve pending work and use the recorded exact recovery UUID.') from recovery_error
         proof='service absence verified' if policy!='registered' else 'previous runtime health verified'
         raise RuntimeError('Upgrade failed; '+proof+'. Inspect upgrade-status.json for preserved client edits.') from error
-    _retire_displacement(root,saved,hold)
     clients=installed.get('client_result',{})
     deferred=clients.get('deferred',[])
     return _receipt(root,{'status':'updated','version':info['version'],'release_identity':info.get('git_identity'),'hold_id':hold,
         'snapshot':str(saved),'previous':previous,'predecessor':accepted[1],'service_policy':policy,
         'first_user_service':policy=='first','health':health,'start':started,'finish':finished,'wiki_migration':migration,
         'clients':clients,'client_overwrites_after_health':overwritten,'native_hook_skips':native_hook_skips,
+        **_displacement_cleanup(root,saved,hold),
         'client_acceptance':'pending refresh/named-client verification' if deferred or overwritten else 'configuration checked; named-client verification pending'})
 
 

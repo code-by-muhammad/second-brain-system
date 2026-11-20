@@ -50,7 +50,9 @@ def prepare(portable,monkeypatch,*,previous_version='0.1.0',target_version='0.1.
         h.events.append({'kind':'provision'});return Path(sys.executable)
     monkeypatch.setattr(support,'provision',provision)
     target_hashes={'app/brain_cli.py':hashlib.sha256((release/'app/brain_cli.py').read_bytes()).hexdigest()}
+    capabilities=['sealed-client-refresh-v1','owned-service-control-v1']
     if target_version=='0.2.16':
+        capabilities.append('held-deployment-v1')
         catalog=release/'predecessor-builds.json'
         catalog.write_text(json.dumps({'format':1,'repository':release_helper.REPOSITORY,'builds':[{
             'version':previous_version,'app_sha256':{name.removeprefix('app/'):sha for name,sha in payload.items()},
@@ -60,7 +62,7 @@ def prepare(portable,monkeypatch,*,previous_version='0.1.0',target_version='0.1.
         if checkout==old:
             manifest=json.loads((old/'release-manifest.json').read_bytes())
             return {**manifest,'git_identity':{'tag':'v'+previous_version,'commit':'synthetic-predecessor'}}
-        return {'version':target_version,'capabilities':['sealed-client-refresh-v1','owned-service-control-v1'],
+        return {'version':target_version,'capabilities':capabilities,
                 'sha256':target_hashes,'git_identity':{'tag':'v'+target_version,'commit':'synthetic-candidate'}}
     monkeypatch.setattr(updater,'verify',verify)
 

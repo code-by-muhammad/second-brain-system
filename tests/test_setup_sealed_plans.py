@@ -97,18 +97,46 @@ def test_refresh_only_requires_same_release_and_recorded_python_before_provision
     assert not (home/'.codex/config.toml').exists()
 
 
-def test_malformed_unowned_refresh_preserved_but_owned_duplicate_json_refused(owner):
-    home,root,python=owner;path=home/'.claude.json'
+def test_refresh_preserves_unowned_parse_failure_and_duplicate_json(owner):
+    home,root,_=owner;path=home/'.claude.json'
     path.write_text('{unrelated-bad')
     preserved=plan(owner,selected=['claude-code'],refresh=True)
     assert all(not row['path'].endswith('.claude.json') for row in preserved['files'])
-    assert any(row['reason']=='unparseable; ownership not inspected' for row in preserved['skipped'])
+    assert any(row['path']==str(path) and row['code']=='unparseable_unowned' for row in preserved['skipped'])
     path.write_text('{"root":'+json.dumps(str(root))+',"mcpServers":{},"mcpServers":{}}')
     before=path.read_bytes()
-    with pytest.raises(helpers.ClientPlanError) as refused:
-        plan(owner,selected=['claude-code'],refresh=True)
-    assert isinstance(refused.value.__cause__,helpers.DuplicateJSONError)
+    preserved=plan(owner,selected=['claude-code'],refresh=True)
+    assert all(row['path']!=str(path) for row in preserved['files'])
+    assert any(row['path']==str(path) and row['code']=='duplicate_json' for row in preserved['skipped'])
     assert path.read_bytes()==before
+
+
+@pytest.mark.parametrize('hooks',[[],{'Stop':{}},{'Stop':[{'hooks':{}}]},{'Stop':[{'hooks':[0]}]}])
+def test_refresh_skips_malformed_hook_shapes_naming_this_runtime(owner,hooks):
+    home,root,_=owner;path=home/'.claude/settings.json';path.parent.mkdir()
+    path.write_text(json.dumps({'root':str(root),'hooks':hooks}))
+    before=path.read_bytes()
+    result=plan(owner,selected=['hooks'],refresh=True)
+    assert result['files']==[]
+    assert result['skipped'][0]['code']=='malformed'
+    assert path.read_bytes()==before
+
+
+@pytest.mark.parametrize('client',['claude-code','codex'])
+def test_refresh_aborts_on_syntax_error_naming_this_runtime(owner,client):
+    home,root,_=owner
+    if client=='claude-code':
+        path=home/'.claude.json'
+        raw='{"root":'+json.dumps(str(root))+',"a":0,"a":1} trailing content'
+        parse_error=json.JSONDecodeError
+    else:
+        path=home/'.codex/config.toml'
+        raw='root = '+json.dumps(str(root))+'\n[unterminated\n'
+        parse_error=tomllib.TOMLDecodeError
+    path.write_text(raw)
+    with pytest.raises(helpers.ClientPlanError,match='Unparseable client file names this runtime') as refused:
+        plan(owner,selected=[client],refresh=True)
+    assert isinstance(refused.value.__cause__,parse_error)
 
 
 def test_client_planning_uses_types_instead_of_diagnostic_words(owner,monkeypatch):
@@ -164,6 +192,26 @@ def test_authorized_in_home_client_leaf_and_parent_swap_are_confined(owner,monke
     with pytest.raises(OSError):
         installer.write_client(target,b'{}',expected_sha256=row['after_sha256'])
     assert (external/target.name).read_bytes()==after
+
+
+@pytest.mark.skipif(os.name!='posix',reason='uses POSIX file permission bits')
+@pytest.mark.parametrize('refresh',[False,True])
+def test_user_owned_group_writable_client_paths_are_accepted(owner,monkeypatch,refresh):
+    home,root,_=owner
+    monkeypatch.setattr(Path,'home',classmethod(lambda cls:home))
+    codex=home/'.codex/config.toml'
+    codex.parent.chmod(0o775)
+    codex.write_text('[mcp_servers.second-brain]\nargs=['+json.dumps(str(root/'app/brain_client.py'))+']\n')
+    claude=home/'.claude.json'
+    claude.write_text(json.dumps({'mcpServers':{'second-brain':{'args':[str(root/'app/brain_client.py')]}}}))
+    claude.chmod(0o664)
+    selected=['claude-code','codex']
+    value=plan(owner,selected=selected,refresh=refresh)
+    helpers.authorize_plan(value,selected=selected)
+    receipt=helpers.apply(value,installer.write_client,lambda *args:None,root)
+    assert {str(claude),str(codex)}<=set(receipt['changed'])
+    assert not receipt['deferred']
+    assert stat.S_IMODE(claude.stat().st_mode)==0o664
 
 
 @pytest.mark.skipif(os.name!='posix',reason='injects a POSIX directory swap during guarded rollback staging')

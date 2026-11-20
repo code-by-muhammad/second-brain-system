@@ -16,7 +16,10 @@ uv run --no-project --python 3.12 python -I -B \
 
 The held transaction seals the old app, device, launcher, deployment artifacts, selected client images and affected Linux registration files. Rollback verifies native quiescence before restoring these images. It preserves and reports concurrent assistant-file edits. A conflicting mandatory artifact or unverified stop/withdrawal retains the hold for exact-UUID recovery. Keep the snapshot, private receipt and recorded controller interpreter.
 
+Run manual recovery from the original verified v0.2.16 release folder.
+
 ```bash
+cd "$verified_v0216_checkout"
 "$controller_python" -I -B "$verified_v0216_checkout/update.py" \
   --root "$runtime" --recover --hold-id "$recorded_hold_id"
 ```
@@ -29,7 +32,7 @@ First service registration can run under the same hold on proven-unregistered no
 
 On Linux without systemd, the service suspends new launches, drains the exact enrolled bootstrap and index worker by boot-relative lifetime, and verifies process and port absence before completing a stop. Managed drain and transient launch deferrals remain eligible for a later authorized attempt. Unknown listener ownership, multiple sockets and wildcard bindings block authenticated probing. `service inspect`, local `health` and setup check surface the blocked cleanup reason. The next eligible headless `boot` or explicit start rechecks the reason and can replace a lost keeper.
 
-Linux and macOS use the stable launcher for Claude Code, Codex and Grok. Windows uses the recorded Python and stdio adapter. The adapter owns one cold-start deadline. Setup updates selected owned entries and hooks and preserves unrelated options. The service login hook preserves raw profile bytes and permissions, and desktop autostart quotes its executable argument. Held upgrades preserve existing crontab entries.
+Linux and macOS use the stable launcher for Claude Code, Codex and Grok. Windows uses the recorded Python and stdio adapter. The adapter owns one cold-start deadline. Setup updates selected owned entries and hooks and preserves unrelated options. The service login hook preserves raw profile bytes and permissions, and desktop autostart quotes its executable argument. Held upgrades preserve existing crontab entries. Creation of a new `@reboot` hook is deferred for held upgrades, including first registration. Ordinary service installation can add the hook when `crontab` is available.
 
 The ten search-memory limits apply to Basic Memory's effective environment. A valid lower setting is retained. Read-only startup preserves a current-schema config file. Basic Memory can still migrate legacy schema or explicitly save effective settings during operations that write its config.
 
@@ -48,8 +51,8 @@ If the installer recorded an external Python, the checkout's default `.venv` wou
 
 ## Qualification and known limits
 
-Ubuntu CI runs the guarded regression suite offline with a checksum-pinned synthetic test model. The baseline Linux failures in Windows control tests now explicitly select mocked Windows semantics, including Task XML and FILETIME. The macOS synthetic listener test explicitly selects mocked launchd semantics. The same cases still run on Linux. Tests for bounded note reads now observe the real no-follow descriptor on POSIX. The historical heartbeat fixture measures the native service freshness it asserts. Controller isolation uses a copied POSIX venv interpreter. Two formerly failing Windows extension filenames retain their original test IDs and now verify rejection of stray portable native extension payloads on Linux as well. No baseline failure is skipped by the Linux lane.
+Ubuntu CI runs the guarded regression suite offline with a checksum-pinned synthetic test model. The Windows control tests exercise mocked Task XML and FILETIME semantics on Linux, and the macOS listener test uses mocked launchd semantics. Tests for bounded note reads observe the real no-follow descriptor on POSIX. The historical heartbeat fixture measures native service freshness. Controller isolation uses a copied POSIX venv interpreter. The two `.pyd` cases run on Windows, where those suffixes are importable.
 
 Native scenarios require separate receipts for Windows and both macOS architectures, hosted Ubuntu without a service, Linux without systemd and the existing Ubuntu systemd user-unit lane. Release status remains `candidate_pending_external_receipts`. Owner-device rollout requires the exact candidate's scoped receipts and approval. [Verification and device acceptance](DEVICE-TESTING.md)
 
-The Linux keeper appends to `logs/user-service.log` with no automatic size limit or rotation. A live child can retain that descriptor across a rename. Archive only after verified service and writer quiescence. Independent idle watchdog repair and adding new cron hooks during a held upgrade are deferred.
+The Linux keeper appends to `logs/user-service.log` with no automatic size limit or rotation. A live child can retain that descriptor across a rename. Archive only after verified service and writer quiescence. Independent idle watchdog repair is deferred.

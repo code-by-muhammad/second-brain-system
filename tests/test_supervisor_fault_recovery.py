@@ -1,6 +1,7 @@
 """Synthetic process handles only; exercise the actual supervisor entrypoint."""
 import json
 import runpy
+import sys
 from pathlib import Path
 
 import pytest
@@ -125,3 +126,33 @@ def test_actual_supervisor_recovery_keeps_owned_children(brain, monkeypatch, lab
     # listener. A registry failure therefore precedes that iteration's query.
     assert len(connections) == (2 if fault=='registry' else 3) and len(sleeps) == 3
     assert all(process.poll() is None for process in processes)
+
+
+@pytest.mark.skipif(sys.platform!='linux',reason='Linux user-space generation enrolment.')
+@pytest.mark.parametrize('role',['server','maintenance'])
+def test_real_supervisor_child_is_reaped_when_enrolment_fails(brain,monkeypatch,role):
+    _,state=brain
+    app=cfg.ROOT/'app';app.mkdir()
+    (app/f'brain_{role}.py').write_text('import time\ntime.sleep(60)\n',encoding='utf-8')
+    spawned=[]
+
+    def refuse(given,child):
+        assert given==role
+        spawned.append(child)
+        raise RuntimeError('synthetic enrolment failure')
+
+    monkeypatch.setattr(supervisor.service,'supervisor_spawn_allowed',lambda:True)
+    monkeypatch.setattr(supervisor.service,'enrol_supervisor_child',refuse)
+    monkeypatch.setattr(supervisor.processes,'listener_identity',lambda:{'synthetic':True} if role=='maintenance' else None)
+    monkeypatch.setattr(supervisor,'_bootstrap_admitted',lambda:None)
+    monkeypatch.setattr(supervisor,'_maintenance_due',lambda owned:True)
+    owned={}
+    try:
+        with pytest.raises(RuntimeError,match='synthetic enrolment failure'):
+            supervisor.main(owned)
+        assert len(spawned)==1 and spawned[0].returncode is not None
+        assert role not in owned and json.loads((state/'service-pids.json').read_text())[role] is None
+    finally:
+        for child in spawned:
+            if child.poll() is None:child.kill()
+            child.wait(timeout=5)
