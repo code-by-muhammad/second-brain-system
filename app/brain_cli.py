@@ -94,5 +94,8 @@ def main():
     print(json.dumps(result,indent=2,ensure_ascii=False,default=str))
     # The self-test is a verdict: a failed one ends the command unsuccessfully, after its report.
     if args.command=='selftest' and result.get('failed'):sys.exit(1)
+    # The index worker refused this Python environment: a retry cannot change that, so the command says so in its
+    # exit status as well. Every other index outcome, a deferral included, is reported in the JSON alone.
+    if args.command=='index' and isinstance(result,dict) and result.get('reason')=='index_worker_guard_refused':sys.exit(3)
 
 if __name__=='__main__': main()

@@ -95,9 +95,10 @@ def test_maintenance_keeps_lock_while_its_bounded_descendant_is_live(brain, monk
             return 0
 
     def launch(command, **kwargs):
-        if Path(command[1]) == app / 'brain_index_bootstrap.py':
-            assert command[2:] == ['--reconcile']
-            return SimpleNamespace(pid=9001, poll=lambda: None)
+        from supervisor_fixture import bootstrap_pipe, script
+        if Path(script(command)[0]) == app / 'brain_index_bootstrap.py':
+            assert script(command)[1] == ['--reconcile']
+            return SimpleNamespace(pid=9001, poll=lambda: None, stdin=bootstrap_pipe(command, kwargs))
         assert Path(command[1]) == app / 'brain_maintenance.py'
         process = real_popen(command, **kwargs)
         parents.append(process)

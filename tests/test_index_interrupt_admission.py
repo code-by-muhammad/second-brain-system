@@ -14,6 +14,7 @@ def test_dispatched_interrupt_at_finally_entry_cannot_release_before_cleanup(mon
     class Child:
         pid=43123
         returncode=None
+        stdin=SimpleNamespace(write=lambda data:events.append('released'),close=lambda:None)
         def poll(self):return self.returncode
         def wait(self,timeout):self.returncode=-9;events.append('reaped');return self.returncode
     child=Child()
@@ -30,13 +31,14 @@ def test_dispatched_interrupt_at_finally_entry_cannot_release_before_cleanup(mon
     monkeypatch.setattr(subject,'os',SimpleNamespace(name='posix',killpg=killpg))
     monkeypatch.setattr(subject,'time',SimpleNamespace(monotonic=lambda:0,sleep=lambda seconds:None))
     monkeypatch.setattr(subject.cfg,'environment',lambda:{})
-    monkeypatch.setattr(subject,'subprocess',SimpleNamespace(Popen=lambda *a,**kw:child,DEVNULL=subprocess.DEVNULL,
+    monkeypatch.setattr(subject,'_lifetime',lambda pid:('synthetic lifetime',pid))
+    monkeypatch.setattr(subject,'subprocess',SimpleNamespace(Popen=lambda *a,**kw:child,DEVNULL=subprocess.DEVNULL,PIPE=subprocess.PIPE,
         TimeoutExpired=subprocess.TimeoutExpired,CompletedProcess=subprocess.CompletedProcess))
-    tree=ast.parse(SOURCE.read_text());function=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_run_reindex')
+    tree=ast.parse(SOURCE.read_text());function=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_run_admitted')
     cleanup=next(n for n in function.body if isinstance(n,ast.Try)).finalbody[0].lineno
     dispatched=[]
     def trace(frame,event,arg):
-        if frame.f_code is subject._run_reindex.__code__ and event=='line' and frame.f_lineno==cleanup and not dispatched:
+        if frame.f_code is subject._run_admitted.__code__ and event=='line' and frame.f_lineno==cleanup and not dispatched:
             dispatched.append(pending);handlers[pending](pending,None)
         return trace
     def first_cancel():raise subject.IndexStalled('synthetic first cancellation')
@@ -47,5 +49,5 @@ def test_dispatched_interrupt_at_finally_entry_cannot_release_before_cleanup(mon
         except BaseException as error:caught=error
     finally:sys.settrace(previous)
     assert dispatched==[pending] and isinstance(caught,subject.IndexStalled)
-    assert events==[('signal',15),('signal',9),'reaped',('signal',0)]
+    assert events==['released',('signal',15),('signal',9),'reaped',('signal',0)]
     assert handlers==original and child.returncode==-9

@@ -6,7 +6,7 @@ ROOT=Path(__file__).resolve().parent
 def main():
     names=subprocess.check_output(['git','-C',str(ROOT),'ls-files','-z']).decode().split('\0')
     payload={name:subprocess.check_output(['git','-C',str(ROOT),'show',':'+name]) for name in names if name and name!='release-manifest.json'}
-    required={'install.py','update.py','setup_runtime.py','pyproject.toml','uv.lock','app/brain_settings.py','app/brain_service.py','app/brain_process.py','app/brain_windows_process.py','check_dependency_audit.py','security-exceptions.json','security-exceptions-darwin-arm64.json','security-exceptions-darwin-x86_64.json','security-exceptions-linux-x86_64.json','SECURITY.md'}
+    required={'install.py','update.py','setup_runtime.py','pyproject.toml','uv.lock','app/brain_settings.py','app/brain_service.py','app/brain_process.py','app/brain_windows_process.py','app/brain_index_bootstrap.py','app/brain_index_worker.py','check_dependency_audit.py','security-exceptions.json','security-exceptions-darwin-arm64.json','security-exceptions-darwin-x86_64.json','security-exceptions-linux-x86_64.json','SECURITY.md'}
     if not required<=payload.keys():raise ValueError('Stage all required setup/controller/dependency files before building the release.')
     version=tomllib.loads(payload['pyproject.toml'].decode())['project']['version']
     def literal_version(name):

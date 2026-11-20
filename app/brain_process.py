@@ -15,6 +15,10 @@ import psutil
 import brain_settings as cfg
 
 SCRIPTS={name:'brain_'+name+'.py' for name in ('supervisor','server','index_bootstrap','maintenance')}
+# The index worker is matched by its whole command line, not as one of SCRIPTS: that matcher compares resolved
+# paths and would accept a link elsewhere that points at the file.
+INDEX_WORKER='brain_index_worker.py'
+INDEX_ARGUMENTS=(['reindex','-p','brain'],['reindex','-p','brain','--full'],['reindex','-p','brain','--full','--search'])
 _JOB=None
 
 
@@ -25,6 +29,15 @@ class _MacInventoryChanged(OwnershipError): pass
 
 
 def _path(value): return os.path.normcase(str(Path(value).resolve()))
+
+
+def index_worker_form(args,expected):
+    """True only for <any interpreter spelling> -I -B <expected, as written> reindex -p brain [--full [--search]].
+
+    Total: any other list, shorter or longer, is False. The script path is compared as text, never resolved. The
+    interpreter is not compared here; inspect() checks the process image against this runtime's own set."""
+    return (len(args)-4 in (3,4,5) and args[1:3]==['-I','-B'] and args[4:] in INDEX_ARGUMENTS
+            and os.path.normcase(args[3])==os.path.normcase(os.path.abspath(str(expected))))
 
 
 def _api():
@@ -293,6 +306,9 @@ def inspect(pid,*,required=False):
             from brain_mac_registration import SERVICE_ENTRY
             supervisor=str(cfg.ROOT/'app/brain_supervisor.py')
             if tokens==['-I','-B','-c',SERVICE_ENTRY,supervisor]:tokens=[supervisor]
+        worker=cfg.ROOT/'app'/INDEX_WORKER;worker_form=index_worker_form(args,worker)
+        if worker_form and (worker.is_symlink() or worker.is_junction()):
+            raise OwnershipError('Linked runtime script cannot establish ownership.')
         while tokens and tokens[0] in ('-I','-B'):tokens=tokens[1:]
         role=None;script=None
         if len(tokens)==1 or tokens[1:]==['--reconcile']:
@@ -303,12 +319,12 @@ def inspect(pid,*,required=False):
                 if _path(tokens[0])==_path(expected):role=name;script=_path(tokens[0]);break
         # The index entry point is beside the selected venv alias, not the
         # canonical base interpreter or its framework exec-replacement image.
+        # Releases before 0.2.16 ran the reindex through this entry point; one may still be running.
         bm_paths=_bm_paths()
-        bm_arguments=(['reindex','-p','brain'],['reindex','-p','brain','--full'],
-                      ['reindex','-p','brain','--full','--search'])
-        bm=exe in bm_paths and args[1:] in bm_arguments
-        child_bm=tokens[1:] in bm_arguments and _path(tokens[0]) in bm_paths
+        bm=exe in bm_paths and args[1:] in INDEX_ARGUMENTS
+        child_bm=tokens[1:] in INDEX_ARGUMENTS and _path(tokens[0]) in bm_paths
         if bm or child_bm:role='index_worker';script=exe if bm else _path(tokens[0])
+        if worker_form:role='index_worker';script=os.path.normcase(os.path.abspath(str(worker)))
         if role is None:
             if required:raise OwnershipError('Listener is not this runtime\'s exact server process.')
             return None
@@ -320,7 +336,10 @@ def inspect(pid,*,required=False):
                 if owner is not None:owner.close()
                 raise OwnershipError('Base interpreter has no verified matching launcher parent.')
             expected=launchers.get(owner.exe)
-            if owner.role=='index_worker':expected=launchers.get(_path(Path(owner.exe).with_name('python.exe')))
+            # Only the old bm.exe entry point is a separate image beside the launcher; the worker script runs
+            # under the launcher itself.
+            if owner.role=='index_worker' and Path(owner.exe).name.lower()=='bm.exe':
+                expected=launchers.get(_path(Path(owner.exe).with_name('python.exe')))
             if expected!=exe:owner.close();raise OwnershipError('Python launcher/base pair disagrees.')
             parents.append(owner);kind='interpreter'
         else:raise OwnershipError('Runtime script uses an unrecognized interpreter.')
@@ -352,7 +371,8 @@ def roots():
             if os.name=='nt' and not known_name:continue
             args=process.info.get('cmdline') or []
             candidates=[value for value in args[1:] if value and not value.startswith('-') and Path(value).name.lower() in set(SCRIPTS.values())]
-            exact_script=any(_path(value)==_path(cfg.ROOT/'app'/filename) for value in candidates for filename in SCRIPTS.values())
+            exact_script=(any(_path(value)==_path(cfg.ROOT/'app'/filename) for value in candidates for filename in SCRIPTS.values())
+                          or index_worker_form(args,cfg.ROOT/'app'/INDEX_WORKER))
             index_args=[value for value in args if Path(value).name.lower() in ('bm.exe','bm')]
             if not exact_script and not index_args:continue
             if os.name!='nt' and not original_name and not exact_script:

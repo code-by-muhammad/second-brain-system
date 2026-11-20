@@ -56,7 +56,8 @@ def test_actual_supervisor_recovery_keeps_owned_children(brain, monkeypatch, lab
 
     class Process:
         def __init__(self, command, **kwargs):
-            name = Path(command[1]).name
+            from supervisor_fixture import script
+            name = Path(script(command)[0]).name
             # R138 transport qualification only: preserve every old oracle.
             if name == 'brain_maintenance.py':
                 maintenance(command, **kwargs)
@@ -65,9 +66,11 @@ def test_actual_supervisor_recovery_keeps_owned_children(brain, monkeypatch, lab
                 return
             assert name in ('brain_server.py', 'brain_index_bootstrap.py')
             assert kwargs['env'] == {}
+            from supervisor_fixture import bootstrap_pipe
+            self.stdin = bootstrap_pipe(command, kwargs)
             self.pid = 1001 + len(processes)
             self.name = name
-            self.arguments = command[2:]
+            self.arguments = script(command)[1]
             processes.append(self)
 
         def poll(self):
@@ -110,6 +113,9 @@ def test_actual_supervisor_recovery_keeps_owned_children(brain, monkeypatch, lab
     terminal = label in ('verified-control', 'review-control', 'attention-control')
     assert [process.name for process in processes] == ['brain_server.py', 'brain_index_bootstrap.py']
     assert processes[1].arguments == (['--reconcile'] if terminal else [])
+    # Either entry form is started behind a pipe and released with one line.
+    from supervisor_fixture import released
+    assert processes[0].stdin is None and released(processes[1])
     registry = json.loads((state / 'service-pids.json').read_text(encoding='utf-8'))
     assert registry['server'] == processes[0].pid
     assert registry['bootstrap'] == processes[1].pid

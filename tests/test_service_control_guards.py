@@ -62,6 +62,19 @@ def test_legacy_reindex_refused_before_native_end(device,monkeypatch):
     with pytest.raises(processes.OwnershipError,match='legacy reindex'):service.stop()
 
 
+def test_new_form_worker_without_lineage_is_refused_like_a_legacy_one(device,monkeypatch):
+    """Discovery gives the worker script the same role as the old entry point; with no lineage record a stop
+    preserves it and refuses, before anything native is ended."""
+    line=[str(cfg.PYTHON),'-I','-B',str(cfg.ROOT/'app'/processes.INDEX_WORKER),'reindex','-p','brain']
+    assert processes.index_worker_form(line,cfg.ROOT/'app'/processes.INDEX_WORKER)
+    monkeypatch.setattr(service.sys,'platform','win32')
+    monkeypatch.setattr(service,'_windows_task',lambda:None)
+    worker=SimpleNamespace(role='index_worker',alive=lambda:True,close=lambda:None,script=line[3])
+    monkeypatch.setattr(processes,'roots',lambda:[worker])
+    monkeypatch.setattr(service.subprocess,'run',lambda *args,**kwargs:pytest.fail('native End'))
+    with pytest.raises(processes.OwnershipError,match='reindex process is still active'):service.stop()
+
+
 def test_finish_prepared_transaction_cannot_release_old_listener(device,monkeypatch):
     path=cfg.STATE/'service-transaction.json'
     path.write_text(json.dumps({'hold_id':'b'*32,'root':str(cfg.ROOT),'stage':'prepared'}))

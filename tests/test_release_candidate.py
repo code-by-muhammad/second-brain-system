@@ -101,7 +101,7 @@ def staged(tmp_path,monkeypatch):
     payload={'install.py':b"VERSION='0.1.8'\n",'app/brain_settings.py':b"VERSION='0.1.8'\n",
              'pyproject.toml':b'[project]\nversion="0.1.8"\n',
              'uv.lock':b'[[package]]\nname="shared-second-brain"\nversion="0.1.8"\n'}
-    for name in ('update.py','setup_runtime.py','app/brain_service.py','app/brain_process.py','app/brain_windows_process.py','check_dependency_audit.py','security-exceptions.json','security-exceptions-darwin-arm64.json','security-exceptions-darwin-x86_64.json','security-exceptions-linux-x86_64.json','SECURITY.md'):payload[name]=b'# synthetic release builder contract\n'
+    for name in ('update.py','setup_runtime.py','app/brain_service.py','app/brain_process.py','app/brain_windows_process.py','app/brain_index_bootstrap.py','app/brain_index_worker.py','check_dependency_audit.py','security-exceptions.json','security-exceptions-darwin-arm64.json','security-exceptions-darwin-x86_64.json','security-exceptions-linux-x86_64.json','SECURITY.md'):payload[name]=b'# synthetic release builder contract\n'
     for name,data in payload.items():
         target=repo/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(data)
     subprocess.run(['git','init',str(repo)],check=True,capture_output=True)

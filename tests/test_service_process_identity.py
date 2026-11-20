@@ -109,3 +109,126 @@ def test_listener_requires_live_recorded_supervisor_and_same_socket(brain,monkey
     else:
         assert processes.listener_identity()['supervisor_pid']==70
     assert 'server' in closed
+
+
+# ---- the index worker's command line ----------------------------------------------------------------------------
+
+def _worker_line(*arguments,python=None):
+    return [str(python or cfg.PYTHON),'-I','-B',str(cfg.ROOT/'app'/processes.INDEX_WORKER),'reindex','-p','brain',*arguments]
+
+
+def test_index_worker_form_accepts_exactly_three_forms_and_is_total(brain):
+    expected=cfg.ROOT/'app'/processes.INDEX_WORKER
+    forms=[_worker_line(),_worker_line('--full'),_worker_line('--full','--search')]
+    for line in forms:
+        assert processes.index_worker_form(line,expected) is True
+        # Any spelling of the interpreter: the process image is checked elsewhere, not this text.
+        assert processes.index_worker_form(['python3',*line[1:]],expected) is True
+        # Every proper prefix is refused, unless it is one of the two shorter forms itself.
+        for cut in range(len(line)):assert processes.index_worker_form(line[:cut],expected) is (line[:cut] in forms)
+    for line in ([],['-I'],['-I','-B'],[str(cfg.PYTHON)],[str(cfg.PYTHON),'-I','-B'],['-I','-B',str(expected),'reindex','-p','brain']):
+        assert processes.index_worker_form(line,expected) is False
+    script=str(expected)
+    near=[
+        _worker_line('--search'),_worker_line('--search','--full'),_worker_line('--full','--search','--embeddings'),_worker_line('--full','--full'),
+        [str(cfg.PYTHON),'-B','-I',script,'reindex','-p','brain'],[str(cfg.PYTHON),'-I',script,'reindex','-p','brain'],
+        [str(cfg.PYTHON),script,'reindex','-p','brain'],[str(cfg.PYTHON),'-I','-B','-B',script,'reindex','-p','brain'],
+        [str(cfg.PYTHON),'-I','-B',script,'reindex','-p','main'],[str(cfg.PYTHON),'-I','-B',script,'sync','-p','brain'],
+        [str(cfg.PYTHON),'-I','-B',os.path.join('app',processes.INDEX_WORKER),'reindex','-p','brain'],
+        [str(cfg.PYTHON),'-I','-B',str(cfg.ROOT/'other'/processes.INDEX_WORKER),'reindex','-p','brain'],
+        [str(cfg.PYTHON),'-I','-B',str(cfg.ROOT/'app'/'..'/'app'/processes.INDEX_WORKER),'reindex','-p','brain'],
+        [str(cfg.PYTHON),'-I','-B',script+'x','reindex','-p','brain'],
+    ]
+    for line in near:assert processes.index_worker_form(line,expected) is False,line
+    assert processes.INDEX_WORKER not in processes.SCRIPTS.values()
+
+
+GATED_WORKER='import sys,time\nsys.stdin.buffer.readline()\ntime.sleep(60)\n'
+
+
+@pytest.fixture
+def waiting_worker(brain):
+    """A real child with the worker's exact command line, held at its start gate; it never runs anything."""
+    import subprocess
+    app=cfg.ROOT/'app';app.mkdir()
+    (app/processes.INDEX_WORKER).write_text(GATED_WORKER,encoding='utf-8')
+    children=[]
+    def start(line):
+        child=subprocess.Popen(line,stdin=subprocess.PIPE,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);children.append(child);return child
+    yield start
+    for child in children:
+        child.kill();child.wait(timeout=10)
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'),reason='Real process discovery; Windows and macOS have native jobs.')
+@pytest.mark.parametrize('extra',[[],['--full'],['--full','--search']])
+def test_real_worker_command_line_is_discovered_as_an_index_worker(waiting_worker,extra):
+    child=waiting_worker(_worker_line(*extra))
+    owned=processes.inspect(child.pid,required=True)
+    try:
+        assert owned.role=='index_worker' and owned.kind=='direct'
+        assert owned.script==os.path.normcase(os.path.abspath(str(cfg.ROOT/'app'/processes.INDEX_WORKER)))
+    finally:owned.close()
+    found=processes.roots()
+    try:assert [(process.pid,process.role) for process in found if process.pid==child.pid]==[(child.pid,'index_worker')]
+    finally:
+        for process in found:process.close()
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'),reason='Real process discovery; Windows and macOS have native jobs.')
+def test_real_near_miss_command_lines_get_no_role(waiting_worker,tmp_path):
+    script=cfg.ROOT/'app'/processes.INDEX_WORKER
+    alias=tmp_path/'alias.py';alias.symlink_to(script)
+    elsewhere=tmp_path/processes.INDEX_WORKER;elsewhere.write_text(GATED_WORKER,encoding='utf-8')
+    lines=[[str(cfg.PYTHON),'-I','-B',str(alias),'reindex','-p','brain'],
+           [str(cfg.PYTHON),'-I','-B',str(elsewhere),'reindex','-p','brain'],
+           [str(cfg.PYTHON),'-B','-I',str(script),'reindex','-p','brain'],
+           [str(cfg.PYTHON),'-I','-B',str(script),'reindex','-p','brain','--search'],
+           [str(cfg.PYTHON),'-I','-B',str(script)]]
+    for line in lines:
+        child=waiting_worker(line)
+        assert processes.inspect(child.pid) is None,line
+        with pytest.raises(processes.OwnershipError):processes.inspect(child.pid,required=True)
+    found=processes.roots()
+    try:assert not [process for process in found if process.role=='index_worker']
+    finally:
+        for process in found:process.close()
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'),reason='Real process discovery; Windows and macOS have native jobs.')
+def test_worker_under_an_interpreter_outside_this_runtime_is_refused(waiting_worker,monkeypatch,tmp_path):
+    child=waiting_worker(_worker_line())
+    monkeypatch.setattr(processes,'_launchers',lambda:{str(tmp_path/'other-python'):str(tmp_path/'other-python')})
+    with pytest.raises(processes.OwnershipError,match='unrecognized interpreter'):processes.inspect(child.pid)
+
+
+@pytest.mark.skipif(os.name=='nt',reason='Symbolic links need a privilege on Windows.')
+@pytest.mark.skipif(not sys.platform.startswith('linux'),reason='Real process discovery; Windows and macOS have native jobs.')
+def test_linked_worker_script_cannot_establish_ownership(waiting_worker,tmp_path):
+    script=cfg.ROOT/'app'/processes.INDEX_WORKER
+    child=waiting_worker(_worker_line())
+    real=tmp_path/'real.py';real.write_text(GATED_WORKER,encoding='utf-8');script.unlink();script.symlink_to(real)
+    with pytest.raises(processes.OwnershipError,match='Linked runtime script'):processes.inspect(child.pid)
+
+
+@pytest.mark.skipif(os.name!='nt',reason='Windows launcher/base pair.')
+def test_windows_launcher_pair_is_accepted_for_the_worker_script(brain):
+    """The venv launcher and its base interpreter both carry the worker's command line; the pair is one worker."""
+    from brain_windows_process import run
+    app=cfg.ROOT/'app';app.mkdir()
+    script=app/processes.INDEX_WORKER;marker=cfg.STATE/'process.json'
+    script.write_text("import os,sys,time,json\nfrom pathlib import Path\nline=sys.stdin.buffer.readline()\n"
+                      "Path("+repr(str(marker))+").write_text(json.dumps({'pid':os.getpid(),'line':line.decode()}))\ntime.sleep(120)\n",encoding='utf-8')
+    seen=[]
+    def tick():
+        if seen or not marker.exists():return
+        value=json.loads(marker.read_text())
+        owned=processes.inspect(value['pid'],required=True)
+        try:
+            assert owned.role=='index_worker' and owned.kind=='interpreter'
+            assert owned.parents[0].role=='index_worker' and owned.parents[0].kind=='launcher'
+            seen.append(value['line']);owned.terminate()
+        finally:owned.close()
+    result=run([sys.executable,'-I','-B',str(script),'reindex','-p','brain'],input=b'start\n',capture_output=True,timeout=30,on_tick=tick,env=cfg.environment())
+    # The start line reached the base interpreter through the launcher.
+    assert seen==['start\n'] and result.returncode!=0
