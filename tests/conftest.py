@@ -1,4 +1,6 @@
-import json
+import errno
+from functools import wraps
+from operator import index
 import os
 from pathlib import Path
 import socket
@@ -57,6 +59,57 @@ import brain_store as store
 import brain_service as service
 
 
+def _guard_windows_process_signals(config):
+    import psutil
+
+    pytest_pid = os.getpid()
+    process_type = psutil.Process
+    original_kill = os.kill
+    patch = pytest.MonkeyPatch()
+    config.add_cleanup(patch.undo)
+
+    def refuse(pid, name):
+        nodeid = os.environ.get('PYTEST_CURRENT_TEST', '<session>').rsplit(' (', 1)[0]
+        pytest.fail(f'UNSAFE_KILL {nodeid} pid={pid} name={name}', pytrace=False)
+
+    def require_descendant(process):
+        try:
+            if not process.is_running():
+                raise psutil.NoSuchProcess(process.pid)
+            if any(parent.pid == pytest_pid for parent in process.parents()):
+                return
+        except psutil.AccessDenied:
+            pass  # Unverified ancestry cannot authorize a signal.
+        try:
+            name = process.name()
+        except psutil.Error:
+            name = '<unavailable>'
+        refuse(process.pid, name)
+
+    def wrap(method):
+        @wraps(method)
+        def guarded(process, *args, **kwargs):
+            # Tests often replace Process with a constructor for fake objects.
+            if issubclass(type(process), process_type):
+                require_descendant(process)
+            return method(process, *args, **kwargs)
+        return guarded
+
+    def guarded_os_kill(pid, sig, /):
+        pid = index(pid)
+        if not 0 < pid <= 0xffffffff:
+            refuse(pid, '<invalid or group PID>')
+        try:
+            require_descendant(process_type(pid))
+        except psutil.NoSuchProcess:
+            raise ProcessLookupError(errno.ESRCH, os.strerror(errno.ESRCH)) from None
+        return original_kill(pid, sig)
+
+    for method in ('kill', 'terminate', 'send_signal'):
+        patch.setattr(process_type, method, wrap(getattr(process_type, method)))
+    patch.setattr(os, 'kill', guarded_os_kill)
+
+
 def pytest_configure(config):
     if not config.option.basetemp:
         raise pytest.UsageError('Use --basetemp beneath the explicit SB_TEST_SANDBOX.')
@@ -64,6 +117,12 @@ def pytest_configure(config):
         target = Path(config.option.basetemp).resolve()
         if target == _base or not target.is_relative_to(_base):
             raise pytest.UsageError('--basetemp must be a child of SB_TEST_SANDBOX, never the sandbox root.')
+    if os.name == 'nt':
+        _guard_windows_process_signals(config)
+    if 'SB_TEST_CI_DIR' in os.environ:
+        import ci_plugin
+
+        config.pluginmanager.register(ci_plugin.Plugin(config), 'sb-ci')
 
 
 @pytest.fixture(autouse=True)
