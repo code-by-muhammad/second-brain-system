@@ -14,7 +14,7 @@
   "qualification_status": "candidate_pending_external_receipts",
   "sha256": {
     ".gitattributes": "1885cdcf82264bcd145a089116b45921048b4dd33363b3d10a4ac8c89df25e24",
-    ".github/workflows/verify.yml": "f5551321625ab1f1addf32175bea1203949446a64255a45afe4a7051365921e5",
+    ".github/workflows/verify.yml": "21459bc377e44f2b4e454595bda48a0cc6428e7e06c74302da600ab453ab3510",
     ".gitignore": "a8310700b84bec5ae67c7e698127aa63f1b7bb6c6994e5fb940cd0f01c8b3f34",
     "README.md": "ce99e6aa25fae26fa70063d9c8aa3e9874a9b127958204de28c5a8ebaa35a8d6",
     "SECURITY.md": "7a4fb0c27f884cedb7a1fcc8e8d4e2878f1a9c3da10f4535ac167109e691d635",
@@ -229,7 +229,7 @@
     "tests/test_same_version_runtime.py": "88f4f68d6cf164af9ddba6b82762ec7dff51a75fcb9669e14e7e8e052ff9cc03",
     "tests/test_search_memory_cap.py": "43fdf6b2e65c984d7397281e86a50f774c1cb5d7fd7182fd9ca971acf21015b9",
     "tests/test_security_profile.py": "130691816f3dda96b3d2eb09847918131576a9e26e83bdf8f1ec326a741212b8",
-    "tests/test_service_control_guards.py": "2dd9e30a0dba281a1dea3e9afd999c91269b704306741364470f99cdace9c88b",
+    "tests/test_service_control_guards.py": "81eb3752585c770ef1606cb4a3a717d9e5e35a96c2b346f93a84674cea03172f",
     "tests/test_service_descendant_query_birth.py": "1ca4aa6f751c1b378d3e55eb7621900dd8dd8254a31aea05e994a86c47487d90",
     "tests/test_service_format3_followthrough.py": "ba0648d033ee0e5c80267818be3e2a40f4913415fb921308b1d0704f6a1261a4",
     "tests/test_service_platform_admission.py": "ece3e2d65fe98af10f74e5c55a8dc3dd8911fc83c1e0aff653ede689c73583a8",
