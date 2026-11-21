@@ -9,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import types
 
@@ -30,9 +31,9 @@ MODEL_HASHES = {
 }
 
 
-def run(*argv, check=True, timeout=600):
+def run(*argv, check=True, timeout=600, env=None):
     return subprocess.run([str(value) for value in argv], check=check, timeout=timeout,
-                          stdout=subprocess.PIPE, text=True, encoding='utf-8')
+                          stdout=subprocess.PIPE, text=True, encoding='utf-8', env=env)
 
 
 def sha(path):
@@ -46,8 +47,12 @@ def git(path, *args):
 
 def checkout(source, path, commit, version):
     path.parent.mkdir(parents=True, exist_ok=True)
-    run('git', '-c', f'safe.directory={source}', 'clone', '--quiet', '--no-checkout',
-        '--no-hardlinks', source, path)
+    # The clone's upload-pack checks the source .git and drops command-scope Git config.
+    with tempfile.TemporaryDirectory(dir=path.parent) as temporary:
+        config = Path(temporary) / 'gitconfig'
+        run('git', 'config', '--file', config, 'safe.directory', source / '.git')
+        run('git', 'clone', '--quiet', '--no-checkout', '--no-hardlinks', source, path,
+            env=dict(os.environ, GIT_CONFIG_GLOBAL=str(config)))
     git(path, 'config', 'core.autocrlf', 'false')
     git(path, 'remote', 'set-url', 'origin', REMOTE)
     git(path, 'checkout', '--quiet', '--detach', commit)

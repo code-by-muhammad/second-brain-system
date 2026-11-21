@@ -185,6 +185,28 @@ def test_unenrolled_worker_refuses_before_waiting_for_work_lock(runtime,monkeypa
             child.terminate()
 
 
+def test_worker_capture_retries_when_exec_arguments_are_not_yet_visible(runtime, monkeypatch):
+    command = [str(cfg.PYTHON), '-I', '-B', str(cfg.ROOT/'app/brain_index_worker.py'), 'reindex', '-p', 'brain']
+    arguments = generation._arguments
+    with subprocess.Popen(command, stdin=subprocess.PIPE, start_new_session=True) as child, ExitStack() as stack:
+        observed = []
+
+        def delayed_arguments(pid):
+            if pid == child.pid and not observed:
+                observed.append(pid)
+                return None
+            return arguments(pid)
+
+        monkeypatch.setattr(generation, '_arguments', delayed_arguments)
+        try:
+            record, handle = generation.retain_worker(stack, child)
+            assert observed == [child.pid]
+            assert record['argv'] == command and handle.alive()
+        finally:
+            child.stdin.close()
+        assert child.wait(timeout=5) == 75
+
+
 def test_missing_keeper_can_be_repaired_on_the_next_eligible_boot(runtime,monkeypatch):
     linux,start=runtime
     start()

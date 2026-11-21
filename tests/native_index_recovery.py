@@ -83,7 +83,10 @@ except (FileNotFoundError, Timeout):
 
 
 def verify_deferred(root):
-    status = json.loads((root / 'state/upgrade-status.json').read_bytes())
+    try:
+        status = json.loads((root / 'state/upgrade-status.json').read_bytes())
+    except FileNotFoundError:
+        raise SystemExit('Setup failed before writing an upgrade-status.json receipt; see the setup error above.') from None
     assert status['status'] == 'update deferred; runtime not switched'
     assert not (root / 'state/service-transaction.json').exists()
     print('PASS   exact pre-End deferral permits one quiet retry')
@@ -115,17 +118,22 @@ def verify_codex(path):
 
 def record_source(root, output):
     device = json.loads((root / 'device.json').read_bytes())
-    release = root / 'releases/v0.2.16'
-    assert device['version'] == '0.2.16' and Path(device['release_root']).resolve() == release
+    scenario = os.environ['QUAL_SCENARIO']
+    release_ref = os.environ['SECOND_BRAIN_REF'] if scenario == 'fresh' else 'v0.2.16'
+    release = root / 'releases' / release_ref
+    assert device['version'] == '0.2.16', device['version']
+    assert Path(device['release_root']).resolve() == release, device['release_root']
+
     def revision(ref):
         return subprocess.check_output(['git', '-C', str(release), 'rev-parse', ref],
                                        encoding='ascii').strip()
+
     data = {
         'version': device['version'],
         'candidate_commit': revision('HEAD'),
         'candidate_tree': revision('HEAD^{tree}'),
         'candidate_manifest_sha256': hashlib.sha256((release / 'release-manifest.json').read_bytes()).hexdigest(),
-        'scenario': os.environ['QUAL_SCENARIO'],
+        'scenario': scenario,
         'runner': os.environ['RUNNER_OS'],
     }
     assert data['candidate_commit'] == os.environ['SECOND_BRAIN_COMMIT']

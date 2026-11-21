@@ -398,6 +398,13 @@ def _identity(info):
     return (info.st_dev,info.st_ino,info.st_mode,info.st_size,info.st_mtime_ns,info.st_ctime_ns)
 
 
+def _path_identity(info):
+    if os.name=='nt':
+        # Windows pathname stat uses creation time for ctime and derives execute bits from the filename.
+        return (info.st_dev,info.st_ino,info.st_mode & ~0o111,info.st_size,info.st_mtime_ns,info.st_birthtime_ns)
+    return _identity(info)
+
+
 def _file_image(path,parent=None,*,limit=None):
     limit=MAX_CONFIG if limit is None else limit
     try:
@@ -411,7 +418,7 @@ def _file_image(path,parent=None,*,limit=None):
     except FileNotFoundError:return None,None
     with stream:
         info=os.fstat(stream.fileno())
-        if parent is None and (_identity(first)!=_identity(info) or _linked(path)):
+        if parent is None and (_path_identity(first)!=_path_identity(info) or _linked(path)):
             raise ConcurrentWriteError('Client file or ancestor changed while opening: '+str(path))
         if not stat.S_ISREG(info.st_mode) or info.st_size>limit:
             raise ClientSkip('inaccessible','Client file exceeds the planning bound or is not regular: '+str(path))
@@ -420,7 +427,7 @@ def _file_image(path,parent=None,*,limit=None):
         if _identity(os.fstat(stream.fileno()))!=_identity(info):raise ConcurrentWriteError('File changed during its read: '+str(path))
     try:current=os.stat(path.name,dir_fd=parent,follow_symlinks=False) if parent is not None else path.lstat()
     except FileNotFoundError:raise ConcurrentWriteError('File disappeared during its read: '+str(path)) from None
-    if _identity(current)!=_identity(info):raise ConcurrentWriteError('File changed during its read: '+str(path))
+    if _path_identity(current)!=_path_identity(info):raise ConcurrentWriteError('File changed during its read: '+str(path))
     return data,info
 
 

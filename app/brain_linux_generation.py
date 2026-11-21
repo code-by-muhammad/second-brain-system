@@ -229,17 +229,21 @@ def _retain(stack, record, *, verify_role=True):
     return handle if handle.alive() else None
 
 
-def publish_supervisor(registration, child, keeper):
-    argv = list(registration.argv)
+def _capture_child(child, role, argv, sid, parent=None):
+    # Popen can return before /proc exposes the child's new argv.
     deadline = time.monotonic()+2
     while True:
         try:
-            supervisor = _capture(child.pid, 'supervisor', argv, keeper['sid'], keeper)
-            break
+            return _capture(child.pid, role, argv, sid, parent)
         except processes.OwnershipError:
             if child.poll() is not None or time.monotonic() >= deadline:
                 raise
             time.sleep(.02)
+
+
+def publish_supervisor(registration, child, keeper):
+    argv = list(registration.argv)
+    supervisor = _capture_child(child, 'supervisor', argv, keeper['sid'], keeper)
     value = {'format': 1, 'root': str(cfg.ROOT), 'interpreter': argv[0], 'boot_id': keeper['boot_id'],
              'generation': uuid.uuid4().hex, 'definition': hashlib.sha256(registration.installable).hexdigest(),
              'roles': {'keeper': keeper, 'supervisor': supervisor}, 'drain': 'none'}
@@ -290,16 +294,7 @@ def enroll(registration, role, child):
             raise _error('previous_worker_live', 'An earlier enrolled index worker is still live.')
         value['roles'].pop('index_worker', None)
     sid = child.pid if role == 'index_worker' else parent['sid']
-    deadline = time.monotonic()+2
-    while True:
-        try:
-            record = _capture(child.pid, role, list(child.args), sid, parent)
-            break
-        except processes.OwnershipError:
-            if child.poll() is not None or time.monotonic() >= deadline:
-                raise
-            time.sleep(.02)
-    value['roles'][role] = record
+    value['roles'][role] = _capture_child(child, role, list(child.args), sid, parent)
     _write(registration, GENERATION, value)
 
 
@@ -663,7 +658,7 @@ class GenerationDrain:
 
 def retain_worker(stack, child):
     """Pin the runner's own Linux child before it is enrolled or released."""
-    record = _capture(child.pid, 'index_worker', list(child.args), child.pid)
+    record = _capture_child(child, 'index_worker', list(child.args), child.pid)
     return record, _retain(stack, record)
 
 

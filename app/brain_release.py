@@ -71,6 +71,13 @@ def _identity(info):
     return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
+def _path_identity(info):
+    if os.name == 'nt':
+        # Windows pathname stat uses creation time for ctime and derives execute bits from the filename.
+        return (info.st_dev, info.st_ino, info.st_mode & ~0o111, info.st_size, info.st_mtime_ns, info.st_birthtime_ns)
+    return _identity(info)
+
+
 def _read_image(path, limit, *, parent=None):
     name = path if parent is None else path.name
     flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_BINARY', 0)
@@ -86,7 +93,7 @@ def _read_image(path, limit, *, parent=None):
         raise ValueError('Release or deployment file disappeared while opening.') from error
     with os.fdopen(descriptor, 'rb') as stream:
         opened = os.fstat(stream.fileno())
-        if _identity(initial) != _identity(opened):
+        if _path_identity(initial) != _path_identity(opened):
             raise ValueError('Release or deployment file changed while opening.')
         raw = stream.read(limit + 1)
         final = os.fstat(stream.fileno())
@@ -95,7 +102,7 @@ def _read_image(path, limit, *, parent=None):
         except FileNotFoundError as error:
             raise ValueError('Release or deployment file disappeared while reading.') from error
         if (len(raw) > limit or len(raw) != final.st_size or _identity(opened) != _identity(final)
-                or _identity(final) != _identity(observed)):
+                or _path_identity(final) != _path_identity(observed)):
             raise ValueError('Release or deployment file changed while reading.')
     return (raw, stat.S_IMODE(final.st_mode)), final
 
