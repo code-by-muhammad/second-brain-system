@@ -91,7 +91,7 @@ def test_failed_deploy_keeps_existing_config_bytes():
     (b'{', 'valid local JSON'),
     (b'{"semantic_embedding_provider": "remote"}', 'Only local FastEmbed'),
     (b'{"reranker_enabled": true}', 'Only local FastEmbed'),
-])
+], ids=['oversize', 'invalid-json', 'remote-provider', 'reranker'])  # short IDs: the 1 MB payload must never become a node ID
 def test_invalid_or_unsupported_config_refuses_before_startup(monkeypatch, tmp_path, contents, message):
     monkeypatch.setattr(cfg, 'STATE', tmp_path)
     path = tmp_path / 'config.json'
