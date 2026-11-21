@@ -93,6 +93,9 @@ jobs:
       - name: Verify shipped payload manifest consistency
         run: uv run --locked python -I -B -c "import runpy; from pathlib import Path; runpy.run_path('update.py')['verify'](Path.cwd())"
       - name: Windows guarded regression (synthetic state only)
+        # Step limit below the job limit so a hang still uploads the job log,
+        # faulthandler tracebacks and the always() qualification artifact.
+        timeout-minutes: 100
         shell: pwsh
         run: |
           $testPython = (Resolve-Path -LiteralPath '.venv/Scripts/python.exe').Path
