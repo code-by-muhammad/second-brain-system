@@ -24,6 +24,8 @@ def native_registration(device):
 def prepare(portable,monkeypatch,*,previous_version='0.1.0',target_version='0.1.6'):
     install,updater,root,vault,home=portable
     source=install.REPO
+    release_helper=updater.release_helpers(source)
+    monkeypatch.setattr(updater,'release_helpers',lambda *args,**kwargs:release_helper)
     install.deploy(root,Path(sys.executable),vault)
     old=root/'old-release';old.mkdir()
     payload={'app/'+path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in (root/'app').glob('*.py')}
@@ -47,10 +49,22 @@ def prepare(portable,monkeypatch,*,previous_version='0.1.0',target_version='0.1.
     def provision(*args):
         h.events.append({'kind':'provision'});return Path(sys.executable)
     monkeypatch.setattr(support,'provision',provision)
-    monkeypatch.setattr(updater,'verify',lambda *args,**kwargs:{'version':target_version,
-        'capabilities':['sealed-client-refresh-v1','owned-service-control-v1'],
-        'sha256':{'app/brain_cli.py':hashlib.sha256((release/'app/brain_cli.py').read_bytes()).hexdigest()},
-        'git_identity':{'tag':'v'+target_version,'commit':'synthetic-not-provenance'}})
+    target_hashes={'app/brain_cli.py':hashlib.sha256((release/'app/brain_cli.py').read_bytes()).hexdigest()}
+    capabilities=['sealed-client-refresh-v1','owned-service-control-v1']
+    if target_version=='0.2.16':
+        capabilities.append('held-deployment-v1')
+        catalog=release/'predecessor-builds.json'
+        catalog.write_text(json.dumps({'format':1,'repository':release_helper.REPOSITORY,'builds':[{
+            'version':previous_version,'app_sha256':{name.removeprefix('app/'):sha for name,sha in payload.items()},
+            'provenance':[{'commit':'a'*40,'manifest_sha256':'d'*64}]}]}))
+        target_hashes['predecessor-builds.json']=hashlib.sha256(catalog.read_bytes()).hexdigest()
+    def verify(checkout,*,version=None):
+        if checkout==old:
+            manifest=json.loads((old/'release-manifest.json').read_bytes())
+            return {**manifest,'git_identity':{'tag':'v'+previous_version,'commit':'synthetic-predecessor'}}
+        return {'version':target_version,'capabilities':capabilities,
+                'sha256':target_hashes,'git_identity':{'tag':'v'+target_version,'commit':'synthetic-candidate'}}
+    monkeypatch.setattr(updater,'verify',verify)
 
     def run(arguments,**options):
         if str(release/'install.py') in arguments:
@@ -112,6 +126,13 @@ def prepare(portable,monkeypatch,*,previous_version='0.1.0',target_version='0.1.
         elif action=='cancel':
             if h.last_end:raise RuntimeError('unverified End cannot be cancelled')
             path.unlink();return {'status':'cancelled; runtime not switched','simulated':True}
+        elif action=='check-stopped':
+            with pytest.raises(Timeout):
+                with FileLock(str(root/'state/writer.lock'),timeout=0):pass
+            current=transaction()
+            assert not h.running and current['stage']=='stopped'
+            assert current['hold_id']==flag(flags,'--hold-id')
+            return {'status':'quiescent','hold_id':current['hold_id']}
         elif action=='install':
             with pytest.raises(Timeout):
                 with FileLock(str(root/'state/writer.lock'),timeout=0):pass
@@ -119,7 +140,17 @@ def prepare(portable,monkeypatch,*,previous_version='0.1.0',target_version='0.1.
         elif action=='start':
             h.running=True;install.atomic(path,json.dumps({**transaction(),'stage':'started'}))
             return {'status':'started','simulated':True}
-        elif action=='finish':path.unlink()
+        elif action=='finish':
+            current=transaction()
+            name=flag(flags,'--expected-version')
+            receipt=root/'state/service-transactions'/(current['hold_id']+'.json')
+            install.atomic(receipt,json.dumps({**current,'stage':'complete',
+                ('authenticated_version' if h.running else 'absent_version'):name}))
+            path.unlink()
+            return {'status':'transaction released','hold_id':current['hold_id']}
+        elif action=='withdraw-first':
+            assert path.exists() and not h.running
+            return {'status':'withdrawn','file_present':False}
         else:pytest.fail('Unknown OS action in pure upgrade fixture.')
         return {'status':action,'simulated':True}
     monkeypatch.setattr(updater,'controller',controller)

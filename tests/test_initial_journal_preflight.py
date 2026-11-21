@@ -3,7 +3,6 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
-from types import SimpleNamespace
 import pytest
 
 
@@ -22,7 +21,10 @@ def pending(tmp_path,monkeypatch):
     marker=planned.parent.parent/'keep.txt';marker.write_bytes(b'Synthetic environment marker')
     calls=[]
     def provision(*args):calls.append(args);raise ProvisionBoundaryReached('synthetic boundary; nothing provisioned')
-    support=SimpleNamespace(host_context=lambda:None,runtime_paths=lambda path:None,provision=provision)
+    support=module.setup_helpers()
+    support.host_context=lambda:None
+    support.runtime_paths=lambda path:None
+    support.provision=provision
     monkeypatch.setattr(module,'_qualified_platform',lambda:None)
     monkeypatch.setattr(module,'setup_helpers',lambda:support)
     monkeypatch.setattr(module,'REPO',checkout)

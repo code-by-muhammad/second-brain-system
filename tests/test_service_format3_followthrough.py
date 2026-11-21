@@ -24,6 +24,7 @@ def synthetic(brain,monkeypatch):
     monkeypatch.setattr(processes,'descendants',lambda value:[])
     monkeypatch.setattr(processes,'_listeners',lambda:[])
     monkeypatch.setattr(service,'TASK','SecondBrain-Test-'+'d'*32)
+    monkeypatch.setattr(cfg,'PYTHON',cfg.PYTHON.with_name('python.exe'))
     launcher=str(cfg.PYTHON.with_name('pythonw.exe'))
     monkeypatch.setattr(processes,'_launchers',lambda:{processes._path(launcher):launcher})
     owned=service._windows_definition({'xml':service.definition('win32'),'owner_sid':'S-1-5-21-123','current_sid':'S-1-5-21-123'})
@@ -266,7 +267,7 @@ def forward(synthetic):
     manifest={'repository':'code-by-muhammad/second-brain-system','version':'9.9.9','sha256':{'app/core.py':hashlib.sha256(candidate).hexdigest()}}
     raw=json.dumps(manifest).encode();(target/'release-manifest.json').write_bytes(raw)
     snap['controller_checkout']=str(target);snap['controller_identity']={'repository':manifest['repository'],'tag':'v9.9.9','manifest_sha256':hashlib.sha256(raw).hexdigest()}
-    device=json.dumps({'release_root':str(target),'python':str(cfg.PYTHON)}).encode()
+    device=json.dumps({'release_root':str(target),'python':str(cfg.PYTHON),'version':'9.9.9'}).encode()
     snap['files'][0]['after_sha256']=hashlib.sha256(device).hexdigest()
     new=save();value['snapshot_sha256']=new['snapshot_sha256'];write_hold(value)
     return value,snap,native,calls,device,candidate

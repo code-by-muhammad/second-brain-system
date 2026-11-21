@@ -10,7 +10,7 @@ if PILOT:
     cfg.STATE=(ROOT/'pilot/state').resolve()
     cfg.PORT=8767
 for key in list(os.environ):
-    if key.startswith('BASIC_MEMORY_'): os.environ.pop(key)
+    if key.upper().startswith('BASIC_MEMORY_'): os.environ.pop(key)
 os.environ.update(cfg.environment())
 os.environ['BRAIN_VAULT']=str(ROOT/'pilot/vault') if PILOT else str(cfg.VAULT)
 os.environ['BRAIN_STATE']=str(ROOT/'pilot/state') if PILOT else str(cfg.STATE)

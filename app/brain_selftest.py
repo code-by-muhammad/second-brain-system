@@ -23,8 +23,10 @@ async def _steps(add, adapter_stderr):
     from fastmcp import Client
     from fastmcp.client.transports import StdioTransport
     from brain_client import REQUIRED
-    # Exactly what an assistant's connection entry runs: the recorded Python and the adapter, nothing else.
-    transport=StdioTransport(command=str(cfg.PYTHON),args=[str(cfg.ROOT/'app/brain_client.py')],
+    from brain_connection import connection_spec, probe_environment, validate_launcher
+    import os
+    if os.name == 'posix':validate_launcher(cfg.ROOT,cfg.PYTHON)
+    transport=StdioTransport(**connection_spec(cfg.ROOT,cfg.PYTHON),env=probe_environment(),
                              keep_alive=False,log_file=adapter_stderr)
     async with Client(transport,timeout=180,init_timeout=65) as client:
         async def step(name,work):

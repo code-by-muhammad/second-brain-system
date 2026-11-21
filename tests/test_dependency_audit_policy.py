@@ -119,7 +119,7 @@ def test_real_policy_source_bindings_and_no_advisory_exception(system,system_nam
     # Bind all local modules, including lazy server imports and future additions.
     expected={path.relative_to(audit.ROOT).as_posix() for path in (audit.ROOT/'app').glob('*.py')}
     expected|={'install.py','update.py','setup_runtime.py','pyproject.toml','uv.lock',
-               'check_dependency_audit.py','tests/test_security_profile.py'}
+               'check_dependency_audit.py','tests/test_security_profile.py','predecessor-builds.json'}
     assert set(policy['source_sha256'])==expected
     # With no exception to apply the gate no longer reads these; keep them true so a future exception starts from reviewed bytes.
     assert all(hashlib.sha256((audit.ROOT/name).read_bytes()).hexdigest()==value for name,value in policy['source_sha256'].items())

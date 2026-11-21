@@ -85,7 +85,7 @@ def test_bootstrap_budget_includes_inventory(brain,monkeypatch):
     monkeypatch.setattr(index,'configuration',lambda:None);monkeypatch.setattr(index,'ensure_history_scope',lambda:{})
     def inventory(check):clock[0]+=21;check()
     monkeypatch.setattr(index,'inventory',inventory)
-    monkeypatch.setattr(bootstrap,'_run_reindex',lambda *args:pytest.fail('No runner after preflight timeout'))
+    monkeypatch.setattr(bootstrap,'_run_reindex',lambda *args,**launch:pytest.fail('No runner after preflight timeout'))
     result=bootstrap.main(overall_seconds=20,stall_seconds=5)
     assert result['status']=='needs attention' and result['reason']=='overall_time_limit'
 

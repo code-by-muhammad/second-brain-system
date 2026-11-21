@@ -34,8 +34,9 @@ def test_client_config_preservation(brain,tmp_path,monkeypatch):
     assert data['model']=='user-choice' and data['mcp_servers']['other']['command']=='keep'
     # Refreshing command/args must retain owner options on the managed server.
     assert data['mcp_servers']['second-brain']['env']=={'OLD':'value'}
-    assert data['mcp_servers']['second-brain']['command']==str(cfg.PYTHON)
-    assert data['mcp_servers']['second-brain']['args']==[str(cfg.ROOT/'app/brain_client.py')]
+    spec=installer.setup_helpers().connection_spec(cfg.ROOT,cfg.PYTHON)
+    assert data['mcp_servers']['second-brain']['command']==spec['command']
+    assert data['mcp_servers']['second-brain']['args']==spec['args']
     claude=json.loads((home/'.claude.json').read_text())
     assert claude['theme']=='dark' and claude['mcpServers']['other']['command']=='keep'
     instructions=(home/'.codex/AGENTS.md').read_text()

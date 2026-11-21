@@ -109,7 +109,8 @@ def test_linux_listener_records_stable_lifetimes_and_rechecks_after_metadata(bra
     supervisor=SimpleNamespace(pid=70,role='supervisor',birth=9999,
         lifetime={'pid':70,'boot_id':BOOT,'start_ticks':100},alive=lambda:True,close=lambda:None)
     monkeypatch.setattr(processes,'inspect',lambda pid,**kwargs:server if pid==80 else supervisor)
-    monkeypatch.setattr(processes,'_listeners',lambda:[SimpleNamespace(pid=80,laddr=SimpleNamespace(ip='127.0.0.1',port=cfg.PORT))])
+    monkeypatch.setattr(processes,'_linux_lifetime',lambda pid:server.lifetime if pid==80 else supervisor.lifetime)
+    monkeypatch.setattr(processes,'_listeners',lambda:[SimpleNamespace(pid=80,lifetime=server.lifetime,laddr=SimpleNamespace(ip='127.0.0.1',port=cfg.PORT))])
     result=processes.listener_identity()
     assert result['supervisor_start_ticks']==100 and result['supervisor_boot_id']==BOOT
     server.alive=lambda:False
@@ -133,7 +134,7 @@ def test_linux_ready_wait_uses_boot_boundary_with_wall_clock_shift(monkeypatch):
     monkeypatch.setattr(service.sys,'platform','linux')
     owned={'birth':1,'supervisor_birth':1,'boot_id':BOOT,'supervisor_boot_id':BOOT,
            'start_ticks':302,'supervisor_start_ticks':301}
-    monkeypatch.setattr(processes,'listener_identity',lambda:owned)
+    monkeypatch.setattr(processes,'listener_identity',lambda **kwargs:owned)
     monkeypatch.setattr(service,'_heartbeat',lambda *args:'verified')
     boundary={'boot_id':BOOT,'boottime_ticks':300}
     assert service._wait_started(900000,800000,False,service.time.monotonic()+1,boundary,boundary)==(owned,'verified')
@@ -181,6 +182,7 @@ def test_linux_missing_wrong_boot_or_stricter_since_refuses_before_start(brain,m
 
 @pytest.mark.parametrize('version,legacy',[('0.1.7',True),('0.1.9',False)])
 def test_linux_finish_uses_recorded_start_boundary_and_stable_equality(brain,monkeypatch,version,legacy):
+    monkeypatch.setattr(service,'_held_snapshot',lambda value:{'registration':{'present':True},'previous':{}})
     import brain_cli as cli
     monkeypatch.setattr(service.sys,'platform','linux')
     monkeypatch.setattr(service,'_qualified_native_platform',lambda:None)
@@ -227,11 +229,11 @@ def test_linux_positive_start_binds_exact_stop_receipt(brain,monkeypatch,since):
         'empty_at_filetime':400,'empty_boot_id':BOOT,'empty_boottime_ticks':100}))
     owned={'pid':80,'start_ticks':152,'boot_id':BOOT,'supervisor_pid':70,
            'supervisor_start_ticks':151,'supervisor_boot_id':BOOT}
-    lookups=iter([None,None,owned]);native_calls=[]
+    lookups=iter([None,owned]);native_calls=[]
     native={'file_present':True,'loaded':True,'enabled':False,'running':True,'main_pid':70,
             'main_lifetime':{'pid':70,'start_ticks':151,'boot_id':BOOT}}
-    monkeypatch.setattr(service,'_linux_registration',lambda:SimpleNamespace(inspect=lambda:native))
-    monkeypatch.setattr(processes,'listener_identity',lambda:next(lookups))
+    monkeypatch.setattr(service,'_linux_registration',lambda:SimpleNamespace(inspect=lambda **kwargs:native))
+    monkeypatch.setattr(processes,'listener_identity',lambda **kwargs:next(lookups))
     monkeypatch.setattr(service,'_start_native',lambda **kwargs:native_calls.append('started'))
     monkeypatch.setattr(service,'_wait_started',lambda *args:(owned,'verified'))
     assert service.start(explicit=True,hold_id=hold,since=since)['status']=='started'
@@ -277,7 +279,7 @@ def test_linux_finish_refuses_unproved_lifetime_even_with_legacy(brain,monkeypat
     identity_boot='another' if case=='different-boot' else BOOT
     owned={'pid':80,'birth':1,'start_ticks':152,'boot_id':identity_boot,'supervisor_pid':70,
            'supervisor_birth':2,'supervisor_start_ticks':151,'supervisor_boot_id':identity_boot}
-    monkeypatch.setattr(processes,'listener_identity',lambda:owned)
+    monkeypatch.setattr(processes,'listener_identity',lambda **kwargs:owned)
     async def no_health(*args):pytest.fail('credentials used before lifetime/heartbeat proof')
     monkeypatch.setattr(cli,'mcp_call',no_health)
     with pytest.raises(processes.OwnershipError):service.finish_transaction(hold,version,allow_legacy=True)

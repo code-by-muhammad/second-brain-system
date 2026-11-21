@@ -97,7 +97,8 @@ def test_real_main_keeps_venv_interpreter_and_venv_only_import(portable,monkeypa
     base=subprocess.run([str(python.resolve()),'-c','import second_brain_venv_marker'],capture_output=True,text=True)
     assert base.returncode!=0
     claude=json.loads((portable[-1]/'.claude.json').read_text())
-    assert claude['mcpServers']['second-brain']['command']==str(python)
+    assert claude['mcpServers']['second-brain']['command']==str(root/'bin'/'second-brain-mcp')
+    assert claude['mcpServers']['second-brain']['args']==[]
 
 
 @pytest.mark.skipif(os.name=='nt',reason='POSIX file permission bits')
@@ -107,9 +108,9 @@ def test_atomic_keeps_mode_and_first_byte_private(portable,monkeypatch,tmp_path)
     real_replace=install.os.replace;real_link=install.os.link
     real_fdopen=install.os.fdopen
     observed=[]; before_write=[]
-    def fdopen(fd,*args,**kwargs):
-        before_write.append(stat.S_IMODE(os.fstat(fd).st_mode))
-        return real_fdopen(fd,*args,**kwargs)
+    def fdopen(fd,mode,*args,**kwargs):
+        if 'w' in mode:before_write.append(stat.S_IMODE(os.fstat(fd).st_mode))
+        return real_fdopen(fd,mode,*args,**kwargs)
     def replace(source,destination):
         observed.append(('replace',stat.S_IMODE(Path(source).stat().st_mode),Path(source).read_text()))
         real_replace(source,destination)

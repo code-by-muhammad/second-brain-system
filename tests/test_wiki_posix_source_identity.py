@@ -3,6 +3,7 @@ import copy
 import json
 import os
 from pathlib import Path
+from note_read_fixture import observe_note_open
 
 import pytest
 
@@ -95,15 +96,14 @@ def test_public_backslash_separator_aliases_still_read_the_ordinary_original(bra
 def test_real_source_io_failure_remains_retryable_without_quality_strikes(brain, monkeypatch, tmp_path):
     original = write_source('03-Resources/ordinary.md')
     before = note_snapshot()
-    real_open = Path.open
     reads = []
-    def opened(path, *args, **kwargs):
-        if path == original and (args[0] if args else kwargs.get('mode', 'r')) == 'rb':
-            reads.append(True)
-            if len(reads) == 2:
-                raise OSError('Synthetic transport/read failure after inventory.')
-        return real_open(path, *args, **kwargs)
-    monkeypatch.setattr(Path, 'open', opened)
+    def opened(open_stream, mode):
+        assert mode == 'rb'
+        reads.append(True)
+        if len(reads) == 2:
+            raise OSError('Synthetic transport/read failure after inventory.')
+        return open_stream()
+    observe_note_open(monkeypatch, original, opened)
     calls = forbid_model(monkeypatch)
     report = w.run(4)
     observed = observe(tmp_path, report, calls)

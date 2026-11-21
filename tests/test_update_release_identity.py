@@ -32,7 +32,7 @@ def release_case(tmp_path, monkeypatch):
     root = tmp_path / 'synthetic runtime'
     root.mkdir()
     (root / 'device.json').write_text(json.dumps({'vault': str(tmp_path / 'synthetic vault'),
-        'python': 'synthetic-old-python', 'release_root': 'synthetic-old-release',
+        'python': sys.executable, 'release_root': 'synthetic-old-release',
         'version': '0.1.6', 'role': 'capture'}), encoding='utf-8')
     release = root / 'releases' / VERSION
     effects = []
@@ -110,6 +110,14 @@ def release_case(tmp_path, monkeypatch):
         monkeypatch.setattr(support,'run',run)
         monkeypatch.setattr(helper,'setup_helpers',lambda:support)
         monkeypatch.setattr(updater,'installer',lambda:helper)
+        monkeypatch.setattr(support,'service_python',lambda *args:None)
+        monkeypatch.setattr(updater,'_predecessor',lambda *args:({'app.py':'a'*64},{'source':'synthetic'}))
+        def inspect(*args):
+            assert args[3:]==('service','inspect')
+            registration={'kind':sys.platform,'definition_sha256':'a'*64,'enabled':True,'interpreter':sys.executable}
+            if sys.platform=='win32':registration.update(xml='<Task/>',owner_sid='S-1-5-21-101-102-103-1001')
+            return {'status':'inspected','task_present':True,'task_enabled':True,'registration':registration}
+        monkeypatch.setattr(updater,'controller',inspect)
         monkeypatch.setattr(updater,'__file__',str(release/'update.py'))
         monkeypatch.setattr(updater, 'update_lock', lambda _: contextlib.nullcontext())
         monkeypatch.setattr(sys, 'argv', ['update.py', '--root', str(root), '--version', VERSION])
@@ -201,7 +209,11 @@ def test_public_entrypoint_verifies_before_loading_real_sibling(release_case,mon
     assert not marker.exists() and not (root/'state').exists() and effects==[]
     assert before=={p.relative_to(root).as_posix():p.read_bytes() for p in root.rglob('*') if p.is_file()}
 
-@pytest.mark.parametrize('name',['yaml.pyd','filelock.cp312-win_amd64.pyd','json.pyc','pkg/__init__.pyc'])
+@pytest.mark.parametrize('name',[
+    pytest.param('yaml.pyd', marks=pytest.mark.skipif(os.name!='nt', reason='.pyd is importable only on Windows')),
+    pytest.param('filelock.cp312-win_amd64.pyd', marks=pytest.mark.skipif(os.name!='nt', reason='.pyd is importable only on Windows')),
+    'json.pyc','pkg/__init__.pyc',
+])
 def test_untracked_importable_controller_files_are_refused(release_case,name):
     updater,_,release,_,_,_,_,make,_=release_case;make(release)
     path=release/'app'/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'Synthetic inert payload, never execute.')

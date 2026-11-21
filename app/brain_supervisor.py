@@ -13,18 +13,61 @@ def _bootstrap_admitted():
     try:
         with FileLock(str(cfg.STATE/'index-bootstrap.lock'),timeout=0):
             path=cfg.STATE/'index-bootstrap-status.json'
-            try: state=json.loads(path.read_text()) if path.exists() else {}
+            try:
+                # A receipt is small. One that is not is unreadable, like one that is not JSON.
+                with path.open('rb') as stream:raw=stream.read(65537)
+                state=json.loads(raw) if len(raw)<=65536 else {}
             except (OSError,ValueError,RecursionError): state={}
             if not isinstance(state,dict): state={}
             if state.get('status')=='indexing':
-                from datetime import datetime,timezone
-                from brain_index_bootstrap import _save
-                _save({**state,'status':'needs attention','reason':'interrupted_bootstrap',
-                       'stage':'explicit retry required','finished_at':datetime.now(timezone.utc).isoformat(timespec='seconds')},terminal=True)
-                return False
+                # No bootstrap holds the lock, so the one that wrote this was killed. The index module settles it:
+                # a recorded managed drain of that generation is admitted again, an unexplained interruption needs
+                # an explicit retry, and while the lifecycle owner cannot yet say which, nothing is decided.
+                from brain_index_bootstrap import settle_interrupted
+                # The receipt read above is the one settled. It is not read again: a second read that failed
+                # would look like a receipt that needs nothing, and the repair would start on an unproved exit.
+                settled=settle_interrupted(service.managed_drain_recorded,state)
+                return True if settled=='deferred' else False if settled=='needs attention' else None
             return state.get('status') not in ('verified','needs review','needs attention')
     except Timeout:
-        return False
+        # Something holds the writer lock: an earlier bootstrap, or a manual retry. Its exit, and its worker's, is not
+        # proved, and the lock can be let go at any moment after this answer. Nothing is started on it, the repair
+        # included; a later cycle asks again and settles what that holder left.
+        return None
+
+
+def _start_bootstrap(arguments,log):
+    """Start either bootstrap entry form, enrol it, and only then let it begin.
+
+    The child waits for one line on standard input before it takes a lock, writes a receipt or prepares anything.
+    If this process dies first the child reads end of input and exits having done nothing."""
+    # -B: the entry imports its sibling modules before it reads the start line, and one that is never released must
+    # leave the application folder as it found it, compiled files included.
+    child=subprocess.Popen([str(cfg.PYTHON),'-B',str(cfg.ROOT/'app/brain_index_bootstrap.py'),*arguments],stdin=subprocess.PIPE,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
+    try:
+        service.enrol_index_bootstrap(child,arguments)
+        try:child.stdin.write(b'start\n');child.stdin.close()
+        except OSError:pass  # It ended first; its exit is read on a later cycle like any other.
+    except BaseException:
+        # Never released: end it and reap it before reporting the failure.
+        try:child.stdin.close()
+        except (OSError,ValueError):pass
+        try:child.wait(timeout=5)
+        except (subprocess.TimeoutExpired,OSError):
+            try:child.kill();child.wait(timeout=5)
+            except (subprocess.TimeoutExpired,OSError):pass
+        raise
+    return child
+
+
+def _enrol_child(role,child):
+    try:
+        service.enrol_supervisor_child(role,child)
+    except BaseException:
+        child.kill()
+        child.wait(timeout=5)
+        raise
+
 
 def _maintenance_due(owned):
     # Unchanged rule: with no pass recorded yet this compares against the monotonic clock itself, so the
@@ -57,14 +100,22 @@ def main(owned=None):
                 # idles, including under launchd KeepAlive, without relaunching workers.
                 with FileLock(str(cfg.STATE/'service-control.lock'),timeout=0):
                     _publish_owned(owned)
-                    if not service.spawn_allowed():
+                    if not service.supervisor_spawn_allowed():
                         service.write_heartbeat('held')
                     else:
+                        # Reap a server that was killed before asking who owns the port.
+                        # Otherwise a zombie still holds the socket and the next check
+                        # reports several listeners and never starts a replacement.
+                        if child is not None and child.poll() is not None:
+                            owned.pop('server', None)
+                            child = None
+                            _publish_owned(owned)
                         identity=processes.listener_identity()
                         listening=identity is not None
-                        if not listening and (child is None or child.poll() is not None):
+                        if not listening and child is None:
                             with (cfg.ROOT/'logs/service-server.log').open('ab') as log:
                                 child=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_server.py')],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
+                                _enrol_child('server',child)
                                 owned['server']=child
                                 _publish_owned(owned)
                         # A finished maintenance pass is recorded first, so the repair that waited for it can start
@@ -79,9 +130,12 @@ def main(owned=None):
                             owned.pop('bootstrap',None)
                             bootstrap=None;reconciling=owned['_reconciling']=False
                         if listening and bootstrap is None:
-                            arguments=None
-                            if _bootstrap_admitted():
+                            arguments=None;admitted=_bootstrap_admitted()
+                            if admitted:
                                 arguments=[]
+                            # None: an earlier bootstrap's exit is not yet proved. Nothing is started, the repair
+                            # included, until it is.
+                            elif admitted is None:pass
                             # The repair and the maintenance pass take turns: each holds the maintenance lock, and
                             # the one that found it taken would only fail. A maintenance pass that is running or due
                             # goes first; the repair follows when it has finished.
@@ -91,7 +145,7 @@ def main(owned=None):
                                 reconciling=owned['_reconciling']=arguments==['--reconcile']
                                 try:
                                     with (cfg.ROOT/'logs/service-bootstrap.log').open('ab') as log:
-                                        bootstrap=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_index_bootstrap.py'),*arguments],stdin=subprocess.DEVNULL,stdout=log,stderr=log,env=cfg.environment(),**cfg.child_options())
+                                        bootstrap=_start_bootstrap(arguments,log)
                                 except OSError:
                                     # A repair that cannot be started waits a whole interval like one that ran, and
                                     # the rest of this cycle, the heartbeat included, goes on. The first index is
@@ -110,6 +164,7 @@ def main(owned=None):
                                 # line there itself. The log has a new name: the old service-maintenance.log is
                                 # no longer written, so it can stay as it is without ever being renamed or cut.
                                 maintenance=subprocess.Popen([str(cfg.PYTHON),str(cfg.ROOT/'app/brain_maintenance.py')],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=log,env=cfg.environment(),**cfg.child_options())
+                                _enrol_child('maintenance',maintenance)
                                 owned['maintenance']=maintenance
                                 _publish_owned(owned)
                         service.write_heartbeat('ready' if listening else 'starting')

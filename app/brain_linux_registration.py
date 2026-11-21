@@ -36,9 +36,10 @@ def _bounded(seconds):
     """One helper's nested native calls share a finite operation budget."""
     def decorate(function):
         @wraps(function)
-        def wrapped(self,*args,**kwargs):
+        def wrapped(self,*args,deadline=None,**kwargs):
             previous=getattr(self,'_deadline',None)
-            self._deadline=min(previous or float('inf'),time.monotonic()+seconds)
+            self._deadline=min(previous if previous is not None else float('inf'),time.monotonic()+seconds)
+            if deadline is not None:self._deadline=min(self._deadline,deadline)
             try:return function(self,*args,**kwargs)
             except (OSError,UnicodeError) as error:
                 failure=RegistrationError('Native filesystem or OS state could not be verified.')

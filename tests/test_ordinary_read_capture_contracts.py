@@ -10,6 +10,7 @@ import os
 import socket
 import subprocess
 from pathlib import Path
+from note_read_fixture import observe_note_open
 
 import pytest
 
@@ -85,17 +86,12 @@ class BoundedRead:
 
 
 def watch_read(monkeypatch, path, maximum=LIMIT + 1):
-    original = Path.open
     requests = []
 
-    def opened(self, *args, **kwargs):
-        stream = original(self, *args, **kwargs)
-        mode = args[0] if args else kwargs.get('mode', 'r')
-        if self == path and 'r' in mode:
-            return BoundedRead(stream, requests, maximum)
-        return stream
+    def opened(open_stream, mode):
+        return BoundedRead(open_stream(), requests, maximum)
 
-    monkeypatch.setattr(Path, 'open', opened)
+    observe_note_open(monkeypatch, path, opened)
     return requests
 
 

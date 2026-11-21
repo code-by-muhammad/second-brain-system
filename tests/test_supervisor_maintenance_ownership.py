@@ -38,10 +38,13 @@ def lifecycle(brain, monkeypatch):
 
     class Process:
         def __init__(self, command, **kwargs):
-            self.name = Path(command[1]).name
-            self.arguments = command[2:]
+            from supervisor_fixture import script
+            self.name = Path(script(command)[0]).name
+            self.arguments = script(command)[1]
             assert self.name in ('brain_server.py', 'brain_index_bootstrap.py', 'brain_maintenance.py')
             assert kwargs['env'] == {} and 'timeout' not in kwargs
+            from supervisor_fixture import bootstrap_pipe
+            self.stdin = bootstrap_pipe(command, kwargs)
             h.on_spawn(self.name)
             self.pid = 4100 + len(h.processes)
             self.returncode = None
@@ -302,7 +305,8 @@ def test_repair_that_cannot_be_started_waits_an_interval_and_the_cycle_goes_on(l
     attempts = []
 
     def refuse(command, **kwargs):
-        if Path(command[1]).name == 'brain_index_bootstrap.py':
+        from supervisor_fixture import script
+        if Path(script(command)[0]).name == 'brain_index_bootstrap.py':
             attempts.append(h.now)
             raise OSError('synthetic launch failure')
         return spawn(command, **kwargs)
@@ -322,3 +326,5 @@ def test_repair_that_cannot_be_started_waits_an_interval_and_the_cycle_goes_on(l
     h.observe()
     retried, = h.named('brain_index_bootstrap.py')
     assert retried.arguments == ['--reconcile']
+    from supervisor_fixture import released
+    assert released(retried)

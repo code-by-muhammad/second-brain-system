@@ -15,6 +15,11 @@ import psutil
 import brain_settings as cfg
 
 SCRIPTS={name:'brain_'+name+'.py' for name in ('supervisor','server','index_bootstrap','maintenance')}
+KEEPER_SCRIPT='brain_linux_user_service.py'
+# The index worker is matched by its whole command line, not as one of SCRIPTS: that matcher compares resolved
+# paths and would accept a link elsewhere that points at the file.
+INDEX_WORKER='brain_index_worker.py'
+INDEX_ARGUMENTS=(['reindex','-p','brain'],['reindex','-p','brain','--full'],['reindex','-p','brain','--full','--search'])
 _JOB=None
 
 
@@ -25,6 +30,15 @@ class _MacInventoryChanged(OwnershipError): pass
 
 
 def _path(value): return os.path.normcase(str(Path(value).resolve()))
+
+
+def index_worker_form(args,expected):
+    """True only for <any interpreter spelling> -I -B <expected, as written> reindex -p brain [--full [--search]].
+
+    Total: any other list, shorter or longer, is False. The script path is compared as text, never resolved. The
+    interpreter is not compared here; inspect() checks the process image against this runtime's own set."""
+    return (len(args)-4 in (3,4,5) and args[1:3]==['-I','-B'] and args[4:] in INDEX_ARGUMENTS
+            and os.path.normcase(args[3])==os.path.normcase(os.path.abspath(str(expected))))
 
 
 def _api():
@@ -293,6 +307,9 @@ def inspect(pid,*,required=False):
             from brain_mac_registration import SERVICE_ENTRY
             supervisor=str(cfg.ROOT/'app/brain_supervisor.py')
             if tokens==['-I','-B','-c',SERVICE_ENTRY,supervisor]:tokens=[supervisor]
+        worker=cfg.ROOT/'app'/INDEX_WORKER;worker_form=index_worker_form(args,worker)
+        if worker_form and (worker.is_symlink() or worker.is_junction()):
+            raise OwnershipError('Linked runtime script cannot establish ownership.')
         while tokens and tokens[0] in ('-I','-B'):tokens=tokens[1:]
         role=None;script=None
         if len(tokens)==1 or tokens[1:]==['--reconcile']:
@@ -301,14 +318,19 @@ def inspect(pid,*,required=False):
                 expected=cfg.ROOT/'app'/filename
                 if expected.is_symlink() or expected.is_junction():raise OwnershipError('Linked runtime script cannot establish ownership.')
                 if _path(tokens[0])==_path(expected):role=name;script=_path(tokens[0]);break
+        keeper=cfg.ROOT/'app'/KEEPER_SCRIPT
+        if (sys.platform=='linux' and len(tokens)==2 and tokens[1]=='supervise'
+                and _path(tokens[0])==_path(keeper)):
+            if keeper.is_symlink() or keeper.is_junction():raise OwnershipError('Linked keeper script cannot establish ownership.')
+            role='keeper';script=_path(keeper)
         # The index entry point is beside the selected venv alias, not the
         # canonical base interpreter or its framework exec-replacement image.
+        # Releases before 0.2.16 ran the reindex through this entry point; one may still be running.
         bm_paths=_bm_paths()
-        bm_arguments=(['reindex','-p','brain'],['reindex','-p','brain','--full'],
-                      ['reindex','-p','brain','--full','--search'])
-        bm=exe in bm_paths and args[1:] in bm_arguments
-        child_bm=tokens[1:] in bm_arguments and _path(tokens[0]) in bm_paths
+        bm=exe in bm_paths and args[1:] in INDEX_ARGUMENTS
+        child_bm=tokens[1:] in INDEX_ARGUMENTS and _path(tokens[0]) in bm_paths
         if bm or child_bm:role='index_worker';script=exe if bm else _path(tokens[0])
+        if worker_form:role='index_worker';script=os.path.normcase(os.path.abspath(str(worker)))
         if role is None:
             if required:raise OwnershipError('Listener is not this runtime\'s exact server process.')
             return None
@@ -320,7 +342,10 @@ def inspect(pid,*,required=False):
                 if owner is not None:owner.close()
                 raise OwnershipError('Base interpreter has no verified matching launcher parent.')
             expected=launchers.get(owner.exe)
-            if owner.role=='index_worker':expected=launchers.get(_path(Path(owner.exe).with_name('python.exe')))
+            # Only the old bm.exe entry point is a separate image beside the launcher; the worker script runs
+            # under the launcher itself.
+            if owner.role=='index_worker' and Path(owner.exe).name.lower()=='bm.exe':
+                expected=launchers.get(_path(Path(owner.exe).with_name('python.exe')))
             if expected!=exe:owner.close();raise OwnershipError('Python launcher/base pair disagrees.')
             parents.append(owner);kind='interpreter'
         else:raise OwnershipError('Runtime script uses an unrecognized interpreter.')
@@ -351,8 +376,10 @@ def roots():
             original_name=known_name
             if os.name=='nt' and not known_name:continue
             args=process.info.get('cmdline') or []
-            candidates=[value for value in args[1:] if value and not value.startswith('-') and Path(value).name.lower() in set(SCRIPTS.values())]
-            exact_script=any(_path(value)==_path(cfg.ROOT/'app'/filename) for value in candidates for filename in SCRIPTS.values())
+            exact_scripts=tuple(SCRIPTS.values())+((KEEPER_SCRIPT,) if sys.platform=='linux' else ())
+            candidates=[value for value in args[1:] if value and not value.startswith('-') and Path(value).name.lower() in exact_scripts]
+            exact_script=(any(_path(value)==_path(cfg.ROOT/'app'/filename) for value in candidates for filename in exact_scripts)
+                          or index_worker_form(args,cfg.ROOT/'app'/INDEX_WORKER))
             index_args=[value for value in args if Path(value).name.lower() in ('bm.exe','bm')]
             if not exact_script and not index_args:continue
             if os.name!='nt' and not original_name and not exact_script:
@@ -552,16 +579,130 @@ def _mac_listeners():
     raise OwnershipError('Socket inventory changed during inspection; no credentials sent.')
 
 
+class ListenerUncertain(OwnershipError):
+    """The scan saw a listener without a stable ownership attribution."""
+
+
 def _listeners():
+    """Keep unattributed rows occupied until an independent scan proves absence."""
     try:
         if sys.platform == 'darwin':
             return _mac_listeners()
-        return [row for row in psutil.net_connections(kind='tcp') if row.status==psutil.CONN_LISTEN and row.laddr.port==cfg.PORT]
-    except (psutil.Error,OSError) as error:raise OwnershipError('Local listener ownership is unavailable.') from error
+        result = []
+        seen = set()
+        rows = psutil.net_connections(kind='tcp')
+        if len(rows) > 65536:
+            raise OwnershipError('Local listener inventory exceeds its bound.')
+        for row in rows:
+            if row.status != psutil.CONN_LISTEN or not row.laddr or row.laddr.port != cfg.PORT:
+                continue
+            pid = getattr(row, 'pid', None)
+            fd = getattr(row, 'fd', -1)
+            lifetime = None
+            if sys.platform == 'linux' and type(pid) is int and pid > 0:
+                try:
+                    lifetime = _linux_lifetime(pid)
+                except (OwnershipError, psutil.Error, OSError):
+                    pass
+            identity = tuple(sorted(lifetime.items())) if lifetime else None
+            key = (pid, identity, fd, getattr(row, 'family', None), getattr(row, 'type', None), row.laddr.ip, row.laddr.port)
+            if identity is not None and fd >= 0:
+                if key in seen:
+                    continue
+                seen.add(key)
+            # On Windows, inspect() reads the exact FILETIME from a process handle.
+            result.append(SimpleNamespace(pid=pid, lifetime=lifetime, birth=None,
+                                          laddr=row.laddr, status=row.status))
+        return result
+    except (psutil.Error,OSError) as error:
+        raise ListenerUncertain('Local listener ownership is unavailable.') from error
 
 
-def listener_identity():
+def _linux_listener(rows):
+    """Derive ownership from one scan. Keep both identities until confirmed."""
+    if any(row.laddr.ip != '127.0.0.1' for row in rows):
+        raise OwnershipError('Port has a non-loopback listener; no credentials sent.')
+    known = [row for row in rows if row.lifetime is not None]
+    if len(known) > 1:
+        raise OwnershipError('Port has multiple listeners; no credentials sent.')
+    if len(known) != 1 or len(rows) != 1:
+        raise ListenerUncertain('Port has an unverified listener; no credentials sent.')
+    row = known[0]
+    owned = supervisor = None
+    try:
+        try:
+            owned = inspect(row.pid)
+            lifetime = _linux_lifetime(row.pid)
+        except OwnershipError as error:
+            raise ListenerUncertain('Listener process metadata could not be verified.') from error
+        if lifetime != row.lifetime:
+            raise ListenerUncertain('Listener lifetime changed during inspection.')
+        if owned is None or owned.role != 'server':
+            raise OwnershipError('Listener is foreign to this runtime; no credentials sent.')
+        if owned.lifetime != row.lifetime or not owned.alive():
+            raise ListenerUncertain('Listener lifetime changed during inspection.')
+        path = cfg.ROOT/'state/service-pids.json'
+        try:
+            if path.is_symlink() or path.is_junction():
+                raise ValueError
+            with path.open('rb') as stream:
+                raw = stream.read(65537)
+            if len(raw) > 65536:
+                raise ValueError
+            value = json.loads(raw)
+            pid = value.get('supervisor') if isinstance(value, dict) else None
+            if type(pid) is not int or owned.parent_pid != pid:
+                raise ValueError
+            supervisor = inspect(pid)
+        except (OSError, ValueError, RecursionError, OwnershipError):
+            raise ListenerUncertain('Live recorded supervisor ownership is unavailable.') from None
+        if supervisor is None or supervisor.role != 'supervisor' or not _parent_precedes(supervisor,owned):
+            raise ListenerUncertain('Live recorded supervisor ownership is unavailable.')
+        if not (owned.alive() and supervisor.alive()):
+            raise ListenerUncertain('Listener or supervisor lifetime changed during verification.')
+        return {**owned.record(),'supervisor_pid':supervisor.pid,'supervisor_birth':supervisor.birth,
+                'supervisor_start_ticks':supervisor.lifetime['start_ticks'],
+                'supervisor_boot_id':supervisor.lifetime['boot_id']}
+    finally:
+        if owned is not None:
+            owned.close()
+        if supervisor is not None:
+            supervisor.close()
+
+
+def _linux_listener_identity(deadline):
+    candidate = None
+    uncertainty = 'Listener ownership changed during verification.'
+    for attempt in range(3):
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        try:
+            rows = _listeners()
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+            if not rows:
+                return None
+            current = _linux_listener(rows)
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+            if same_runtime(current,candidate):
+                return current
+            candidate = current
+            continue
+        except ListenerUncertain as error:
+            candidate = None
+            uncertainty = str(error)
+        if attempt < 2:
+            wait = .05 if deadline is None else min(.05,deadline-time.monotonic())
+            if wait > 0:
+                time.sleep(wait)
+    raise ListenerUncertain(uncertainty)
+
+
+def listener_identity(*, deadline=None):
     """Verify listener -> server launcher -> live recorded supervisor."""
+    if sys.platform == 'linux':
+        return _linux_listener_identity(deadline)
     rows=_listeners()
     if not rows:return None
     if len(rows)!=1 or rows[0].pid is None or rows[0].laddr.ip!='127.0.0.1':
@@ -571,7 +712,7 @@ def listener_identity():
     supervisor=None
     try:
         if owned.role!='server':raise OwnershipError('Listener is not the runtime server.')
-        if getattr(rows[0],'birth',owned.birth)!=owned.birth:
+        if getattr(rows[0],'birth',owned.birth) not in (None,owned.birth):
             raise OwnershipError('Listener lifetime changed during ownership inspection.')
         launcher=owned.parents[0] if owned.kind=='interpreter' else owned
         registry=cfg.ROOT/'state/service-pids.json'
@@ -586,7 +727,7 @@ def listener_identity():
         if (len(again)!=1 or again[0].pid!=owned.pid
                 or again[0].laddr.ip!=rows[0].laddr.ip
                 or again[0].laddr.port!=rows[0].laddr.port
-                or getattr(again[0],'birth',owned.birth)!=owned.birth):
+                or getattr(again[0],'birth',owned.birth) not in (None,owned.birth)):
             raise OwnershipError('Listener changed during ownership verification.')
         if sys.platform=='linux' and (not owned.alive() or not supervisor.alive()):
             raise OwnershipError('Linux listener or supervisor lifetime changed during verification.')

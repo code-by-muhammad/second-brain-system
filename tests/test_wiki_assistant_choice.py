@@ -636,13 +636,34 @@ def test_wiki_model_command_reads_the_record_as_a_run_does_and_starts_nothing(br
     assert started==[]
 
 
+def verify_synthetic_wizard_release(setup, monkeypatch, root, version):
+    import hashlib
+    import brain_release
+
+    app=root/'app'
+    app.mkdir(exist_ok=True)
+    if not list(app.iterdir()):
+        (app/'fixture.py').write_bytes(b'# Synthetic installed application\n')
+    manifest={'version':version,'sha256':{
+        'app/'+file.name:hashlib.sha256(file.read_bytes()).hexdigest() for file in app.iterdir()
+    }}
+    release=root.parent/'verified-source'
+    release.mkdir()
+    (release/'release-manifest.json').write_text(json.dumps(manifest),encoding='utf-8')
+    monkeypatch.setattr(setup,'REPO',release)
+    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{
+        'verify':lambda repo:manifest,
+        'release_helpers':lambda repo,verified:brain_release,
+    })
+
+
 def test_setup_offers_a_wiki_assistant_only_to_a_maintainer_that_has_none_and_repeats_what_is_open_last(tmp_path,monkeypatch,capsys):
     setup=setup_module_under_test()
     root=tmp_path/'runtime';vault=tmp_path/'vault';(root/'state').mkdir(parents=True);vault.mkdir()
     def device(role):(root/'device.json').write_text(json.dumps({'device_id':'abc123','role':role,'version':'0.2.10','vault':str(vault),'python':sys.executable}),encoding='utf-8')
     offered=[];selected=[]
     class Done:returncode=0;stderr='';stdout=''
-    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'verify':lambda repo:{'version':'0.2.10'}})
+    verify_synthetic_wizard_release(setup,monkeypatch,root,'0.2.10')
     monkeypatch.setattr(setup,'run',lambda command,capture=False:Done())
     monkeypatch.setattr(setup,'wait_running',lambda *args,**kwargs:True)
     monkeypatch.setattr(setup,'offer_wiki',lambda device,assume:offered.append(assume) or 'No wiki assistant is selected: both.')
@@ -679,7 +700,7 @@ def test_setup_and_check_print_a_path_the_console_encoding_lacks_instead_of_stop
     sys.stdout.flush();assert 'PASS   wiki assistant: '+path+', model m, effort high' in raw.getvalue().decode('utf-8')
     setup=setup_module_under_test()
     class Done:returncode=0;stderr='';stdout=''
-    monkeypatch.setattr(setup.runpy,'run_path',lambda found:{'verify':lambda repo:{'version':'0.2.10'}})
+    verify_synthetic_wizard_release(setup,monkeypatch,root,'0.2.10')
     monkeypatch.setattr(setup,'run',lambda command,capture=False:Done())
     monkeypatch.setattr(setup,'wait_running',lambda *args,**kwargs:True)
     monkeypatch.setattr(setup,'offer_wiki',lambda device,assume:'No wiki assistant is selected: '+path)
@@ -699,7 +720,7 @@ def test_setup_runs_the_self_test_only_when_asked_and_its_failure_fails_the_run(
     def brain(device,*arguments,capture=False):
         asked.append(arguments);done=Done();done.stdout=answer.get('out','');done.returncode=answer.get('code',0);done.stderr=answer.get('err','');return done
     monkeypatch.setattr(setup,'brain',brain)
-    monkeypatch.setattr(setup.runpy,'run_path',lambda path:{'verify':lambda repo:{'version':'0.2.11'}})
+    verify_synthetic_wizard_release(setup,monkeypatch,root,'0.2.11')
     monkeypatch.setattr(setup,'run',lambda command,capture=False:Done())
     monkeypatch.setattr(setup,'wait_running',lambda *args,**kwargs:True)
     def go(*flags):
@@ -729,6 +750,8 @@ def test_setup_runs_the_self_test_only_when_asked_and_its_failure_fails_the_run(
 def test_self_test_reports_every_step_and_stops_claiming_when_nothing_was_saved(brain,monkeypatch,closed_ambient_loop):
     """The steps run against a stand-in for the assistant connection; the real one is exercised on a device."""
     import brain_selftest as selftest
+    from brain_connection import connection_spec, launcher_bytes
+    import os
     import fastmcp,fastmcp.client.transports as transports
     from brain_client import REQUIRED
     if closed_ambient_loop:
@@ -737,6 +760,9 @@ def test_self_test_reports_every_step_and_stops_claiming_when_nothing_was_saved(
         loop.close()
         monkeypatch.setattr(selftest.asyncio,'run',loop.run_until_complete)
     monkeypatch.setattr(cfg,'VERSION','0.2.11')
+    if os.name=='posix':
+        launcher=cfg.ROOT/'bin/second-brain-mcp';launcher.parent.mkdir()
+        launcher.write_bytes(launcher_bytes(cfg.ROOT,cfg.PYTHON));launcher.chmod(0o700)
     state={'tools':set(REQUIRED),'capture':{'status':'saved','path':'00-Inbox/AI-Captures/x.md'},'started':[]}
     class Tool:
         def __init__(self,name):self.name=name
@@ -761,8 +787,7 @@ def test_self_test_reports_every_step_and_stops_claiming_when_nothing_was_saved(
     monkeypatch.setattr(transports,'StdioTransport',lambda **options:options)
     report=selftest.run()
     assert report['status']=='passed' and [row['check'] for row in report['checks']]==['self-test '+name for name in ('tools','health','context','save','read','search')],report
-    # The connection is the recorded Python with the adapter and nothing else, as in an assistant's settings.
-    assert state['started'][0]['command']==str(cfg.PYTHON) and state['started'][0]['args']==[str(cfg.ROOT/'app/brain_client.py')]
+    assert {key:state['started'][0][key] for key in ('command','args')}==connection_spec(cfg.ROOT,cfg.PYTHON)
     # The milestone is the same every time on one device, so a second run is a duplicate and still a pass.
     assert selftest.milestone()==selftest.milestone() and cfg.DEVICE_ID in selftest.milestone()['event_id']
     state['capture']={'status':'duplicate','path':'00-Inbox/AI-Captures/x.md'}

@@ -13,6 +13,7 @@ _original_listener_route = processes._listeners
 
 @pytest.fixture
 def mac_inventory(brain, monkeypatch):
+    monkeypatch.setattr(processes, 'sys', SimpleNamespace(platform='darwin'))
     monkeypatch.setattr(processes, '_listeners', processes._mac_listeners)
     monkeypatch.setattr(processes.psutil, 'net_connections', lambda **_: pytest.fail('Privileged global socket scan'))
     monkeypatch.setattr(processes, 'descendants', lambda _: [])
@@ -129,12 +130,23 @@ def test_descendant_inheriting_listener_causes_refusal(mac_inventory, monkeypatc
 
 @pytest.mark.parametrize('platform', ['darwin', 'win32', 'linux'])
 def test_platform_route_keeps_global_scan_off_mac(brain, monkeypatch, platform):
-    row = SimpleNamespace(status=processes.psutil.CONN_LISTEN, laddr=SimpleNamespace(port=cfg.PORT))
+    row = SimpleNamespace(pid=123, status=processes.psutil.CONN_LISTEN,
+                          laddr=SimpleNamespace(ip='127.0.0.1',port=cfg.PORT))
+    calls=[]
+    def global_inventory(**unused):
+        calls.append('global')
+        return [row]
     with monkeypatch.context() as patch:
-        patch.setattr(processes.sys, 'platform', platform)
+        patch.setattr(processes, 'sys', SimpleNamespace(platform=platform))
         patch.setattr(processes, '_mac_listeners', lambda: ['mac-result'])
-        patch.setattr(processes.psutil, 'net_connections', lambda **_: [row])
-        assert _original_listener_route() == (['mac-result'] if platform == 'darwin' else [row])
+        patch.setattr(processes, '_linux_lifetime', lambda pid:None)
+        patch.setattr(processes.psutil, 'Process', lambda pid:SimpleNamespace(is_running=lambda:False))
+        patch.setattr(processes.psutil, 'net_connections', global_inventory)
+        result=_original_listener_route()
+        if platform=='darwin':
+            assert result==['mac-result'] and calls==[]
+        else:
+            assert [entry.pid for entry in result]==[123] and calls==['global']
 
 
 @pytest.mark.parametrize('address', ['0.0.0.0', '::1'])

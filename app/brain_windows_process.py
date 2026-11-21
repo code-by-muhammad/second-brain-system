@@ -391,9 +391,13 @@ def _output(stream,destination,text,encoding):
     return None
 
 
+class StartWindowExpired(RuntimeError):
+    """The caller's start_by passed before the process could be created; nothing was started."""
+
+
 def run(command,*,input=None,capture_output=False,stdout=None,stderr=None,text=False,
         encoding=None,env=None,timeout=90,on_cleanup_wait=None,on_tick=None,direct_output=False,
-        cwd=None,on_started=None,max_output_bytes=64*1024*1024):
+        cwd=None,on_started=None,max_output_bytes=64*1024*1024,deadline=None,start_by=None):
     """Run current Git call shapes, with one deadline for direct + descendant work.
 
     Regular temporary files replace all pipe ends, including stdin. The only
@@ -403,6 +407,12 @@ def run(command,*,input=None,capture_output=False,stdout=None,stderr=None,text=F
     A signaled root gets one second for remaining background work, then the
     same verified Job cleanup runs before its original exit code is returned.
     The operation deadline still wins if it arrives first.
+
+    deadline is an optional absolute monotonic time that the caller already
+    committed to; the earlier of it and now+timeout applies, through setup as
+    well. start_by is an optional absolute monotonic time after which the
+    process must no longer be created (StartWindowExpired). Both are checked
+    in the statement before creation, and on_started runs right after it.
     """
     if os.name!='nt':raise OSError('Windows process runner requires Windows 10 or newer.')
     import msvcrt
@@ -432,7 +442,8 @@ def run(command,*,input=None,capture_output=False,stdout=None,stderr=None,text=F
     text=bool(text or encoding is not None);encoding=encoding or 'utf-8'
     if input is not None and text and not isinstance(input,str):raise TypeError('Text Git input must be text.')
     api=_kernel();process=_ProcessInformation();job=None;tracker=None;attributes=None;attributes_initialized=False
-    inherited=[];verified_empty=False;deadline=time.monotonic()+timeout
+    inherited=[];verified_empty=False;limit=time.monotonic()+timeout
+    deadline=limit if deadline is None else min(deadline,limit)
     root_finished_at=None;root_exit_code=None;next_tick=0
     with tempfile.TemporaryFile(mode='w+b') as incoming, tempfile.TemporaryFile(mode='w+b') as outgoing, tempfile.TemporaryFile(mode='w+b') as errors:
         if input is not None:
@@ -470,7 +481,9 @@ def run(command,*,input=None,capture_output=False,stdout=None,stderr=None,text=F
             startup.lpAttributeList=ctypes.cast(attributes,ctypes.c_void_p)
             # No suspended/assign/resume window. Unsupported Job nesting fails
             # before any child can run; there is no uncontained fallback.
-            if time.monotonic()>=deadline:raise subprocess.TimeoutExpired(arguments,timeout)
+            now=time.monotonic()
+            if now>=deadline:raise subprocess.TimeoutExpired(arguments,timeout)
+            if start_by is not None and now>=start_by:raise StartWindowExpired('Process start window expired.')
             _checked(api.CreateProcessW(application,line,None,None,True,0x00080000|0x00000400|0x08000000,
                                         block,str(working) if working is not None else None,ctypes.byref(startup),ctypes.byref(process)))
             if on_started is not None:on_started()

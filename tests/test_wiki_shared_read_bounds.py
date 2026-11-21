@@ -1,6 +1,7 @@
 """Three shared wiki reads are bounded at the real file-read boundary."""
 import json
 from pathlib import Path
+from note_read_fixture import observe_note_open
 from filelock import FileLock,Timeout
 import pytest
 import brain_settings as cfg
@@ -30,16 +31,16 @@ def observe(monkeypatch,target,*,grow_to=None):
         def read(self,size=-1):
             reads.append({'requested':size,'under_actual_writer':writer_held()})
             return self.stream.read(size)
-    def opened(path,mode='r',*args,**kwargs):
-        if path==target and mode in ('r','rb'):
-            if grow_to is not None and not growth:
-                before=path.stat().st_size
-                with real_open(path,'ab') as output:output.write(b' '*(grow_to-before))
-                growth.append({'before':before,'after':path.stat().st_size})
-            return Stream(real_open(path,mode,*args,**kwargs))
-        return real_open(path,mode,*args,**kwargs)
+    def opened(open_stream, mode):
+        if grow_to is not None and not growth:
+            before = target.stat().st_size
+            with real_open(target, 'ab') as output:
+                output.write(b' ' * (grow_to - before))
+            growth.append({'before': before, 'after': target.stat().st_size})
+        return Stream(open_stream())
     def no_model(*args,**kwargs):models.append('unexpected subprocess');raise AssertionError('No model or subprocess is allowed in the observed wiki call.')
-    monkeypatch.setattr(Path,'open',opened);monkeypatch.setattr(w.subprocess,'run',no_model)
+    observe_note_open(monkeypatch, target, opened)
+    monkeypatch.setattr(w.subprocess,'run',no_model)
     return reads,growth,models
 
 

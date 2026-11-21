@@ -1,6 +1,7 @@
 """Synthetic process handles only; exercise the actual supervisor entrypoint."""
 import json
 import runpy
+import sys
 from pathlib import Path
 
 import pytest
@@ -56,7 +57,8 @@ def test_actual_supervisor_recovery_keeps_owned_children(brain, monkeypatch, lab
 
     class Process:
         def __init__(self, command, **kwargs):
-            name = Path(command[1]).name
+            from supervisor_fixture import script
+            name = Path(script(command)[0]).name
             # R138 transport qualification only: preserve every old oracle.
             if name == 'brain_maintenance.py':
                 maintenance(command, **kwargs)
@@ -65,9 +67,11 @@ def test_actual_supervisor_recovery_keeps_owned_children(brain, monkeypatch, lab
                 return
             assert name in ('brain_server.py', 'brain_index_bootstrap.py')
             assert kwargs['env'] == {}
+            from supervisor_fixture import bootstrap_pipe
+            self.stdin = bootstrap_pipe(command, kwargs)
             self.pid = 1001 + len(processes)
             self.name = name
-            self.arguments = command[2:]
+            self.arguments = script(command)[1]
             processes.append(self)
 
         def poll(self):
@@ -110,6 +114,9 @@ def test_actual_supervisor_recovery_keeps_owned_children(brain, monkeypatch, lab
     terminal = label in ('verified-control', 'review-control', 'attention-control')
     assert [process.name for process in processes] == ['brain_server.py', 'brain_index_bootstrap.py']
     assert processes[1].arguments == (['--reconcile'] if terminal else [])
+    # Either entry form is started behind a pipe and released with one line.
+    from supervisor_fixture import released
+    assert processes[0].stdin is None and released(processes[1])
     registry = json.loads((state / 'service-pids.json').read_text(encoding='utf-8'))
     assert registry['server'] == processes[0].pid
     assert registry['bootstrap'] == processes[1].pid
@@ -119,3 +126,33 @@ def test_actual_supervisor_recovery_keeps_owned_children(brain, monkeypatch, lab
     # listener. A registry failure therefore precedes that iteration's query.
     assert len(connections) == (2 if fault=='registry' else 3) and len(sleeps) == 3
     assert all(process.poll() is None for process in processes)
+
+
+@pytest.mark.skipif(sys.platform!='linux',reason='Linux user-space generation enrolment.')
+@pytest.mark.parametrize('role',['server','maintenance'])
+def test_real_supervisor_child_is_reaped_when_enrolment_fails(brain,monkeypatch,role):
+    _,state=brain
+    app=cfg.ROOT/'app';app.mkdir()
+    (app/f'brain_{role}.py').write_text('import time\ntime.sleep(60)\n',encoding='utf-8')
+    spawned=[]
+
+    def refuse(given,child):
+        assert given==role
+        spawned.append(child)
+        raise RuntimeError('synthetic enrolment failure')
+
+    monkeypatch.setattr(supervisor.service,'supervisor_spawn_allowed',lambda:True)
+    monkeypatch.setattr(supervisor.service,'enrol_supervisor_child',refuse)
+    monkeypatch.setattr(supervisor.processes,'listener_identity',lambda:{'synthetic':True} if role=='maintenance' else None)
+    monkeypatch.setattr(supervisor,'_bootstrap_admitted',lambda:None)
+    monkeypatch.setattr(supervisor,'_maintenance_due',lambda owned:True)
+    owned={}
+    try:
+        with pytest.raises(RuntimeError,match='synthetic enrolment failure'):
+            supervisor.main(owned)
+        assert len(spawned)==1 and spawned[0].returncode is not None
+        assert role not in owned and json.loads((state/'service-pids.json').read_text())[role] is None
+    finally:
+        for child in spawned:
+            if child.poll() is None:child.kill()
+            child.wait(timeout=5)

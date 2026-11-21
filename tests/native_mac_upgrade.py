@@ -356,9 +356,10 @@ print(json.dumps(v))
             'private_output_path':str(private_output),'private_output_sha256':digest(read(private_output))}
         if args.mode=='forward':
             if update_error or status['status']!='updated':raise RuntimeError('Forward update did not verify.')
-            cc=obj(claude);cx=tomllib.loads(read(codex).decode());expected_client_args=[str(root/'app/brain_client.py')]
-            if (cc['mcpServers']['second-brain']['command']!=str(new_python) or cc['mcpServers']['second-brain']['args']!=expected_client_args
-                or cx['mcp_servers']['second-brain']['command']!=str(new_python) or cx['mcp_servers']['second-brain']['args']!=expected_client_args
+            cc=obj(claude);cx=tomllib.loads(read(codex).decode());expected_client_args=[]
+            expected_command=str(root/'bin'/'second-brain-mcp')
+            if (cc['mcpServers']['second-brain']['command']!=expected_command or cc['mcpServers']['second-brain']['args']!=expected_client_args
+                or cx['mcp_servers']['second-brain']['command']!=expected_command or cx['mcp_servers']['second-brain']['args']!=expected_client_args
                 or cc['owner_option']!='keep' or cc['mcpServers']['unrelated']!={'command':'dummy'}
                 or cx['owner_option']!='keep' or cx['mcp_servers']['unrelated']!={'command':'dummy'} or not read(codex).startswith(b'# retained comment\n')):
                 raise RuntimeError('Actual selected client refresh differs.')

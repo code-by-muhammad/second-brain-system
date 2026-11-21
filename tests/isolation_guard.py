@@ -149,7 +149,7 @@ def _git_network(args,position,cwd,env):
         raise AssertionError('Test guard refuses a remote outside the sandbox.')
 
 
-def check(command, *, cwd=None, env=None):
+def check(command, *, cwd=None, env=None, executable_override=None):
     if isinstance(command, (str, bytes)):
         raise AssertionError('Test guard refuses shell/string process commands.')
     args = [os.fsdecode(part) for part in command]
@@ -165,6 +165,9 @@ def check(command, *, cwd=None, env=None):
         if any(name in value.casefold() for name in ('secondbrainlocalservice', 'local.second-brain', 'second-brain.service')):
             raise AssertionError('Test guard refuses a production service identity.')
     executable = Path(args[0]).name.casefold().removesuffix('.exe')
+    actual = executable if executable_override is None else Path(os.fsdecode(executable_override)).name.casefold().removesuffix('.exe')
+    if os.name == 'nt' and 'taskkill' in (executable, actual):
+        raise AssertionError('Test guard refuses taskkill. Use an owned child process for test cleanup.')
     if executable in ('cmd','powershell','pwsh','bash','sh','wsl'):
         tokens=[value.casefold() for value in args[1:]]
         if executable=='cmd' and tokens[:1]==['/d']:tokens=tokens[1:]
@@ -175,7 +178,7 @@ def check(command, *, cwd=None, env=None):
         raise AssertionError('Test guard refuses an external inference CLI.')
     if executable in ('uv', 'uvx'):
         raise AssertionError('Test guard refuses dependency/model provisioning in tests.')
-    if (executable in ('schtasks', 'launchctl', 'systemctl', 'sc')
+    if ('schtasks' in (executable, actual) or executable in ('launchctl', 'systemctl', 'sc')
             or (executable in ('powershell', 'pwsh') and any('scheduledtask' in value.casefold() or 'schtasks' in value.casefold() for value in args))):
         raise AssertionError('Test guard refuses native service mutation without an explicit reviewed run.')
     scripts = {Path(value).name.casefold() for value in args}
@@ -223,7 +226,7 @@ class GuardedPopen(_POPEN):
     def __init__(self, args, *positional, **kwargs):
         if positional or kwargs.get('shell'):
             raise AssertionError('Test guard requires explicit subprocess keyword arguments without a shell.')
-        check(args, cwd=kwargs.get('cwd'), env=kwargs.get('env'))
+        check(args, cwd=kwargs.get('cwd'), env=kwargs.get('env'), executable_override=kwargs.get('executable'))
         super().__init__(args, **kwargs)
 
 

@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -33,43 +34,55 @@ def test_public_update_preflight_and_owned_deploy_do_not_import_untracked_checko
     (home / '.claude.json').write_bytes(b'{"owner":"preserve"}\n')
     (home / '.claude/settings.json').write_bytes(b'{"hooks":{}}\n')
     (root / 'app/original.py').write_bytes(b'# previous synthetic runtime\n')
-    previous=root/'old-release';previous.mkdir()
-    (previous/'release-manifest.json').write_text(json.dumps({'version':'0.1.6','sha256':{'app/original.py':hashlib.sha256((root/'app/original.py').read_bytes()).hexdigest()}}),encoding='utf-8')
+    previous=root/'old-release';(previous/'app').mkdir(parents=True)
+    (previous/'app/original.py').write_bytes((root/'app/original.py').read_bytes())
+    required = ['install.py', 'update.py', 'pyproject.toml', 'uv.lock']
+    for name in required:
+        (previous/name).write_bytes(b'# synthetic predecessor evidence\n')
     (root / 'device.json').write_text(json.dumps({'vault': str(vault), 'role': 'capture',
         'python': sys.executable, 'release_root': str(previous), 'version': '0.1.6',
         'device_id':'synthetic-isolation','service_name':'SecondBrain-Test-'+uuid.uuid4().hex}), encoding='utf-8')
     release = root / 'releases/v0.1.7'
     release.mkdir(parents=True)
-    names = ['.gitignore', 'install.py', 'update.py', 'setup_runtime.py', 'pyproject.toml', 'uv.lock', 'docs/AI-PROTOCOL.md']
+    names = [*required, '.gitignore', 'setup_runtime.py', 'docs/AI-PROTOCOL.md',
+             'app/brain_release.py', 'app/brain_connection.py']
     for name in names:
         target = release / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes((SOURCE / name).read_bytes())
-    (release / 'app').mkdir()
+        source = (SOURCE / name).read_bytes()
+        if name == 'install.py':
+            source, replaced = re.subn(rb"(?m)^VERSION='[\d.]+'$", b"VERSION='0.1.7'", source)
+            assert replaced == 1
+        target.write_bytes(source)
     (release / 'app/brain_cli.py').write_bytes(b'# service calls are intercepted, never executed\n')
     names.append('app/brain_cli.py')
-    hashes = {name: hashlib.sha256((release / name).read_bytes()).hexdigest() for name in names}
-    (release / 'release-manifest.json').write_text(json.dumps({'version': '0.1.7',
-        'repository': 'code-by-muhammad/second-brain-system', 'capabilities':['sealed-client-refresh-v1','owned-service-control-v1'], 'sha256': hashes}), encoding='utf-8', newline='\n')
     git_env = {k: v for k, v in os.environ.items() if not k.upper().startswith('GIT_')}
     git_env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, GIT_ALLOW_PROTOCOL='',
                    GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0')
 
-    def git(*arguments):
+    def git(checkout, *arguments):
         return real_run(['git', '-c', 'core.hooksPath=' + os.devnull, '-c', 'core.fsmonitor=false',
-            '-c', 'core.autocrlf=false', '-C', str(release), *arguments], env=git_env,
+            '-c', 'core.autocrlf=false', '-C', str(checkout), *arguments], env=git_env,
             capture_output=True, check=True, timeout=30)
 
-    git('init', '--initial-branch=main')
-    git('config', 'user.name', 'Synthetic Installer Isolation')
-    git('config', 'user.email', 'installer-isolation@example.invalid')
-    git('config', 'commit.gpgsign', 'false')
-    git('remote', 'add', 'origin', updater.REMOTE)
-    git('add', '--all')
-    git('commit', '-m', 'Synthetic tagged installer')
-    git('-c', 'tag.gpgsign=false', 'tag', 'v0.1.7')
+    def tagged(checkout, version, names, capabilities=()):
+        hashes = {name: hashlib.sha256((checkout / name).read_bytes()).hexdigest() for name in names}
+        (checkout / 'release-manifest.json').write_text(json.dumps({'version': version,
+            'repository': 'code-by-muhammad/second-brain-system', 'capabilities': capabilities,
+            'sha256': hashes}), encoding='utf-8', newline='\n')
+        git(checkout, 'init', '--initial-branch=main')
+        git(checkout, 'config', 'user.name', 'Synthetic Installer Isolation')
+        git(checkout, 'config', 'user.email', 'installer-isolation@example.invalid')
+        git(checkout, 'config', 'commit.gpgsign', 'false')
+        git(checkout, 'remote', 'add', 'origin', updater.REMOTE)
+        git(checkout, 'add', '--all')
+        git(checkout, 'commit', '-m', 'Synthetic tagged installer')
+        git(checkout, '-c', 'tag.gpgsign=false', 'tag', 'v' + version)
+
+    tagged(previous, '0.1.6', [*required, 'app/original.py'])
+    tagged(release, '0.1.7', names, ['sealed-client-refresh-v1', 'owned-service-control-v1'])
     environment = release / '.venv'
-    venv.EnvBuilder(with_pip=False, symlinks=os.name != 'nt').create(environment)
+    venv.EnvBuilder(with_pip=False, symlinks=False).create(environment)
     python = environment / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
     site = environment / ('Lib/site-packages' if os.name == 'nt' else
                            'lib/python' + str(sys.version_info.major) + '.' + str(sys.version_info.minor) + '/site-packages')
@@ -95,10 +108,13 @@ def test_public_update_preflight_and_owned_deploy_do_not_import_untracked_checko
     monkeypatch.setattr(install,'setup_helpers',lambda:support)
     monkeypatch.setattr(updater,'installer',lambda:install)
     monkeypatch.setattr(updater,'__file__',str(release/'update.py'))
+    monkeypatch.setattr(install,'VERSION','0.1.7')
+    monkeypatch.setattr(Path,'home',classmethod(lambda cls: home))
     monkeypatch.setattr(support,'host_context',lambda:None)
+    monkeypatch.setattr(support,'service_python',lambda selected: None)
     def provision(*args):effects.append('provision-intercepted');return python
     monkeypatch.setattr(support,'provision',provision)
-    def deploy(selected,selected_python,selected_vault,*,client_value,source_sha256):
+    def deploy(selected,selected_python,selected_vault,*,client_value,source_sha256,sealed,release_tools):
         assert selected==root and selected_python==python and selected_vault==vault
         support.validate_plan(client_value,root,python)
         # The in-process deploy entry point uses the already sealed plan, not
@@ -140,10 +156,21 @@ def test_public_update_preflight_and_owned_deploy_do_not_import_untracked_checko
     monkeypatch.setattr(updater, 'restore', lambda *args: None)
     registration={'kind':sys.platform,'definition_sha256':'a'*64,'enabled':True,'interpreter':sys.executable}
     if sys.platform=='win32':registration.update(xml='<Task/>',owner_sid='S-1-5-21-101-102-103-1001')
+    transaction=root/'state/service-transaction.json'
     def controller(python,checkout,selected,command,action,*flags):
         assert selected==root and command=='service' and action in ('inspect','hold','stop','install','start','finish')
         effects.append('controller-intercepted-'+action)
         if action=='inspect':return {'status':'inspected','task_present':True,'task_enabled':True,'simulated':True,'registration':dict(registration)}
+        if action=='hold':
+            saved=Path(flags[flags.index('--snapshot')+1])
+            transaction.write_text(json.dumps({'hold_id':flags[flags.index('--hold-id')+1],'root':str(root),
+                'snapshot':str(saved),'snapshot_sha256':hashlib.sha256((saved/'snapshot.json').read_bytes()).hexdigest(),
+                'stage':'prepared'}))
+        elif action=='stop':
+            transaction.write_text(json.dumps({**json.loads(transaction.read_bytes()),'stage':'stopped'}))
+        elif action=='finish':
+            transaction.unlink()
+            return {'status':'transaction released','hold_id':flags[flags.index('--hold-id')+1]}
         return {'status':'stopped' if action=='stop' else action,'empty_at_filetime':123,'simulated':True}
     monkeypatch.setattr(updater,'controller',controller)
     monkeypatch.setattr(updater, 'wait_health', lambda python, root, version,**kwargs: {'status': 'running', 'version': version,'simulated':True})

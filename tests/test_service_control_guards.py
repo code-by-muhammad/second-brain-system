@@ -21,7 +21,7 @@ def device(brain,monkeypatch):
 
 
 def test_foreign_listener_prevents_token_read_in_adapter_and_cli(device,monkeypatch):
-    def foreign():raise processes.OwnershipError('foreign listener')
+    def foreign(**kwargs):raise processes.OwnershipError('foreign listener')
     monkeypatch.setattr(processes,'listener_identity',foreign)
     # No client-access.json exists: a credential access would instead fail FileNotFoundError.
     with pytest.raises(processes.OwnershipError,match='foreign listener'):client.ensure_service()
@@ -30,7 +30,7 @@ def test_foreign_listener_prevents_token_read_in_adapter_and_cli(device,monkeypa
 
 def test_automatic_start_never_enables_disabled_task(device,monkeypatch):
     monkeypatch.setattr(service.sys,'platform','win32')
-    monkeypatch.setattr(service,'_windows_task',lambda:{'enabled':False})
+    monkeypatch.setattr(service,'_windows_task',lambda **kwargs:{'enabled':False})
     monkeypatch.setattr(service.subprocess,'run',lambda *args,**kwargs:pytest.fail('native task mutation'))
     with pytest.raises(processes.OwnershipError,match='explicitly stopped'):service.start()
 
@@ -45,6 +45,8 @@ def test_transaction_requires_uuid_and_blocks_automatic_start(device,monkeypatch
 
 
 def test_finish_refuses_listener_older_than_quiescence(device,monkeypatch):
+    monkeypatch.setattr(service,'_held_snapshot',lambda value:{'registration':{'present':True},'previous':{}})
+    monkeypatch.setattr(service,'sys',SimpleNamespace(platform='win32'))
     hold='a'*32
     path=cfg.STATE/'service-transaction.json'
     path.write_text(json.dumps({'hold_id':hold,'root':str(cfg.ROOT),'stage':'started','started_at_filetime':510,'empty_at_filetime':500}))
@@ -62,15 +64,30 @@ def test_legacy_reindex_refused_before_native_end(device,monkeypatch):
     with pytest.raises(processes.OwnershipError,match='legacy reindex'):service.stop()
 
 
+def test_new_form_worker_without_lineage_is_refused_like_a_legacy_one(device,monkeypatch):
+    """Discovery gives the worker script the same role as the old entry point; with no lineage record a stop
+    preserves it and refuses, before anything native is ended."""
+    line=[str(cfg.PYTHON),'-I','-B',str(cfg.ROOT/'app'/processes.INDEX_WORKER),'reindex','-p','brain']
+    assert processes.index_worker_form(line,cfg.ROOT/'app'/processes.INDEX_WORKER)
+    monkeypatch.setattr(service.sys,'platform','win32')
+    monkeypatch.setattr(service,'_windows_task',lambda:None)
+    worker=SimpleNamespace(role='index_worker',alive=lambda:True,close=lambda:None,script=line[3])
+    monkeypatch.setattr(processes,'roots',lambda:[worker])
+    monkeypatch.setattr(service.subprocess,'run',lambda *args,**kwargs:pytest.fail('native End'))
+    with pytest.raises(processes.OwnershipError,match='reindex process is still active'):service.stop()
+
+
 def test_finish_prepared_transaction_cannot_release_old_listener(device,monkeypatch):
     path=cfg.STATE/'service-transaction.json'
     path.write_text(json.dumps({'hold_id':'b'*32,'root':str(cfg.ROOT),'stage':'prepared'}))
     monkeypatch.setattr(processes,'listener_identity',lambda:pytest.fail('prepared transaction inspected listener'))
-    with pytest.raises(processes.OwnershipError,match='verified stop and start'):service.finish_transaction('b'*32)
+    with pytest.raises(processes.OwnershipError,match='verified stop'):service.finish_transaction('b'*32,cfg.DEVICE['version'])
     assert path.exists()
 
 
 def test_stale_reused_parent_pid_does_not_authorize_descendant(device,monkeypatch):
+    monkeypatch.setattr(processes,'os',SimpleNamespace(name='nt'))
+    monkeypatch.setattr(processes,'sys',SimpleNamespace(platform='win32'))
     parent=SimpleNamespace(pid=10,birth=200,alive=lambda:True)
     row=SimpleNamespace(pid=11,info={'ppid':10})
     closed=[]
@@ -150,6 +167,8 @@ def test_task_xml_foreign_security_shape_refused(device,monkeypatch,change):
 
 @pytest.mark.parametrize('enabled',[True,False])
 def test_task_export_omits_default_run_level_and_enabled(device,monkeypatch,enabled):
+    launcher=str(cfg.PYTHON.with_name('pythonw.exe'))
+    monkeypatch.setattr(processes,'_launchers',lambda:{processes._path(launcher):launcher})
     import xml.etree.ElementTree as ET
     definition=ET.fromstring(service.definition('win32'))
     principal=definition.find('{*}Principals/{*}Principal')
@@ -175,7 +194,7 @@ def test_task_export_omits_default_run_level_and_enabled(device,monkeypatch,enab
 def test_http_request_hook_rechecks_foreign_reconnect_before_transport(device,monkeypatch):
     import httpx2
     calls=[]
-    def identity():
+    def identity(**unused):
         calls.append(1)
         if len(calls)>1:raise processes.OwnershipError('foreign reconnect')
         return {'pid':1}
@@ -188,6 +207,7 @@ def test_http_request_hook_rechecks_foreign_reconnect_before_transport(device,mo
 
 @pytest.mark.parametrize('transient',[PermissionError('registry temporarily sharing-locked'),ValueError('partial registry read')])
 def test_readiness_retries_transient_registry_reads_but_not_foreign_identity(device,monkeypatch,transient):
+    monkeypatch.setattr(service,'sys',SimpleNamespace(platform='win32'))
     identity={'birth':20,'supervisor_birth':20};calls=[]
     def lookup():
         calls.append(1)
@@ -205,6 +225,7 @@ def test_readiness_retries_transient_registry_reads_but_not_foreign_identity(dev
 
 
 def test_task_inspection_refusal_creates_no_transaction(device,monkeypatch):
+    monkeypatch.setattr(service,'sys',SimpleNamespace(platform='win32'))
     def foreign(**kwargs):raise processes.OwnershipError('task belongs to another root')
     monkeypatch.setattr(service,'_windows_task',foreign)
     with pytest.raises(processes.OwnershipError,match='another root'):service.inspect()
@@ -213,11 +234,12 @@ def test_task_inspection_refusal_creates_no_transaction(device,monkeypatch):
 
 @pytest.mark.parametrize('failure',[processes.OwnershipError,KeyboardInterrupt])
 def test_readiness_failure_records_failed_stage_and_blocks_spawns(device,monkeypatch,failure):
+    monkeypatch.setattr(service,'sys',SimpleNamespace(platform='win32'))
     hold='c'*32;path=cfg.STATE/'service-transaction.json'
     path.write_text(json.dumps({'hold_id':hold,'root':str(cfg.ROOT),'stage':'stopped','empty_at_filetime':1}))
     monkeypatch.setattr(processes,'listener_identity',lambda:None)
-    monkeypatch.setattr(service,'_windows_task',lambda:{'enabled':True})
-    monkeypatch.setattr(service,'_start_native',lambda:None)
+    monkeypatch.setattr(service,'_windows_task',lambda **kwargs:{'enabled':True})
+    monkeypatch.setattr(service,'_start_native',lambda **kwargs:None)
     def reject(*args):raise failure('synthetic readiness interruption')
     monkeypatch.setattr(service,'_wait_started',reject)
     with pytest.raises(processes.OwnershipError,match='Startup readiness failed'):service.start(explicit=True,hold_id=hold)
@@ -255,3 +277,24 @@ def test_supervisor_held_does_not_query_listener_or_spawn(device,monkeypatch):
     monkeypatch.setattr(supervisor.time,'sleep',lambda seconds:(_ for _ in ()).throw(Done()))
     with pytest.raises(Done):supervisor.main()
     assert json.loads((cfg.STATE/'service-heartbeat.json').read_text())['status']=='held'
+
+
+def test_native_dispatch_and_readiness_use_caller_deadline(device,monkeypatch):
+    monkeypatch.setattr(service,'sys',SimpleNamespace(platform='win32'))
+    monkeypatch.setattr(processes,'listener_identity',lambda:None)
+    seen=[]
+    def installed(*,deadline):
+        seen.append(('installed',deadline))
+        return {'enabled':True}
+    def start(*,deadline,**kwargs):
+        seen.append(('start',deadline))
+    def readiness(attempt,since,legacy,deadline):
+        seen.append(('ready',deadline))
+        raise processes.OwnershipError('synthetic missing readiness')
+    monkeypatch.setattr(service,'_windows_task',installed)
+    monkeypatch.setattr(service,'_start_native',start)
+    monkeypatch.setattr(service,'_wait_started',readiness)
+    deadline=service.time.monotonic()+1
+    with pytest.raises(processes.OwnershipError,match='synthetic missing readiness'):
+        service.start(deadline=deadline)
+    assert seen==[('installed',deadline),('start',deadline),('ready',deadline)]

@@ -1,8 +1,10 @@
 """The plan finishes a client: block, skill and shared rules files. Synthetic homes only."""
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import pytest
 
@@ -38,13 +40,15 @@ def test_claude_code_gets_connection_block_and_skill(owner):
     assert files[str(home/'.claude/skills/second-brain/SKILL.md')]['after']=='new skill\n'
 
 
-def test_refresh_adds_no_block_and_no_skill(owner):
+def test_refresh_leaves_missing_and_unowned_instruction_files_alone(owner):
     home,root,python=owner
     (home/'.claude').mkdir();(home/'.claude/CLAUDE.md').write_text('# My rules\n')
     (home/'.claude.json').write_text(json.dumps({'mcpServers':{'second-brain':{'command':'old','args':[str(root/'app/brain_client.py')]}}}))
     result=plan(owner,selected=['claude-code'],refresh=True)
-    assert [row['path'] for row in result['files']]==[str(home/'.claude.json')]
-    assert {row['reason'] for row in result['skipped']}=={'no managed protocol block','absent; refresh creates no client file'}
+    files=by_path(result)
+    assert set(files)=={str(home/'.claude.json')}
+    assert {row['code'] for row in result['skipped']}=={'missing_owned_block','missing_file'}
+    assert (home/'.claude/CLAUDE.md').read_text()=='# My rules\n'
 
 
 def test_block_in_an_imported_rules_file_is_refreshed_there_once(owner):
@@ -130,11 +134,19 @@ def test_one_shared_skill_copy_is_written_once(owner):
     assert [row['path'] for row in skills]==[str((shared/'SKILL.md').resolve())] and skills[0]['after']=='new skill\n'
 
 
-def test_clients_only_adds_missing_pieces_to_an_installed_device(owner,monkeypatch,capsys):
+@pytest.mark.parametrize('drift_after_planning',[False,True])
+def test_clients_only_adds_missing_claude_code_pieces_after_rechecking_installed_app(owner,monkeypatch,capsys,drift_after_planning):
     """An installed device can gain a client later; nothing is redeployed and the service is not touched."""
-    home,root,python=owner;root.mkdir();vault=root.parent/'vault';vault.mkdir()
+    home,root,_=owner;root.mkdir();vault=root.parent/'vault';vault.mkdir()
+    release=root.parent/'candidate';(release/'app').mkdir(parents=True);(release/'docs').mkdir()
+    shutil.copyfile(SOURCE/'docs/AI-PROTOCOL.md',release/'docs/AI-PROTOCOL.md')
+    shutil.copyfile(SOURCE/'app/brain_release.py',release/'app/brain_release.py')
+    hashes={'app/brain_release.py':hashlib.sha256((release/'app/brain_release.py').read_bytes()).hexdigest()}
+    (release/'release-manifest.json').write_text(json.dumps({'version':installer.VERSION,'sha256':hashes}))
+    shutil.copytree(release/'app',root/'app')
+    monkeypatch.setattr(installer,'REPO',release)
     device={'device_id':'fixture','version':installer.VERSION,'python':sys.executable,'vault':str(vault),
-            'role':'capture','release_root':str(SOURCE),'timezone':'UTC'}
+            'role':'capture','release_root':str(release),'timezone':'UTC'}
     (root/'device.json').write_text(json.dumps(device));(root/'state').mkdir()
     monkeypatch.setattr(helpers,'host_context',lambda:None)
     monkeypatch.setattr(helpers,'provision',lambda *args:pytest.fail('Clients-only must not provision'))
@@ -145,10 +157,21 @@ def test_clients_only_adds_missing_pieces_to_an_installed_device(owner,monkeypat
     monkeypatch.setattr(helpers.Path,'home',classmethod(lambda cls:home))
     monkeypatch.setattr(sys,'argv',['install.py','--root',str(root),'--vault',str(vault),'--configure-clients','--clients-only',
                                     '--client','claude-code','--include-hooks','--reuse-python',sys.executable])
+    if drift_after_planning:
+        plan_clients=installer.sealed_client_plan
+        def drift(*args,**kwargs):
+            value=plan_clients(*args,**kwargs)
+            (root/'app/drift.py').write_text('# Unexpected payload\n')
+            return value
+        monkeypatch.setattr(installer,'sealed_client_plan',drift)
+        with pytest.raises(ValueError,match='complete release manifest'):installer.main()
+        assert not (home/'.claude.json').exists() and not (home/'.claude').exists() and not (root/'bin').exists()
+        return
     installer.main()
     receipt=json.loads(capsys.readouterr().out)
     assert receipt['status']=='clients refreshed' and not receipt['client_result']['deferred']
-    assert json.loads((home/'.claude.json').read_text())['mcpServers']['second-brain']['args']==[str(root/'app/brain_client.py')]
+    entry=json.loads((home/'.claude.json').read_text())['mcpServers']['second-brain']
+    assert entry==helpers.connection_spec(root,sys.executable)
     hooks=json.loads((home/'.claude/settings.json').read_text())['hooks']
     assert set(hooks)=={'SessionStart','Stop'}
     assert (home/'.claude/CLAUDE.md').read_text().count(helpers.BEGIN)==1

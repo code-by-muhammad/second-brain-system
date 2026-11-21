@@ -93,7 +93,7 @@ def test_local_git_roundtrip_and_synthetic_acl_are_allowed(tmp_path):
     subprocess.run(['git', '-C', str(repo), 'remote', 'set-url', 'origin', 'https://example.invalid/remote'], check=True)
     with pytest.raises(AssertionError, match='outside the sandbox'):
         check(['git', '-C', str(repo), 'push', 'origin', 'HEAD'])
-    subprocess.run(['git', '-C', str(repo), 'remote', 'set-url', 'origin', str(tmp_path.parent.parent.parent / 'outside.git')], check=True)
+    subprocess.run(['git', '-C', str(repo), 'remote', 'set-url', 'origin', str(SANDBOX.parent / 'outside.git')], check=True)
     with pytest.raises(AssertionError, match='outside the sandbox'):
         check(['git', '-C', str(repo), 'push', 'origin', 'HEAD'])
     subprocess.run(['git', '-C', str(repo), 'remote', 'set-url', 'origin', str(remote)], check=True)

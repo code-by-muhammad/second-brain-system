@@ -65,7 +65,8 @@ def expected_state(data,root,python):
     servers=expected.setdefault('mcp_servers',{})
     prior=servers.get('second-brain',{})
     if not isinstance(prior,dict):prior={}
-    servers['second-brain']={'startup_timeout_sec':60,'tool_timeout_sec':120,**prior,'command':str(python),'args':[str(root/'app/brain_client.py')]}
+    spec={'command':str(python),'args':[str(root/'app/brain_client.py')]} if os.name=='nt' else {'command':str(root/'bin'/'second-brain-mcp'),'args':[]}
+    servers['second-brain']={'startup_timeout_sec':60,'tool_timeout_sec':120,**prior,**spec}
     return expected
 
 def planned_toml(home,root,python):
@@ -109,8 +110,9 @@ def test_foreign_runtime_is_refused_for_every_logical_TOML_spelling(tmp_path,mon
     text=text.replace('"old.py"',json.dumps('C:/foreign/app/brain_client.py'))
     home,appdata,root,python,_=inputs(tmp_path,monkeypatch,text)
     before=(tree_bytes(home),tree_bytes(appdata))
-    with pytest.raises(ValueError,match='another or unknown runtime'):
-        planned_toml(home,root,python)
+    result=installer.sealed_client_plan(root,python,home)
+    assert all(Path(row['path'])!=home/'.codex/config.toml' for row in result['files'])
+    assert any('another or unknown runtime' in row['reason'] for row in result['skipped'])
     assert (tree_bytes(home),tree_bytes(appdata))==before and not root.exists()
 
 @pytest.mark.parametrize('name,text',PRESERVATION,ids=[name for name,_ in PRESERVATION])

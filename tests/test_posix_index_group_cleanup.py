@@ -18,6 +18,7 @@ class Child:
     pid=43123
 
     def __init__(self,polls,waits=()):
+        self.stdin=SimpleNamespace(write=lambda data:self.events.append(('released',data)),close=lambda:None)
         self.polls=deque(polls)
         self.waits=deque(waits)
         self.returncode=None
@@ -64,22 +65,26 @@ def posix_runner(monkeypatch):
             else:
                 value=remaining.popleft() if remaining else ProcessLookupError()
                 if isinstance(value,Exception):raise value
-        launches=[]
-        def popen(command,**kwargs):launches.append((command,kwargs));return child
+        launches=[];clock=[0]
+        # The runner takes an absolute deadline. Time stands still until the child exists and is 1 from then on, so
+        # a deadline of one half is met only after the spawn.
+        def popen(command,**kwargs):launches.append((command,kwargs));clock[0]=1;return child
+        monkeypatch.setattr(bootstrap,'_lifetime',lambda pid:('synthetic lifetime',pid))
         monkeypatch.setattr(bootstrap,'os',SimpleNamespace(**{**vars(os),'name':'posix','killpg':killpg}))
         monkeypatch.setattr(bootstrap,'signal',fake_signal)
-        monkeypatch.setattr(bootstrap,'subprocess',SimpleNamespace(Popen=popen,DEVNULL=subprocess.DEVNULL,TimeoutExpired=subprocess.TimeoutExpired,CompletedProcess=subprocess.CompletedProcess))
+        monkeypatch.setattr(bootstrap,'subprocess',SimpleNamespace(Popen=popen,DEVNULL=subprocess.DEVNULL,PIPE=subprocess.PIPE,TimeoutExpired=subprocess.TimeoutExpired,CompletedProcess=subprocess.CompletedProcess))
         def sleeping(seconds):
             child.events.append(('sleep',seconds))
             if sleep:sleep(seconds)
-        monkeypatch.setattr(bootstrap,'time',SimpleNamespace(monotonic=lambda:0,sleep=sleeping))
+        monkeypatch.setattr(bootstrap,'time',SimpleNamespace(monotonic=lambda:clock[0],sleep=sleeping))
         monkeypatch.setattr(cfg,'environment',lambda:{'SYNTHETIC':'1'})
         return handlers,original,launches
     return install
 
 
 def run(child,overall=10,tick=lambda:None,cleanup=lambda:None):
-    return bootstrap._run_reindex(['synthetic','literal argument'],object(),overall,tick,cleanup)
+    # overall=0: the deadline passes between the spawn and the start line, so the child is never released.
+    return bootstrap._run_reindex(['synthetic','literal argument'],object(),overall or .5,tick,cleanup)
 
 
 @pytest.mark.parametrize('polls,overall,waits,expected',[
@@ -213,7 +218,8 @@ def test_signal_during_counts_is_checked_after_callback(brain,posix_runner,monke
     completed=[]
     read_counts=bootstrap._counts
     def counts(deadline):
-        if handlers[bootstrap.signal.SIGTERM] is original[bootstrap.signal.SIGTERM]:
+        # Outside a pass the handler is the caller's, or main()'s own; only the runner's is exercised here.
+        if handlers[bootstrap.signal.SIGTERM] is original[bootstrap.signal.SIGTERM] or isinstance(handlers[bootstrap.signal.SIGTERM],bootstrap._Stop):
             return read_counts(deadline)
         handlers[bootstrap.signal.SIGTERM](bootstrap.signal.SIGTERM,None)
         completed.append('handler returned')
@@ -247,9 +253,26 @@ def test_windows_job_delegation_has_no_posix_side_effects(monkeypatch):
     monkeypatch.setattr(bootstrap,'os',SimpleNamespace(name='nt'))
     monkeypatch.setattr(bootstrap,'signal',SimpleNamespace())
     monkeypatch.setattr(cfg,'environment',lambda:environment)
-    monkeypatch.setitem(sys.modules,'brain_windows_process',SimpleNamespace(run=lambda *a,**k:(calls.append((a,k)),result)[1]))
-    assert bootstrap._run_reindex(['synthetic'],log,9,tick,cleanup) is result
-    assert calls==[((['synthetic'],),dict(env=environment,stdout=log,stderr=log,timeout=9,on_tick=tick,on_cleanup_wait=cleanup,direct_output=True))]
+    monkeypatch.setattr(bootstrap,'time',SimpleNamespace(monotonic=lambda:100))
+    class StartWindowExpired(RuntimeError):pass
+    monkeypatch.setitem(sys.modules,'brain_windows_process',SimpleNamespace(run=lambda *a,**k:(calls.append((a,k)),result)[1],StartWindowExpired=StartWindowExpired))
+    assert bootstrap._run_reindex(['synthetic'],log,109,tick,cleanup) is result
+    # The start line travels as the runner's standard-input file; the caller's own deadline and a 25-second start
+    # window go with it, and the admission scope is closed by the runner right after creation.
+    (arguments,options),=calls;started=options.pop('on_started')
+    assert arguments==(['synthetic'],) and callable(started)
+    assert options==dict(input=b'start\n',env=environment,stdout=log,stderr=log,timeout=9,deadline=109,start_by=109,
+                         on_tick=tick,on_cleanup_wait=cleanup,direct_output=True)
+    calls.clear()
+    assert bootstrap._run_reindex(['synthetic'],log,1000,tick,cleanup) is result
+    assert calls[0][1]['start_by']==125 and calls[0][1]['deadline']==1000
+    def expired(*a,**k):raise StartWindowExpired('synthetic')
+    monkeypatch.setitem(sys.modules,'brain_windows_process',SimpleNamespace(run=expired,StartWindowExpired=StartWindowExpired))
+    with pytest.raises(bootstrap.index.IndexAttention,match='index_worker_release_timeout'):
+        bootstrap._run_reindex(['synthetic'],log,1000,tick,cleanup)
+    # A deadline that has already passed starts nothing at all.
+    monkeypatch.setitem(sys.modules,'brain_windows_process',SimpleNamespace(run=lambda *a,**k:pytest.fail('started'),StartWindowExpired=StartWindowExpired))
+    with pytest.raises(subprocess.TimeoutExpired):bootstrap._run_reindex(['synthetic'],log,100,tick,cleanup)
 
 
 @pytest.mark.skipif(os.name=='nt',reason='Native POSIX session/group proof; pure controls above also run on Windows.')
@@ -262,7 +285,7 @@ def test_native_normal_exit_waits_for_bounded_descendant_without_signalling(brai
     def probe(pid,signum):calls.append(signum);return native_killpg(pid,signum)
     monkeypatch.setattr(bootstrap.os,'killpg',probe)
     with (tmp_path/'native.log').open('ab') as log:
-        result=bootstrap._run_reindex([sys.executable,'-I','-B',str(leader_script),str(child_script)],log,10,lambda:None,lambda:waits.append(True))
+        result=bootstrap._run_reindex([sys.executable,'-I','-B',str(leader_script),str(child_script)],log,time.monotonic()+10,lambda:None,lambda:waits.append(True))
     assert result.returncode==0 and waits==[True]
     assert calls and all(s==0 for s in calls)
     assert not child_script.with_suffix('.signal').exists()
@@ -297,7 +320,7 @@ def test_native_abnormal_exit_kills_term_ignoring_descendant_before_reap(brain,t
     started=time.monotonic()
     with (tmp_path/'native-abnormal.log').open('ab') as log:
         with pytest.raises(bootstrap.IndexStalled if interruption=='tick' else (InterruptedError,KeyboardInterrupt)):
-            bootstrap._run_reindex([sys.executable,'-I','-B',str(leader),str(leaf),str(marker)],log,12,cancel,lambda:None)
+            bootstrap._run_reindex([sys.executable,'-I','-B',str(leader),str(leaf),str(marker)],log,time.monotonic()+12,cancel,lambda:None)
     assert [s for s in calls if s]==[signal.SIGTERM,signal.SIGKILL]
     assert children[0].returncode is not None and time.monotonic()-started<8
 

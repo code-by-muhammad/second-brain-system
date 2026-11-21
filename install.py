@@ -6,10 +6,11 @@ import argparse, hashlib, json, os, re, secrets, shutil, stat, subprocess, tempf
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
-VERSION='0.2.13'
+VERSION='0.2.16'
 INDEX_IGNORE_TEXT='.git/\n.obsidian/\n.trash/\n'+'/02-Areas/AI-Memory/Wiki/Log-Archives/'+'[0-9a-f]'*64+'.md\n'
 _SETUP_CACHE=None
 _SETUP_SHA256=None
+_CONNECTION_SHA256=None
 
 def _candidate_platform():
     """Admit the declared native candidate matrix; this is not release approval."""
@@ -114,13 +115,25 @@ def private_dir(path):
 
 _OBSERVE_DESTINATION=object()
 
-def atomic(path,text,*,expected_sha256=_OBSERVE_DESTINATION):
+def _windows_parent_identity(path):
+    support=setup_helpers();identities=[]
+    for parent in reversed(path.parents):
+        info=parent.lstat()
+        if not stat.S_ISDIR(info.st_mode) or parent.is_symlink() or parent.is_junction():
+            raise support.ConcurrentWriteError('Linked client directory refused.')
+        identities.append((info.st_dev,info.st_ino))
+    return identities
+
+
+def atomic(path,text,*,expected_sha256=_OBSERVE_DESTINATION,mode=None):
     path=Path(path)
     support=setup_helpers();before=support.read(path)
     if expected_sha256 is _OBSERVE_DESTINATION:expected_sha256=support.digest(before)
     if support.digest(before)!=expected_sha256:raise support.ConcurrentWriteError('Concurrent edit before staging; original preserved.')
     path.parent.mkdir(parents=True,exist_ok=True)
-    mode=stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
+    parents=_windows_parent_identity(path) if os.name=='nt' else None
+    if mode is None:
+        mode=stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
     fd,name=tempfile.mkstemp(prefix='.'+path.name+'.',suffix='.tmp',dir=path.parent)
     tmp=Path(name)
     try:
@@ -134,7 +147,8 @@ def atomic(path,text,*,expected_sha256=_OBSERVE_DESTINATION):
         if os.name!='nt': os.chmod(tmp,mode)
         # Recheck after the potentially slow ACL/fsync operations. Existing
         # files still need a cooperative quiet window; rename is not OS CAS.
-        if support.digest(support.read(path))!=expected_sha256:
+        if ((parents is not None and _windows_parent_identity(path)!=parents)
+                or support.digest(support.read(path))!=expected_sha256):
             raise support.ConcurrentWriteError('Concurrent edit during staging; original preserved.')
         if expected_sha256 is None:
             try:
@@ -145,11 +159,29 @@ def atomic(path,text,*,expected_sha256=_OBSERVE_DESTINATION):
         else:os.replace(tmp,path)
     finally:
         if fd is not None: os.close(fd)
-        tmp.unlink(missing_ok=True)
+        try:
+            if parents is None or _windows_parent_identity(path)==parents:tmp.unlink(missing_ok=True)
+        except (OSError,support.ConcurrentWriteError):
+            if parents is None:raise
+
+
+def write_client(path,data,*,expected_sha256,mode=None):
+    path=Path(path);support=setup_helpers()
+    if os.name=='posix':
+        return support.write_client(path,data,expected_sha256=expected_sha256,mode=mode)
+    if data is not None:return atomic(path,data,expected_sha256=expected_sha256,mode=mode)
+    before=support.read_client(path)
+    if support.digest(before)!=expected_sha256:raise support.ConcurrentWriteError('Concurrent edit before removal; original preserved.')
+    if before is None:return
+    parents=_windows_parent_identity(path)
+    if support.digest(support.read_client(path))!=expected_sha256 or _windows_parent_identity(path)!=parents:
+        raise support.ConcurrentWriteError('Concurrent edit before removal; original preserved.')
+    path.unlink()
 
 def backup(path,root):
-    if path.exists():
-        raw=setup_helpers().read(path);digest=hashlib.sha256(raw).hexdigest()
+    raw=setup_helpers().read(path)
+    if raw is not None:
+        digest=hashlib.sha256(raw).hexdigest()
         target=root/'backups'/'client-configs'/digest
         private_dir(target.parent)
         if target.exists():
@@ -177,9 +209,9 @@ def _codex_toml_plan(content,spec):
     try:
         import tomlkit
     except ImportError as exc:
-        raise ValueError('Client configuration requires locked tomlkit==0.15.1. Run install.py using the synced project Python environment; no client configuration changed.') from exc
+        raise setup_helpers().TomlSupportError('Client configuration requires locked tomlkit==0.15.1. Run install.py using the synced project Python environment; no client configuration changed.') from exc
     if getattr(tomlkit,'__version__',None)!='0.15.1':
-        raise ValueError('Client configuration requires locked tomlkit==0.15.1; no client configuration changed.')
+        raise setup_helpers().TomlSupportError('Client configuration requires locked tomlkit==0.15.1; no client configuration changed.')
     try: document=tomlkit.parse(content)
     except tomlkit.exceptions.ParseError as exc:
         raise ValueError('Cannot safely parse this TOML configuration; no client configuration changed.') from exc
@@ -204,17 +236,36 @@ def setup_helpers():
     raw=path.read_bytes();sha=hashlib.sha256(raw).hexdigest()
     if (_SETUP_SHA256 is not None and sha!=_SETUP_SHA256) or (_SETUP_CACHE is not None and _SETUP_CACHE[0]!=sha):
         raise ValueError('Setup helper bytes changed; preserve the release for review.')
-    if _SETUP_CACHE is not None:return _SETUP_CACHE[1]
+    if _SETUP_CACHE is not None:
+        _SETUP_CACHE[1]._CONNECTION_SHA256=_CONNECTION_SHA256
+        return _SETUP_CACHE[1]
     module=types.ModuleType('_brain_setup_runtime');module.__file__=str(path)
     exec(compile(raw,str(path),'exec'),module.__dict__)
+    module._CONNECTION_SHA256=_CONNECTION_SHA256
     _SETUP_CACHE=(sha,module)
     return module
 
 
 def sealed_client_plan(root,python,home=None,**options):
-    skill=REPO/'skills/second-brain/SKILL.md'  # Part of every verified release; older test releases have none.
-    return setup_helpers().plan(root,python,(REPO/'docs/AI-PROTOCOL.md').read_text(encoding='utf-8'),_codex_toml_plan,
-                                home=home,skill=skill.read_text(encoding='utf-8') if skill.is_file() else None,**options)
+    helpers=setup_helpers()
+    protocol=(REPO/'docs/AI-PROTOCOL.md').read_text(encoding='utf-8')
+    # Older test releases have no protocol file; they also have no skill to compose.
+    skill=helpers.composed_skill(protocol) if (REPO/'docs/AI-PROTOCOL.md').is_file() else None
+    return helpers.plan(root,python,protocol,_codex_toml_plan,home=home,skill=skill,**options)
+
+
+def _verify_refresh_release(root,version):
+    import types
+    support=setup_helpers()
+    path=REPO/'app/brain_release.py'
+    raw=support.read(path)
+    manifest=support.json_object(support.read(REPO/'release-manifest.json'))
+    hashes=manifest.get('sha256')
+    if raw is None or not isinstance(hashes,dict) or hashes.get('app/brain_release.py')!=support.digest(raw):
+        raise ValueError('Client-only refresh requires the verified release inventory helper.')
+    module=types.ModuleType('_brain_refresh_release')
+    exec(compile(raw,str(path),'exec'),module.__dict__)
+    return module.verify_installed(root,REPO,version)
 
 
 def client_plan(root,python,home=None):
@@ -224,7 +275,7 @@ def client_plan(root,python,home=None):
 
 def clients(root,python,home=None):
     value=sealed_client_plan(root,python,home)
-    result=setup_helpers().apply(value,atomic,backup,root)
+    result=setup_helpers().apply(value,write_client,backup,root)
     if result['deferred']:raise ValueError('Client settings changed during installation; re-plan the deferred targets.')
     return result['changed']
 
@@ -299,12 +350,30 @@ def retrieval_settings(root,vault):
     return {'projects':{'brain':{'path':str(vault),'mode':'local'}},'default_project':'brain','project_root':str(vault),
             'database_backend':'sqlite','semantic_search_enabled':True,'semantic_embedding_provider':'fastembed',
             'semantic_embedding_model':'bge-small-en-v1.5','semantic_embedding_dimensions':384,
-            'semantic_embedding_cache_dir':str(root/'models'),'semantic_embedding_threads':4,'semantic_embedding_batch_size':8,
+            'semantic_embedding_cache_dir':str(root/'models'),'semantic_embedding_threads':1,'semantic_embedding_parallel':1,
+            'semantic_embedding_batch_size':1,'semantic_embedding_sync_batch_size':1,'semantic_embedding_request_concurrency':1,
+            'index_batch_size':8,'index_batch_max_bytes':1048576,'index_parse_max_concurrent':1,
+            'index_entity_max_concurrent':1,'index_metadata_update_max_concurrent':1,
             'auto_update':False,'logfire_enabled':False,'logfire_send_to_logfire':False,'disable_permalinks':True,
             'ensure_frontmatter_on_sync':False,'format_on_save':False}
 
 
-def deploy(root,python,vault,role='capture',configure_clients=False,client_value=None,*,device_value=None,auth_value=None,source_sha256=None):
+def launcher_image(root,python):
+    path=Path(root)/'bin'/'second-brain-mcp'
+    return path,setup_helpers().connection().launcher_bytes(root,python),0o700
+
+
+def write_mcp_launcher(root,python):
+    """Publish the executable image in one atomic operation."""
+    path,body,mode=launcher_image(root,python)
+    if any(p.is_symlink() or p.is_junction() for p in (path,*path.parents)):
+        raise ValueError('Linked MCP launcher is refused.')
+    path.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+    atomic(path,body,mode=mode)
+    return path
+
+
+def deploy(root,python,vault,role='capture',configure_clients=False,client_value=None,*,device_value=None,auth_value=None,source_sha256=None,sealed=None,release_tools=None):
     old=validate(root,vault,python,False)
     if configure_clients and client_value is None:client_value=sealed_client_plan(root,python)
     if client_value is not None:setup_helpers().validate_plan(client_value,root,python)
@@ -315,6 +384,12 @@ def deploy(root,python,vault,role='capture',configure_clients=False,client_value
     for folder in ('state','logs','models','backups'): private_dir(root/folder)
     device=root/'device.json'
     settings=device_value if device_value is not None else device_settings(old,vault,python,role)
+    if sealed is not None:
+        saved,value=sealed
+        _deploy_held_app(root,saved,value,release_tools)
+        client_result=setup_helpers().apply(client_value,write_client,backup,root)
+        return {'status':'installed','root':str(root),'vault':str(vault),'role':settings['role'],'device_id':settings['device_id'],
+                'clients':client_result['changed'],'client_result':client_result}
     backup(device,root)
     installed=root/'app'
     if installed.is_symlink() or installed.is_junction() or installed.resolve()!=root/'app':raise ValueError('Unsafe installed app path.')
@@ -348,9 +423,40 @@ def deploy(root,python,vault,role='capture',configure_clients=False,client_value
     if not config.exists():
         atomic(config,json.dumps(retrieval_settings(root,vault),indent=2)+'\n',expected_sha256=None)
     if not (root/'state/.bmignore').exists():atomic(root/'state/.bmignore',INDEX_IGNORE_TEXT,expected_sha256=None)
-    client_result=setup_helpers().apply(client_value,atomic,backup,root) if client_value is not None else {'changed':[],'deferred':[],'client_acceptance':'not selected'}
+    write_mcp_launcher(root,settings['python'])
+    client_result=setup_helpers().apply(client_value,write_client,backup,root) if client_value is not None else {'changed':[],'deferred':[],'client_acceptance':'not selected'}
     return {'status':'installed','root':str(root),'vault':str(vault),'role':settings['role'],'device_id':settings['device_id'],
             'clients':client_result['changed'],'client_result':client_result}
+
+def _deploy_held_app(root,saved,value,release):
+    """Publish only the exact app, device, and other files sealed by the updater."""
+    expected=value['deployment']['target_app_sha256']
+    app=root/'app';displaced=saved/'displaced-app'
+    images=release.artifact_rows(saved,value)
+    for row,before,_ in images:
+        if row['phase']=='deploy' and release.file_image(Path(row['path']))!=before:
+            raise ValueError('Deployment artifact changed after preflight: '+row['path'])
+    with tempfile.TemporaryDirectory(prefix='staged-',dir=saved) as container:
+        prepared=Path(container)/'app';prepared.mkdir(mode=0o700)
+        copied=0
+        for relative,digest in expected.items():
+            raw,mode=release.file_image(REPO/'app'/relative,release.APP_LIMIT-copied)
+            if raw is None or release.digest(raw)!=digest:
+                raise ValueError('Verified application source changed before deployment.')
+            copied+=len(raw)
+            path=prepared/relative
+            release.write_image(path,(raw,mode),(None,None))
+        if release.inventory(prepared)!=expected or release.inventory(app)!=value['app_sha256'] or os.path.lexists(displaced):
+            raise ValueError('Prepared or installed app changed before deployment.')
+        os.replace(app,displaced)
+        release.sync_directory(saved);release.sync_directory(root)
+        os.replace(prepared,app)
+        release.sync_directory(root)
+    for row,before,after in images:
+        if row['phase']=='deploy':
+            protect=private if os.name=='nt' else None
+            release.write_image(Path(row['path']),after,before,protect=protect)
+
 
 def _fresh_source():
     paths=[REPO/name for name in ('install.py','setup_runtime.py','pyproject.toml','uv.lock','release-manifest.json')]
@@ -364,12 +470,13 @@ def _fresh_identity(root,vault,python,args):
     identity={'root':str(root),'vault':str(vault),'python':os.path.normcase(str(python)),'release_root':str(REPO),
             'version':VERSION,'role':args.role,'timezone':args.timezone,'download_model':args.download_model,
             'install_service':args.install_service,'configure_clients':args.configure_clients,
-            'clients':sorted(set(args.client)) if args.client else None,'include_hooks':args.include_hooks,
+            'clients':sorted(set(args.client)) if args.client is not None else None,'include_hooks':args.include_hooks,
             'desktop_config':str(Path(args.desktop_config).expanduser().absolute()) if args.desktop_config else None,
             'skip_desktop_refresh':args.skip_desktop_refresh,'source_sha256':_fresh_source()}
     # Recorded only when chosen, so that a resumed setup neither starts a service the first run declined
     # nor changes the identity of an install that never had the choice.
     if getattr(args,'wizard_no_service',False):identity['wizard_no_service']=True
+    if getattr(args,'no_hooks',False):identity['no_hooks']=True
     if getattr(args,'initialize_wiki_owner',False):
         identity['initialize_wiki_owner']=True
         wizard=REPO/'setup_device.py'
@@ -533,8 +640,12 @@ def main():
     parser.add_argument('--initialize-wiki-owner',action='store_true',help=argparse.SUPPRESS)
     parser.add_argument('--wizard-no-service',action='store_true',help=argparse.SUPPRESS)
     parser.add_argument('--refresh-clients',action='store_true',help='Refresh only existing exact owned entries; create no new client integration or hook.')
-    parser.add_argument('--client',action='append',choices=['claude-code','claude-desktop','codex','hooks'])
-    parser.add_argument('--include-hooks',action='store_true',help='Explicitly opt into optional Claude hooks during fresh client configuration.')
+    client_scope=parser.add_mutually_exclusive_group()
+    client_scope.add_argument('--client',action='append',choices=['claude-code','claude-desktop','codex','hooks','grok'])
+    client_scope.add_argument('--clients',help='Comma-separated integration selection. An empty value selects none.')
+    hook_scope=parser.add_mutually_exclusive_group()
+    hook_scope.add_argument('--include-hooks',action='store_true',help='Explicitly opt into optional Claude hooks during fresh client configuration.')
+    hook_scope.add_argument('--no-hooks',action='store_true',help='Preserve Claude hooks without configuring or refreshing them.')
     parser.add_argument('--desktop-config');parser.add_argument('--skip-desktop-refresh',action='store_true')
     parser.add_argument('--client-plan');parser.add_argument('--plan-sha256')
     parser.add_argument('--plan-out',help='With --validate-only, write exactly one private sealed client plan; runtime/client/service files remain unchanged.')
@@ -543,6 +654,7 @@ def main():
     parser.add_argument('--download-model',action='store_true'); parser.add_argument('--reuse-python')
     parser.add_argument('--validate-only',action='store_true',help='Check configuration without changing runtime, clients or services.')
     args=parser.parse_args(); root=Path(args.root).expanduser().resolve(); vault=Path(args.vault).expanduser().resolve()
+    if args.clients is not None:args.client=args.clients.split(',') if args.clients else []
     if args.initialize_wiki_owner and (args.role!='maintainer' or args.install_service or args.refresh_only or args.refresh_clients):
         parser.error('Initial wiki ownership requires a new maintainer before service registration.')
     if sum(bool(value) for value in (args.resume_install,args.inspect_install,args.abandon_install))>1:
@@ -578,6 +690,7 @@ def main():
     if args.refresh_only and (not client_mode or args.install_service or args.download_model):parser.error('--refresh-only requires a client mode and cannot deploy models/services.')
     if not args.validate_only or args.plan_out:_qualified_platform()
     helpers=setup_helpers()
+    selected=helpers.selected_clients(args.client,refresh=args.refresh_clients,include_hooks=args.include_hooks,no_hooks=args.no_hooks)
     if not args.validate_only or client_mode or args.install_service:helpers.host_context()
     if not vault.is_dir(): parser.error('Clone/open the existing vault first; --vault must exist.')
     # Refuse before provisioning: the checkout's venv may power this live device.
@@ -592,6 +705,7 @@ def main():
             raise ValueError('Client-only refresh requires this same installed release; use the verified forward updater for an older runtime.')
         if not args.reuse_python or Path(os.path.abspath(os.path.expanduser(args.reuse_python)))!=Path(existing['python']).absolute():
             raise ValueError('Client-only refresh must reuse the exact Python recorded in device.json; no provisioning or client changes made.')
+        refresh_app=_verify_refresh_release(root,existing['version'])
         refresh_device_sha256=helpers.digest(helpers.read(root/'device.json'))
     if existing and not args.validate_only and not args.refresh_only and resumed is None:
         raise ValueError('Use the approved update.py flow for an existing runtime; direct setup must not replace an active installation.')
@@ -628,17 +742,17 @@ def main():
             if helpers.digest(raw)!=args.plan_sha256:raise ValueError('Sealed client plan changed; no setup changes made.')
             value=helpers.validate_plan(helpers.json_object(raw),root,python)
             if value.get('refresh')!=args.refresh_clients:raise ValueError('Sealed plan mode mismatch.')
-            selected=args.client or (list(helpers.CLIENTS) if args.refresh_clients else ['claude-code','claude-desktop','codex'])
-            if args.include_hooks:selected=[*selected,'hooks']
             helpers.authorize_plan(value,selected=selected,desktop=args.desktop_config,skip_desktop=args.skip_desktop_refresh)
         else:
-            selected=args.client or (['claude-code','claude-desktop','codex','hooks'] if args.refresh_clients else ['claude-code','claude-desktop','codex'])
-            if args.include_hooks:selected=[*selected,'hooks']
             value=sealed_client_plan(root,python,selected=selected,refresh=args.refresh_clients,desktop=args.desktop_config,skip_desktop=args.skip_desktop_refresh)
             if existing:
                 value['device_before_sha256']=helpers.digest(helpers.read(root/'device.json'))
                 settings=device_settings(existing,vault,python,args.role)
                 value['device_after_sha256']=helpers.digest((json.dumps(settings,indent=2)+'\n').encode('utf-8'))
+    if value is not None and not args.refresh_clients:
+        # A refresh can leave one assistant untouched. A first install stops before any runtime is created.
+        blocked=next((row for row in value.get('skipped') or [] if row.get('code') in ('inaccessible','malformed','bad_markers')),None)
+        if blocked is not None:raise helpers.ClientPlanError(str(blocked.get('reason') or 'A selected client file could not be planned.'))
     if args.validate_only:
         if value is not None:helpers.current(value)
         receipt={'status':'validated','client_paths':[row['path'] for row in value['files']] if value else []}
@@ -687,10 +801,13 @@ def main():
             if (helpers.digest(helpers.read(root/'device.json'))!=refresh_device_sha256
                     or (root/'state/service-transaction.json').exists()):
                 raise ValueError('Runtime changed or an update owns it; re-plan client refresh.')
+            if _verify_refresh_release(root,existing['version'])!=refresh_app:
+                raise ValueError('Installed app changed during planning; re-plan client refresh.')
             current_initial=helpers.read(root/'state/install-transaction.json')
             if current_initial is not None and helpers.json_object(current_initial).get('stage')!='complete':
                 raise ValueError('Initial setup is incomplete; client refresh refused.')
-            result={'status':'clients refreshed','client_result':helpers.apply(value,atomic,backup,root)}
+            write_mcp_launcher(root,existing.get('python',python))
+            result={'status':'clients refreshed','client_result':helpers.apply(value,write_client,backup,root)}
     else:result=_run_fresh(root,python,vault,args,value,finish)
     print(json.dumps(result,indent=2))
 

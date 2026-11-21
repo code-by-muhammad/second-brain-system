@@ -55,7 +55,8 @@ jobs:
       matrix:
         os: [windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # Keep the Windows dependency audit check independent of the regression matrix.
+    timeout-minutes: 25
     env:
       AUDIT_MATRIX_OS: ${{ matrix.os }}
       AUDIT_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -65,6 +66,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
         with:
@@ -89,35 +91,6 @@ jobs:
       - run: uv sync --locked --python 3.12
       - name: Verify shipped payload manifest consistency
         run: uv run --locked python -I -B -c "import runpy; from pathlib import Path; runpy.run_path('update.py')['verify'](Path.cwd())"
-      - name: Windows guarded regression (synthetic state only)
-        shell: pwsh
-        run: |
-          $testPython = (Resolve-Path -LiteralPath '.venv/Scripts/python.exe').Path
-          $testOwnerHome = [Environment]::GetFolderPath('UserProfile')
-          $testSandbox = Join-Path $env:RUNNER_TEMP ('second-brain-tests-' + [guid]::NewGuid().ToString('N'))
-          $testPrivate = Join-Path $testSandbox 'private'
-          New-Item -ItemType Directory -Path $testPrivate -ErrorAction Stop | Out-Null
-          $testAllowed = @('PATH','SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','USERNAME','USERDOMAIN','HOMEDRIVE','HOMEPATH','PROCESSOR_ARCHITECTURE','NUMBER_OF_PROCESSORS','OS','PROGRAMFILES','PROGRAMFILES(X86)','PROGRAMDATA','ALLUSERSPROFILE')
-          Get-ChildItem Env: | Where-Object { $_.Name.ToUpperInvariant() -notin $testAllowed } | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_.Name) }
-          $env:HOME = $testOwnerHome
-          $env:USERPROFILE = $testOwnerHome
-          $env:APPDATA = Join-Path $testPrivate 'AppData/Roaming'
-          $env:LOCALAPPDATA = Join-Path $testPrivate 'AppData/Local'
-          $env:TEMP = $testPrivate
-          $env:TMP = $testPrivate
-          $env:TMPDIR = $testPrivate
-          $env:SB_TEST_SANDBOX = $testSandbox
-          $env:PYTHONDONTWRITEBYTECODE = '1'
-          $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
-          $env:HF_HUB_OFFLINE = '1'
-          $env:HF_HUB_DISABLE_TELEMETRY = '1'
-          $env:GIT_ALLOW_PROTOCOL = 'file'
-          $env:GIT_CONFIG_NOSYSTEM = '1'
-          $env:GIT_CONFIG_GLOBAL = 'NUL'
-          $env:GIT_TERMINAL_PROMPT = '0'
-          $env:GCM_INTERACTIVE = 'never'
-          & $testPython -B -m pytest -q -p no:cacheprovider -p pytest_asyncio.plugin --basetemp (Join-Path $testSandbox 'tmp') --junitxml reports/windows-regression.xml
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - run: uv run --locked python -m compileall -q app install.py update.py setup_runtime.py build_release.py
       - run: uv run --locked python tests/smoke_import.py
       - run: uv export --locked --no-dev --no-hashes --output-file reports/audit-requirements.txt
@@ -147,7 +120,6 @@ jobs:
           name: windows-qualification-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             reports/source.json
-            reports/windows-regression.xml
             reports/audit-requirements.txt
             reports/dependency-audit.json
             reports/dependency-profile.txt
@@ -156,6 +128,134 @@ jobs:
             reports/uv-version.txt
             reports/pip-audit-version.txt
           if-no-files-found: error
+          retention-days: 30
+  windows-test:
+    name: Windows regression (${{ matrix.key }})
+    runs-on: windows-2025
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        # Use complete ordinary PR job durations for the 20-minute target. For jobs
+        # over target or rows over 15 minutes of pytest, rebalance general weights
+        # or rows, or split/reassign slow native lanes in ci_shards.json.
+        # Update the matrix with roster changes. Report single-file or unchanged-job overruns.
+        key: [general-1of5, general-2of5, general-3of5, general-4of5, general-5of5,
+              native-process, native-index]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        timeout-minutes: 3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        timeout-minutes: 2
+        with:
+          version: '0.9.16'
+          enable-cache: false
+      - run: uv sync --locked --python 3.12
+        timeout-minutes: 6
+      - name: Windows guarded regression (${{ matrix.key }})
+        timeout-minutes: 30
+        shell: pwsh
+        run: |
+          $reportDir = (New-Item -ItemType Directory -Force -Path 'reports/${{ matrix.key }}').FullName
+          $testPython = (Resolve-Path -LiteralPath '.venv/Scripts/python.exe').Path
+          $testOwnerHome = [Environment]::GetFolderPath('UserProfile')
+          $testSandbox = Join-Path $env:RUNNER_TEMP ('second-brain-tests-' + [guid]::NewGuid().ToString('N'))
+          $testPrivate = Join-Path $testSandbox 'private'
+          New-Item -ItemType Directory -Path $testPrivate -ErrorAction Stop | Out-Null
+          $testAllowed = @('PATH','SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','USERNAME','USERDOMAIN','HOMEDRIVE','HOMEPATH','PROCESSOR_ARCHITECTURE','NUMBER_OF_PROCESSORS','OS','PROGRAMFILES','PROGRAMFILES(X86)','PROGRAMDATA','ALLUSERSPROFILE')
+          Get-ChildItem Env: | Where-Object { $_.Name.ToUpperInvariant() -notin $testAllowed } | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_.Name) }
+          $env:HOME = $testOwnerHome
+          $env:USERPROFILE = $testOwnerHome
+          $env:APPDATA = Join-Path $testPrivate 'AppData/Roaming'
+          $env:LOCALAPPDATA = Join-Path $testPrivate 'AppData/Local'
+          $env:TEMP = $testPrivate
+          $env:TMP = $testPrivate
+          $env:TMPDIR = $testPrivate
+          $env:SB_TEST_SANDBOX = $testSandbox
+          $env:PYTHONDONTWRITEBYTECODE = '1'
+          $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
+          $env:HF_HUB_OFFLINE = '1'
+          $env:HF_HUB_DISABLE_TELEMETRY = '1'
+          $env:GIT_ALLOW_PROTOCOL = 'file'
+          $env:GIT_CONFIG_NOSYSTEM = '1'
+          $env:GIT_CONFIG_GLOBAL = 'NUL'
+          $env:GIT_TERMINAL_PROMPT = '0'
+          $env:GCM_INTERACTIVE = 'never'
+          $env:SB_TEST_CI_DIR = $reportDir
+          $env:SB_TEST_SHARD = '${{ matrix.key }}'
+          $env:SB_TEST_NODE_TIMEOUT = '600'
+          & $testPython -B tests/ci_launch.py $reportDir -v -rfE --durations=40 -p no:cacheprovider -p pytest_asyncio.plugin -p no:faulthandler --basetemp (Join-Path $testSandbox 'tmp') --junitxml (Join-Path $reportDir 'junit.xml')
+          exit $LASTEXITCODE
+      - name: Check this shard ran every selected test once
+        if: always()
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          & .venv/Scripts/python.exe -I -B tests/ci_plan.py check-row --dir reports/${{ matrix.key }} --key ${{ matrix.key }}
+          exit $LASTEXITCODE
+      - name: Retain Windows shard evidence
+        if: always()
+        timeout-minutes: 3
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: regression-win32-${{ matrix.key }}-${{ github.sha }}
+          path: reports/${{ matrix.key }}/
+          if-no-files-found: warn
+          overwrite: true
+          retention-days: 30
+  qualification:
+    name: Regression and audit gate
+    if: always()
+    needs: [test, windows-test, library-import]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {contents: read, actions: read}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        timeout-minutes: 2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Download shard reports
+        if: always()
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir artifacts --pattern "regression-win32-*-${GITHUB_SHA}" || true
+      - name: Gate
+        if: always()
+        timeout-minutes: 2
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          status=0
+          python3 -I -B tests/ci_plan.py gate --artifacts artifacts --out gate.json || status=1
+          python3 -I -B - <<'PYTHON' || status=1
+          import json
+          import os
+
+          needs = json.loads(os.environ['NEEDS'])
+          results = {job: needs[job]['result'] for job in ('test', 'windows-test', 'library-import')}
+          for job, result in results.items():
+              print(f'{job}: {result}')
+          raise SystemExit(any(result != 'success' for result in results.values()))
+          PYTHON
+          exit "$status"
+      - name: Retain Windows regression results
+        if: always()
+        timeout-minutes: 2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-regression-${{ github.sha }}
+          path: |
+            gate.json
+            junit-*.xml
+          if-no-files-found: warn
+          overwrite: true
           retention-days: 30
   fresh-setup:
     name: One-command ${{ matrix.scenario }} setup (${{ matrix.os }})
@@ -166,10 +266,12 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2025, macos-15, macos-15-intel, ubuntu-24.04]
-        scenario: [fresh, upgrade]
+        scenario: [fresh, upgrade, upgrade-0215]
         exclude:
           - os: ubuntu-24.04
             scenario: upgrade
+          - os: ubuntu-24.04
+            scenario: upgrade-0215
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     env:
@@ -194,11 +296,12 @@ jobs:
             brew list python@3.12 >/dev/null 2>&1 || brew install --skip-link python@3.12
             export PATH="$(brew --prefix python@3.12)/bin:$PATH"
           fi
-          # This Linux runner has no desktop login session, and the unchanged Linux service code
-          # refuses its user manager. Install and assistant wiring are still exercised there.
+          # Hosted Ubuntu covers service-free setup. The container lane covers the user-space service.
           service=""; if [ "$RUNNER_OS" = Linux ]; then service="--no-service"; fi
-          if [ '${{ matrix.scenario }}' = upgrade ]; then
-            if [ '${{ matrix.os }}' = macos-15-intel ]; then
+          if [ '${{ matrix.scenario }}' != fresh ]; then
+            if [ '${{ matrix.scenario }}' = upgrade-0215 ]; then
+              uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py --seed-0215
+            elif [ '${{ matrix.os }}' = macos-15-intel ]; then
               # Seed the prior release with its documented retained interpreter option.
               # The old wrapper requires global Homebrew links on this runner.
               previous="$SECOND_BRAIN_ROOT/releases/v0.2.11"
@@ -219,17 +322,24 @@ jobs:
               SECOND_BRAIN_REF=v0.2.11 SECOND_BRAIN_COMMIT=f162d670b9e29b46215a7542860a8a083fcdf7eb \
                 setup --yes --vault "$RUNNER_TEMP/second brain notes" --role capture --clients claude-code
             fi
-            if [ "$SECOND_BRAIN_REF" != v0.2.13 ]; then
+            if [ "$SECOND_BRAIN_REF" != v0.2.16 ]; then
               # A pull request has no release tag. Bind this disposable checkout to the exact CI commit.
-              release="$SECOND_BRAIN_ROOT/releases/v0.2.13"
+              release="$SECOND_BRAIN_ROOT/releases/v0.2.16"
               git clone -q -c core.autocrlf=false --branch "$SECOND_BRAIN_REF" --single-branch \
                 https://github.com/code-by-muhammad/second-brain-system.git "$release"
               test "$(git -C "$release" rev-parse HEAD)" = "$SECOND_BRAIN_COMMIT"
-              git -C "$release" tag v0.2.13 "$SECOND_BRAIN_COMMIT"
+              git -C "$release" tag v0.2.16 "$SECOND_BRAIN_COMMIT"
               setup() { uv run --no-project --python 3.12 python -I -B "$release/setup_device.py" --root "$SECOND_BRAIN_ROOT" "$@"; }
             fi
-            setup --yes --clients claude-code,codex | tee "$RUNNER_TEMP/upgrade.txt"
-            grep -q 'PASS   installed version: 0.2.13' "$RUNNER_TEMP/upgrade.txt"
+            uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py --quiet-predecessor
+            if ! setup --yes --clients claude-code,codex | tee "$RUNNER_TEMP/upgrade.txt"; then
+              uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py --assert-deferred
+              uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py --quiet-predecessor
+              setup --yes --clients claude-code,codex | tee "$RUNNER_TEMP/upgrade.txt"
+            fi
+            grep -q 'PASS   installed version: 0.2.16' "$RUNNER_TEMP/upgrade.txt"
+            uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py --assert-codex "$RUNNER_TEMP/upgrade.txt"
+            uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py --explicit
           else
             setup --yes --vault "$RUNNER_TEMP/second brain notes" --role capture --clients claude-code $service
           fi
@@ -238,6 +348,9 @@ jobs:
           grep -q "role maintainer" "$RUNNER_TEMP/role.txt"
           # A finished device must stay finished.
           setup --yes --clients claude-code,codex $service
+          if [ -n "$service" ]; then
+            uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py --service-absent
+          fi
           # The first index of the starter notes must verify by itself.
           if [ -z "$service" ]; then
             for attempt in $(seq 1 30); do
@@ -264,33 +377,52 @@ jobs:
               powershell -ExecutionPolicy Bypass -File bootstrap\setup.ps1 @args
             }
           }
-          if ('${{ matrix.scenario }}' -eq 'upgrade') {
+          if ('${{ matrix.scenario }}' -ne 'fresh') {
             $candidateRef = $env:SECOND_BRAIN_REF
             $candidateCommit = $env:SECOND_BRAIN_COMMIT
             try {
-              $env:SECOND_BRAIN_REF = 'v0.2.11'
-              $env:SECOND_BRAIN_COMMIT = 'f162d670b9e29b46215a7542860a8a083fcdf7eb'
-              Invoke-Setup --yes --vault $notes --role capture --clients 'claude-code'
+              if ('${{ matrix.scenario }}' -eq 'upgrade-0215') {
+                & uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py --seed-0215
+              } else {
+                $env:SECOND_BRAIN_REF = 'v0.2.11'
+                $env:SECOND_BRAIN_COMMIT = 'f162d670b9e29b46215a7542860a8a083fcdf7eb'
+                Invoke-Setup --yes --vault $notes --role capture --clients 'claude-code'
+              }
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             } finally {
               $env:SECOND_BRAIN_REF = $candidateRef
               $env:SECOND_BRAIN_COMMIT = $candidateCommit
             }
-            if ($candidateRef -ne 'v0.2.13') {
-              $release = Join-Path $env:SECOND_BRAIN_ROOT 'releases/v0.2.13'
+            if ($candidateRef -ne 'v0.2.16') {
+              $release = Join-Path $env:SECOND_BRAIN_ROOT 'releases/v0.2.16'
               git clone -q -c core.autocrlf=false --branch $candidateRef --single-branch https://github.com/code-by-muhammad/second-brain-system.git $release
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
               $head = git -C $release rev-parse HEAD
               if ($LASTEXITCODE -ne 0 -or $head -ne $candidateCommit) { exit 1 }
-              git -C $release tag v0.2.13 $candidateCommit
+              git -C $release tag v0.2.16 $candidateCommit
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             }
+            & uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py --quiet-predecessor
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             $upgraded = Invoke-Setup --yes --clients 'claude-code,codex'
             $upgradeExit = $LASTEXITCODE
+            if ($upgradeExit -ne 0) {
+              & uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py --assert-deferred
+              if ($LASTEXITCODE -ne 0) { exit $upgradeExit }
+              & uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py --quiet-predecessor
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $upgraded = Invoke-Setup --yes --clients 'claude-code,codex'
+              $upgradeExit = $LASTEXITCODE
+            }
             $upgraded
-            if ($upgradeExit -ne 0 -or -not ($upgraded -match 'PASS   installed version: 0.2.13')) { exit 1 }
+            if ($upgradeExit -ne 0 -or -not ($upgraded -match 'PASS   installed version: 0.2.16')) { exit 1 }
+            $upgraded | Set-Content -Encoding utf8 (Join-Path $env:RUNNER_TEMP 'upgrade.txt')
+            & uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py --assert-codex (Join-Path $env:RUNNER_TEMP 'upgrade.txt')
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py --explicit
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } else {
-            Invoke-Setup --yes --vault $notes --role capture --clients 'claude-code'
+            Invoke-Setup --yes --vault $notes --role capture --clients 'claude-code,grok'
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # A single device that was installed as capture becomes the maintainer, with the service stopped and started around it.
@@ -298,7 +430,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { $role; exit $LASTEXITCODE }
           $role
           if (-not ($role -match 'role maintainer')) { exit 1 }
-          Invoke-Setup --yes --clients 'claude-code,codex'
+          Invoke-Setup --yes --clients 'claude-code,codex,grok'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # The first index of the starter notes must verify by itself.
           $verified = $false
@@ -311,10 +443,25 @@ jobs:
           if (-not $verified) { exit 1 }
           & uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $result = Invoke-Setup --check --selftest --clients 'claude-code,codex'
+          $result = Invoke-Setup --check --selftest --clients 'claude-code,codex,grok'
           $selftestExit = $LASTEXITCODE
           $result
           if ($selftestExit -ne 0 -or @($result -match '^PASS   self-test ').Count -ne 6) { exit 1 }
+      - name: Record successful native scenario source identity
+        shell: bash
+        env:
+          QUAL_SCENARIO: ${{ matrix.scenario }}
+        run: |
+          export SECOND_BRAIN_ROOT="$RUNNER_TEMP/second-brain-runtime"
+          uv run --no-project --python 3.12 python -I -B tests/native_index_recovery.py \
+            --record-source "$RUNNER_TEMP/native-setup-source.json"
+      - name: Retain native scenario source receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-setup-${{ matrix.os }}-${{ matrix.scenario }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-setup-source.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Show service logs when a step failed (synthetic device only)
         if: failure()
         shell: bash
@@ -322,6 +469,51 @@ jobs:
           root="$RUNNER_TEMP/second-brain-runtime"
           ls -la "$root" "$root/logs" "$root/state" || true
           tail -n 60 "$root"/logs/*.log || true
+  linux-user-space:
+    name: Non-systemd Linux (${{ matrix.scenario }})
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [forward, rollback, legacy-deferral, first-registration]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.9.16'
+          enable-cache: false
+      - name: Qualify the exact candidate in a disposable PID and network namespace
+        shell: bash
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          mkdir reports
+          for predecessor in 43a36d9ea9bf63f7c23023c935a505fc97af413a f7d3eb9d4f0df4af6274f7371b904b305dabc070; do
+            git cat-file -e "$predecessor^{commit}" || git fetch --no-tags origin "$predecessor"
+          done
+          docker run --rm --init --network bridge --security-opt no-new-privileges \
+            --mount "type=bind,source=$PWD,target=/candidate,readonly" \
+            --mount "type=bind,source=$(command -v uv),target=/usr/local/bin/uv,readonly" \
+            -e GITHUB_ACTIONS=true -e HF_HUB_DISABLE_XET=1 -e HF_HUB_DISABLE_TELEMETRY=1 \
+            -e UV_NO_CONFIG=1 -e GIT_CONFIG_NOSYSTEM=1 -e GIT_CONFIG_GLOBAL=/dev/null \
+            python:3.12-trixie sh -euc '
+              useradd --create-home --home-dir "/home/sb fixture" --shell /bin/bash fixture
+              exec runuser -u fixture -- python3.12 -I -B /candidate/tests/native_userspace_upgrade.py \
+                --commit "$1" --scenario "$2"
+            ' fixture "$(git rev-parse HEAD)" "$SCENARIO" | tee reports/linux-user-space.txt
+      - name: Retain scoped non-systemd result
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-user-space-${{ matrix.scenario }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: reports/linux-user-space.txt
+          if-no-files-found: error
+          retention-days: 30
   library-import:
     name: Library and native dependency audit (${{ matrix.os }})
     strategy:
@@ -339,6 +531,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
         with:
@@ -352,6 +545,40 @@ jobs:
           git --no-optional-locks -c core.fsmonitor=false rev-parse HEAD > reports/checked-out-commit.txt
           uv --version > reports/uv-version.txt
           uv run --locked python -I -B -c 'import hashlib,json,os,subprocess;from pathlib import Path;g=lambda arg:subprocess.check_output(["git","--no-optional-locks","-c","core.fsmonitor=false","rev-parse",arg],text=True).strip();v={"commit":os.environ["GITHUB_SHA"],"checked_out_commit":g("HEAD"),"checked_out_tree":g("HEAD^{tree}"),"pr_head":os.environ.get("QUAL_PR_HEAD",""),"pr_base":os.environ.get("QUAL_PR_BASE",""),"event":os.environ["GITHUB_EVENT_NAME"],"ref":os.environ["GITHUB_REF"],"run_id":os.environ["GITHUB_RUN_ID"],"manifest_sha256":hashlib.sha256(Path("release-manifest.json").read_bytes()).hexdigest()};Path("reports/source.json").open("x",encoding="utf-8").write(json.dumps(v,indent=2))'
+      - name: Verify the model fixture before offline Linux tests
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          HF_HUB_DISABLE_XET: '1'
+          HF_HUB_DISABLE_TELEMETRY: '1'
+        run: |
+          .venv/bin/python -I -B tests/native_userspace_upgrade.py --model-cache "$RUNNER_TEMP/second-brain-model"
+      - name: Linux guarded regression (synthetic state only)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          test_python="$PWD/.venv/bin/python"
+          test_sandbox=$(mktemp -d "$RUNNER_TEMP/second-brain-tests-XXXXXXXX")
+          test_owner=$(mktemp -d "$RUNNER_TEMP/second-brain-test-home-XXXXXXXX")
+          mkdir "$test_sandbox/private"
+          env -i PATH="$PATH" HOME="$test_owner" USERPROFILE="$test_owner" \
+            TMPDIR="$test_sandbox/private" TMP="$test_sandbox/private" TEMP="$test_sandbox/private" \
+            SB_TEST_SANDBOX="$test_sandbox" SB_TEST_MODEL_CACHE="$RUNNER_TEMP/second-brain-model" \
+            PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+            HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 GIT_ALLOW_PROTOCOL=file GIT_CONFIG_NOSYSTEM=1 \
+            GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never \
+            "$test_python" -B -m pytest -q -p no:cacheprovider -p pytest_asyncio.plugin \
+              --basetemp "$test_sandbox/tmp" --junitxml reports/linux-regression.xml
+      - name: Retain Linux regression result
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-regression-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            reports/source.json
+            reports/linux-regression.xml
+          if-no-files-found: error
+          retention-days: 30
       - name: Verify shipped payload manifest consistency
         run: uv run --locked python -I -B -c "import runpy; from pathlib import Path; runpy.run_path('update.py')['verify'](Path.cwd())"
       - run: uv run --locked python -m compileall -q app install.py update.py setup_runtime.py build_release.py

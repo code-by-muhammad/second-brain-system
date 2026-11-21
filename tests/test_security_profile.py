@@ -88,7 +88,7 @@ def test_both_product_transport_constructors_have_no_oauth_auth(brain,monkeypatc
         async def __aexit__(self,*args):pass
         async def call_tool(self,*args):return SimpleNamespace(data={'synthetic':True})
     monkeypatch.setattr(client.processes,'validate_environment',lambda:None)
-    monkeypatch.setattr(client.processes,'listener_identity',lambda:{'pid':1})
+    monkeypatch.setattr(client.processes,'listener_identity',lambda **kwargs:{'pid':1})
     (cfg.ROOT/'state/client-access.json').write_text(json.dumps({'token':'synthetic-local-token'}))
     monkeypatch.setattr(fastmcp,'Client',FakeClient)
     assert asyncio.run(brain_cli.mcp_call('brain_health',{}))=={'synthetic':True}
@@ -123,7 +123,7 @@ async def test_401_with_advertised_oauth_does_not_follow_metadata_or_send_creden
         pytest.fail('Mocked OAuth-negative probe must not perform DNS or real network traffic')
     monkeypatch.setattr(socket,'getaddrinfo',network)
     monkeypatch.setattr(client.processes,'validate_environment',lambda:None)
-    monkeypatch.setattr(client.processes,'listener_identity',lambda:{'pid':1})
+    monkeypatch.setattr(client.processes,'listener_identity',lambda **kwargs:{'pid':1})
     async def respond(request):
         seen.append((request.url.host,request.url.port,request.url.path))
         return httpx2.Response(401,headers={'WWW-Authenticate':'Bearer resource_metadata="https://untrusted.invalid/oauth-protected-resource"'},request=request)

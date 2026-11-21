@@ -3,6 +3,7 @@ import hashlib
 import importlib
 import json
 from pathlib import Path
+from note_read_fixture import observe_note_open
 
 import pytest
 import brain_settings as cfg
@@ -41,16 +42,14 @@ def observe(monkeypatch, watched, *, grow_on_open=False, change_on_lock=None, gr
         def read(self, size=-1):
             reads.append({'requested': size, 'under_writer': locks['holding']})
             return self.stream.read(size)
-    def opened(path, mode='r', *args, **kwargs):
-        if path == watched and mode in ('r', 'rb'):
-            if grow_on_open and not locks['grew']:
-                if growth_requires_writer:
-                    assert locks['holding'], 'Growth fixture must occur after the real writer lock.'
-                with real_open(path, 'ab') as stream:
-                    stream.write(b'x' * (LIMIT + 1 - path.stat().st_size))
-                locks['grew'] = True
-            return Stream(real_open(path, mode, *args, **kwargs))
-        return real_open(path, mode, *args, **kwargs)
+    def opened(open_stream, mode):
+        if grow_on_open and not locks['grew']:
+            if growth_requires_writer:
+                assert locks['holding'], 'Growth fixture must occur after the real writer lock.'
+            with real_open(watched, 'ab') as stream:
+                stream.write(b'x' * (LIMIT + 1 - watched.stat().st_size))
+            locks['grew'] = True
+        return Stream(open_stream())
     class Lock:
         def __init__(self, *args, **kwargs):
             locks['constructed'] += 1
@@ -62,7 +61,7 @@ def observe(monkeypatch, watched, *, grow_on_open=False, change_on_lock=None, gr
         def __exit__(self, *args):
             try: return self.real.__exit__(*args)
             finally: locks['holding'] = False
-    monkeypatch.setattr(Path, 'open', opened)
+    observe_note_open(monkeypatch, watched, opened)
     monkeypatch.setattr(s, 'FileLock', Lock)
     return reads, locks
 

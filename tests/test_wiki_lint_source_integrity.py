@@ -3,6 +3,7 @@ import copy
 from datetime import date
 import json
 from pathlib import Path
+from note_read_fixture import observe_note_open
 
 import pytest
 
@@ -61,7 +62,7 @@ def source_revision_case(brain,tmp_path,kind,with_history=True):
 @pytest.mark.parametrize('kind',['utf16','cp1252','oversize'])
 def test_unavailable_current_source_uses_exact_git_origin_without_unbounded_read(brain,tmp_path,monkeypatch,kind):
     source,another,packet,result=source_revision_case(brain,tmp_path,kind); before=note_snapshot(); reads=[]; opens=[]
-    real=Path.read_bytes; real_open=Path.open
+    real=Path.read_bytes
     class SourceStream:
         def __init__(self,stream): self.stream=stream
         def __enter__(self): self.stream.__enter__(); return self
@@ -70,15 +71,12 @@ def test_unavailable_current_source_uses_exact_git_origin_without_unbounded_read
         def read(self,size=-1):
             reads.append(size)
             return self.stream.read(size)
-    def opened(path,*args,**kwargs):
-        stream=real_open(path,*args,**kwargs)
-        if path==source:
-            opens.append(args[0] if args else kwargs.get('mode','r'))
-            return SourceStream(stream)
-        return stream
+    def opened(open_stream, mode):
+        opens.append(mode)
+        return SourceStream(open_stream())
     calls=fake_model(monkeypatch,result)
     with monkeypatch.context() as observer:
-        observer.setattr(Path,'open',opened)
+        observe_note_open(observer, source, opened)
         report=w.run()
     assert report['status']=='complete' and len(calls)==1 and not report['lint']['issues']
     assert report['lint']['historical_evidence_count']==1

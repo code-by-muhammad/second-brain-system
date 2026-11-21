@@ -16,10 +16,28 @@ from pathlib import Path
 
 REPO=Path(__file__).resolve().parent
 CONTROL='02-Areas/AI-Memory/Wiki/Control.md'
-CLIENTS=('claude-code','codex','claude-desktop')
+CLIENTS=('claude-code','codex','claude-desktop','grok')
 
 
 def say(text):print(text,flush=True)
+
+
+def runtime_matches_release(root, release, version, *, verified=None):
+    """Require every installed app byte to match the invoked release version."""
+    try:
+        updater=runpy.run_path(str(REPO/'update.py'))
+        helper=updater['release_helpers'](REPO,verified)
+        helper.verify_installed(Path(root),Path(release),version)
+    except (OSError,ValueError,TypeError,RecursionError):
+        return False
+    return True
+
+
+def refuse_same_version_drift(version, release):
+    raise SystemExit(
+        'This device already reports version '+version+', but the installed runtime does not match this release\'s manifest at '
+        +str(Path(release).resolve())+'. Nothing was switched: app/ and state/config.json were left as they are, and assistant files were not refreshed. '
+        'Install the corrected release as the next version and run that version\'s setup. Re-running this same version does not replace the runtime.')
 
 
 def ask(question,default,assume):
@@ -39,6 +57,8 @@ def detected(home):
     found=[]
     if (home/'.claude.json').exists() or (home/'.claude').is_dir() or shutil.which('claude'):found.append('claude-code')
     if (home/'.codex').is_dir() or shutil.which('codex'):found.append('codex')
+    # Grok Bot keeps skills in this directory. It has no local MCP config file to detect.
+    if (home/'agent-data'/'workflows').is_dir():found.append('grok')
     return found
 
 
@@ -281,7 +301,7 @@ def main():
     parser.add_argument('--wiki',choices=['claude','codex'],help='Maintainer only: select which assistant program builds the wiki pages. Nothing is built by this.')
     parser.add_argument('--no-hooks',action='store_true',help='Leave out the Claude Code session hooks.')
     parser.add_argument('--timezone',help='IANA name such as Europe/Berlin. Default: the system timezone.')
-    parser.add_argument('--no-service',action='store_true',help='Install without registering or starting the background service.')
+    parser.add_argument('--no-service',action='store_true',help='Keep the service unregistered. Version upgrades require verified unregistered non-systemd Linux.')
     parser.add_argument('--no-model',action='store_true',help='Skip the search model download (search stays unavailable until it is present).')
     parser.add_argument('--local-only',action='store_true',help='The owner wants no Git remote for these notes; the check fails if one exists.')
     parser.add_argument('--check',action='store_true',help='Only run the acceptance check.')
@@ -289,7 +309,8 @@ def main():
     parser.add_argument('--yes',action='store_true',help='Accept every default without asking.')
     args=parser.parse_args()
     root=Path(args.root).expanduser().resolve()
-    version=runpy.run_path(str(REPO/'update.py'))['verify'](REPO)['version']
+    release_info=runpy.run_path(str(REPO/'update.py'))['verify'](REPO)
+    version=release_info['version']
     say('Second Brain '+version+': release files verified.')
     selected=[name for name in (args.clients.split(',') if args.clients is not None else detected(home)) if name]
     if set(selected)-set(CLIENTS):parser.error('Unknown client; choose from '+', '.join(CLIENTS))
@@ -380,11 +401,15 @@ def main():
             release=root/'releases'/('v'+version)
             if REPO!=release:raise SystemExit('To update this device the release must be at exactly '+str(release)+'. Clone the tag there and run its setup_device.py.')
             say('Updating this device from '+str(device.get('version'))+' to '+version+'. The service stops only after every check has passed.')
-            command=[device['python'],'-I','-B',REPO/'update.py','--root',root,'--version','v'+version]
+            command=[device['python'],'-I','-B',REPO/'update.py','--root',root,'--version','v'+version,'--clients',','.join(selected)]
+            if args.no_hooks:command.append('--no-hooks')
+            if args.no_service:command.append('--no-service')
             if 'claude-desktop' not in selected:command.append('--skip-desktop-refresh')
             if run(command).returncode:
                 raise SystemExit('The update did not finish. If it said "deferred", nothing was switched and the old version is still running. Read the reason above before trying again.')
             device=json.loads((root/'device.json').read_text(encoding='utf-8-sig'))
+        elif not runtime_matches_release(root, REPO, version, verified=release_info['sha256']):
+            refuse_same_version_drift(version, REPO)
         if selected:
             # An update refreshes only what already existed; this adds whatever a selected assistant still lacks.
             command=[device['python'],'-I','-B',REPO/'install.py','--root',root,'--vault',vault,'--reuse-python',device['python'],'--configure-clients','--clients-only',*client_flags]
