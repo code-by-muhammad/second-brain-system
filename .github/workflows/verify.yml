@@ -55,7 +55,9 @@ jobs:
       matrix:
         os: [windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # The Windows regression baseline took 53 minutes. Allow for suite growth,
+    # runner variability, and the dependency audit after pytest.
+    timeout-minutes: 120
     env:
       AUDIT_MATRIX_OS: ${{ matrix.os }}
       AUDIT_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -117,7 +119,7 @@ jobs:
           $env:GIT_CONFIG_GLOBAL = 'NUL'
           $env:GIT_TERMINAL_PROMPT = '0'
           $env:GCM_INTERACTIVE = 'never'
-          & $testPython -B -m pytest -q -p no:cacheprovider -p pytest_asyncio.plugin --basetemp (Join-Path $testSandbox 'tmp') --junitxml reports/windows-regression.xml
+          & $testPython -B -m pytest -q -p no:cacheprovider -p pytest_asyncio.plugin -o faulthandler_timeout=300 --durations=40 --basetemp (Join-Path $testSandbox 'tmp') --junitxml reports/windows-regression.xml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - run: uv run --locked python -m compileall -q app install.py update.py setup_runtime.py build_release.py
       - run: uv run --locked python tests/smoke_import.py

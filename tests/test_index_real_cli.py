@@ -238,8 +238,11 @@ def test_the_cli_limit_ends_a_slow_run_before_the_harness_has_to(runtime):
     assert result.ended is None and result.left==[]
     assert _gone(int(released.read_text()))
     receipt=json.loads(result.output)
-    # The runner's own deadline ended the pass: recorded as a failed run that names the timeout.
-    assert (receipt['status'],receipt['reason'],receipt.get('error_type'))==('needs attention','local_indexing_failed','TimeoutExpired'),receipt
+    # The runner can hit the deadline while polling, or the bootstrap can see it during a tick or after pass cleanup.
+    assert (receipt['status'],receipt['reason'],receipt['error_type']) in {
+        ('needs attention','local_indexing_failed','TimeoutExpired'),
+        ('needs attention','overall_time_limit','IndexAttention'),
+    },receipt
 
 
 # The same lines with another word: every chunk key is kept and every chunk is embedded again in place, so no row
