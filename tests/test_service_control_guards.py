@@ -87,6 +87,7 @@ def test_finish_prepared_transaction_cannot_release_old_listener(device,monkeypa
 
 def test_stale_reused_parent_pid_does_not_authorize_descendant(device,monkeypatch):
     monkeypatch.setattr(processes,'os',SimpleNamespace(name='nt'))
+    monkeypatch.setattr(processes,'sys',SimpleNamespace(platform='win32'))
     parent=SimpleNamespace(pid=10,birth=200,alive=lambda:True)
     row=SimpleNamespace(pid=11,info={'ppid':10})
     closed=[]
