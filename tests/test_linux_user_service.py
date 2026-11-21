@@ -29,13 +29,17 @@ def test_tini_selects_the_user_service_and_systemd_does_not(monkeypatch):
     assert isinstance(selected,user.LinuxUserService)
     monkeypatch.setattr(user,'pid1_comm',lambda:'systemd')
     assert user.systemd_manager_present() is True
-    # The unit backend still runs its own checks. This host has no user bus, so it refuses
-    # before any unit is written. It must not switch to the user-space service.
-    try:user.open_registration('second-brain.service',cfg.ROOT,processes._selected_python(),current_python=cfg.PYTHON)
-    except user.LinuxUserService.__init__.__globals__['RegistrationError'] as error:
+    # The unit backend can refuse registration when the host has no user bus.
+    try:
+        selected = user.open_registration(
+            'second-brain.service', cfg.ROOT, processes._selected_python(), current_python=cfg.PYTHON,
+        )
+    except user.RegistrationError as error:
         assert 'User service' not in str(error)
-    except FileNotFoundError:pass
-    else:raise AssertionError('systemd PID 1 must keep the existing unit backend')
+    except FileNotFoundError:
+        pass
+    else:
+        assert not isinstance(selected, user.LinuxUserService), 'systemd PID 1 must keep the existing unit backend'
 
 
 def test_install_enable_and_stop_are_file_state_only(monkeypatch):

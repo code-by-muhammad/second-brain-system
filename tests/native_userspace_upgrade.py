@@ -31,9 +31,9 @@ MODEL_HASHES = {
 }
 
 
-def run(*argv, check=True, timeout=600, env=None):
+def run(*argv, check=True, timeout=600, env=None, cwd=None):
     return subprocess.run([str(value) for value in argv], check=check, timeout=timeout,
-                          stdout=subprocess.PIPE, text=True, encoding='utf-8', env=env)
+                          stdout=subprocess.PIPE, text=True, encoding='utf-8', env=env, cwd=cwd)
 
 
 def sha(path):
@@ -344,7 +344,7 @@ harness, target, root = map(Path, sys.argv[1:])
 inject = runpy.run_path(str(harness))['inject_post_health_failure']
 inject(target, root, Path(sys.executable))
 '''
-        run(previous_python, '-I', '-B', '-c', script, Path(__file__).resolve(), target, root)
+        run(previous_python, '-I', '-B', '-c', script, Path(__file__).resolve(), target, root, cwd=target)
         assert app_map(root) == original and old_images(root, home) == preimages
         cold_stdio(previous_python, root, home, '0.2.15')
     else:
