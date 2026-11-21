@@ -129,6 +129,65 @@ jobs:
             reports/pip-audit-version.txt
           if-no-files-found: error
           retention-days: 30
+  windows-hang-bisect:
+    # TEMPORARY diagnostic: run each test of tests/test_search_memory_cap.py in its own
+    # process with a hard wait limit, outside the step's output pipe, then list survivors.
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        timeout-minutes: 3
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        timeout-minutes: 2
+        with:
+          version: '0.9.16'
+          enable-cache: false
+      - run: uv sync --locked --python 3.12
+        timeout-minutes: 6
+      - name: Run each memory-cap test alone with a hard limit
+        timeout-minutes: 12
+        shell: pwsh
+        run: |
+          $out = (New-Item -ItemType Directory -Force -Path 'reports/bisect').FullName
+          $py = (Resolve-Path -LiteralPath '.venv/Scripts/python.exe').Path
+          $sandbox = Join-Path $env:RUNNER_TEMP ('sb-bisect-' + [guid]::NewGuid().ToString('N'))
+          $private = Join-Path $sandbox 'private'
+          New-Item -ItemType Directory -Path $private -ErrorAction Stop | Out-Null
+          $env:TEMP = $private; $env:TMP = $private; $env:TMPDIR = $private
+          $env:APPDATA = Join-Path $private 'AppData/Roaming'; $env:LOCALAPPDATA = Join-Path $private 'AppData/Local'
+          $env:SB_TEST_SANDBOX = $sandbox; $env:PYTHONDONTWRITEBYTECODE = '1'; $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
+          $env:HF_HUB_OFFLINE = '1'; $env:GIT_CONFIG_NOSYSTEM = '1'; $env:GIT_TERMINAL_PROMPT = '0'
+          $common = @('-B','-m','pytest','-p','no:cacheprovider','-p','pytest_asyncio.plugin','-v','-s')
+          $p = Start-Process -FilePath $py -ArgumentList ($common + @('--collect-only','-q','--basetemp',(Join-Path $sandbox 'collect'),'tests/test_search_memory_cap.py')) -RedirectStandardOutput "$out/collect.txt" -RedirectStandardError "$out/collect.err" -PassThru -NoNewWindow
+          if (-not $p.WaitForExit(120000)) { Write-Output 'COLLECT TIMEOUT' }
+          $nodes = Get-Content "$out/collect.txt" | Where-Object { $_ -like 'tests/*::*' }
+          Write-Output ("NODES " + $nodes.Count)
+          $i = 0
+          foreach ($node in $nodes) {
+            $i++
+            Write-Output "START $node"
+            $p = Start-Process -FilePath $py -ArgumentList ($common + @('--basetemp',(Join-Path $sandbox "bt$i"),"`"$node`"")) -RedirectStandardOutput "$out/n$i.out" -RedirectStandardError "$out/n$i.err" -PassThru -NoNewWindow
+            if ($p.WaitForExit(120000)) { Write-Output "RESULT exit=$($p.ExitCode) $node" }
+            else {
+              Write-Output "RESULT TIMEOUT $node"
+              Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' } | ForEach-Object { Write-Output ("  ALIVE pid=$($_.ProcessId) ppid=$($_.ParentProcessId) " + $_.CommandLine) }
+              Get-Content "$out/n$i.out" -Tail 40 | ForEach-Object { Write-Output "  OUT $_" }
+              Get-Content "$out/n$i.err" -Tail 20 | ForEach-Object { Write-Output "  ERR $_" }
+              try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch { Write-Output "  STOP FAILED $_" }
+            }
+          }
+          Write-Output 'BISECT DONE'
+          exit 0
+      - name: Retain bisect output
+        if: always()
+        timeout-minutes: 2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-hang-bisect-${{ github.sha }}-${{ github.run_attempt }}
+          path: reports/bisect
+          if-no-files-found: warn
   windows-test:
     name: Windows regression (${{ matrix.key }})
     runs-on: windows-2025
@@ -141,22 +200,7 @@ jobs:
         # or rows, or split/reassign slow native lanes in ci_shards.json.
         # Update the matrix with roster changes. Report single-file or unchanged-job overruns.
         key: [general-1of5, general-2of5, general-3of5, general-4of5, general-5of5,
-              native-process, native-index,
-              probe-c1, probe-c2a, probe-c2b, probe-c2c, probe-c3, probe-c4, probe-u1, probe-u2]
-        # TEMPORARY hang bisect: one row per test of tests/test_search_memory_cap.py.
-        include:
-          - key: probe-c2b
-            kx: current_config_load
-          - key: probe-c2b
-            kx: legacy_config
-          - key: probe-c2b
-            kx: explicit_upstream
-          - key: probe-c2b
-            kx: failed_deploy
-          - key: probe-c2b
-            kx: invalid_or_unsupported
-          - key: probe-c2b
-            kx: child_environment
+              native-process, native-index]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         timeout-minutes: 3
@@ -202,8 +246,7 @@ jobs:
           $env:SB_TEST_CI_DIR = $reportDir
           $env:SB_TEST_SHARD = '${{ matrix.key }}'
           $env:SB_TEST_NODE_TIMEOUT = '600'
-          $kx = @(); if ('${{ matrix.kx }}') { $kx = @('-k', '${{ matrix.kx }}') }
-          & $testPython -B tests/ci_launch.py $reportDir @kx -v -rfE --durations=40 -p no:cacheprovider -p pytest_asyncio.plugin -p no:faulthandler --basetemp (Join-Path $testSandbox 'tmp') --junitxml (Join-Path $reportDir 'junit.xml')
+          & $testPython -B tests/ci_launch.py $reportDir -v -rfE --durations=40 -p no:cacheprovider -p pytest_asyncio.plugin -p no:faulthandler --basetemp (Join-Path $testSandbox 'tmp') --junitxml (Join-Path $reportDir 'junit.xml')
           exit $LASTEXITCODE
       - name: Check this shard ran every selected test once
         if: always()

@@ -14,7 +14,7 @@
   "qualification_status": "candidate_pending_external_receipts",
   "sha256": {
     ".gitattributes": "1885cdcf82264bcd145a089116b45921048b4dd33363b3d10a4ac8c89df25e24",
-    ".github/workflows/verify.yml": "c7379f34f6d756812a77caacd2d2257b9e0445e7492ca90f3090869af2010732",
+    ".github/workflows/verify.yml": "0acc73052b3355781971d71580c0824eca334ccdc1369b95673514305cfb2f0e",
     ".gitignore": "a8310700b84bec5ae67c7e698127aa63f1b7bb6c6994e5fb940cd0f01c8b3f34",
     "README.md": "ce99e6aa25fae26fa70063d9c8aa3e9874a9b127958204de28c5a8ebaa35a8d6",
     "SECURITY.md": "7a4fb0c27f884cedb7a1fcc8e8d4e2878f1a9c3da10f4535ac167109e691d635",
@@ -127,7 +127,7 @@
     "tests/ci_launch.py": "e7f65cca47bce4ebc5cf6ba515a70d9b23c3c4ed1f709729eb611f1e78a31cee",
     "tests/ci_plan.py": "bb6e085136c2d82fabe4cba23d2e9ad0e97fb3601c56aa97a0d49171e199c315",
     "tests/ci_plugin.py": "d4ed1d8e12d0284141bad0cad86c239b106bf2143d4b26790194977fbac2ea07",
-    "tests/ci_shards.json": "39ed64f36bad4422d9f1abce4800b3f95287548e20a067ec99d510e075b029da",
+    "tests/ci_shards.json": "d8d343689c7aa03f5a6ad6d0ffeee4499ea8b285bf33aa01a7aa89d4aad80b50",
     "tests/conftest.py": "54d32e40322ebe0018c1de28ce8069bab3eac66538f4e0ce5efd56f5a3824fec",
     "tests/isolation_guard.py": "a2181cbadf9379fd0c9ea4a648af6c1ffcb3e6142ab1469a7e7a555f63ff64a3",
     "tests/native_index_recovery.py": "79caeb8526155bce85bf71664d79e2340ef3f4e5f7fa264e63dd6f91907f6362",

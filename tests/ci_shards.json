@@ -14,64 +14,6 @@
       "tests/test_index_native_process.py",
       "tests/test_index_launch.py",
       "tests/test_index_worker.py"
-    ],
-    "probe-c1": [
-      "tests/test_dependency_audit_policy.py",
-      "tests/test_same_version_runtime.py",
-      "tests/test_supervisor_maintenance_lock_descendant.py"
-    ],
-    "probe-c3": [
-      "tests/test_installer_toml_bootstrap.py",
-      "tests/test_setup_sealed_plans.py",
-      "tests/test_update_release_identity.py"
-    ],
-    "probe-c4": [
-      "tests/test_review_regressions_03.py",
-      "tests/test_setup_shared_instructions.py",
-      "tests/test_windows_file_image.py"
-    ],
-    "probe-u1": [
-      "tests/test_bootstrap_remediation.py",
-      "tests/test_frontmatter_integer_work.py",
-      "tests/test_initial_native_enable_resume.py",
-      "tests/test_linux_registration_replay.py",
-      "tests/test_portable_receipt_identity.py",
-      "tests/test_source_schema.py",
-      "tests/test_sync_archive_streaming.py",
-      "tests/test_sync_receive_windows_name_repair.py",
-      "tests/test_wiki.py",
-      "tests/test_wiki_history_completeness.py",
-      "tests/test_wiki_inventory_case_boundary.py",
-      "tests/test_wiki_output_bytes.py",
-      "tests/test_wiki_packet_structural_capacity.py",
-      "tests/test_wiki_remediation.py",
-      "tests/test_wiki_source_frontmatter_screening.py"
-    ],
-    "probe-u2": [
-      "tests/test_catalog_revisions.py",
-      "tests/test_git_durable_review.py",
-      "tests/test_installer_deployment_admission.py",
-      "tests/test_maintenance_central_history.py",
-      "tests/test_setup_delegated_cleanup.py",
-      "tests/test_store_write_case_preservation.py",
-      "tests/test_sync_owner_archive_diagnostics.py",
-      "tests/test_versions.py",
-      "tests/test_wiki_commit_cap.py",
-      "tests/test_wiki_history_deferral_bounds.py",
-      "tests/test_wiki_legacy_json_boundaries.py",
-      "tests/test_wiki_packet_canonical_recovery.py",
-      "tests/test_wiki_project_derived_boundary.py",
-      "tests/test_wiki_semantic_journal_schema.py",
-      "tests/test_worker_state_fault_contracts.py"
-    ],
-    "probe-c2a": [
-      "tests/test_grok_assistant.py"
-    ],
-    "probe-c2b": [
-      "tests/test_search_memory_cap.py"
-    ],
-    "probe-c2c": [
-      "tests/test_update_installer_isolation.py"
     ]
   },
   "weights": {
