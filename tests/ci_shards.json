@@ -20,11 +20,6 @@
       "tests/test_same_version_runtime.py",
       "tests/test_supervisor_maintenance_lock_descendant.py"
     ],
-    "probe-c2": [
-      "tests/test_grok_assistant.py",
-      "tests/test_search_memory_cap.py",
-      "tests/test_update_installer_isolation.py"
-    ],
     "probe-c3": [
       "tests/test_installer_toml_bootstrap.py",
       "tests/test_setup_sealed_plans.py",
@@ -68,6 +63,15 @@
       "tests/test_wiki_project_derived_boundary.py",
       "tests/test_wiki_semantic_journal_schema.py",
       "tests/test_worker_state_fault_contracts.py"
+    ],
+    "probe-c2a": [
+      "tests/test_grok_assistant.py"
+    ],
+    "probe-c2b": [
+      "tests/test_search_memory_cap.py"
+    ],
+    "probe-c2c": [
+      "tests/test_update_installer_isolation.py"
     ]
   },
   "weights": {

@@ -142,7 +142,7 @@ jobs:
         # Update the matrix with roster changes. Report single-file or unchanged-job overruns.
         key: [general-1of5, general-2of5, general-3of5, general-4of5, general-5of5,
               native-process, native-index,
-              probe-c1, probe-c2, probe-c3, probe-c4, probe-u1, probe-u2]
+              probe-c1, probe-c2a, probe-c2b, probe-c2c, probe-c3, probe-c4, probe-u1, probe-u2]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         timeout-minutes: 3
